@@ -1,0 +1,11 @@
+build/
+cmake-build-*/
+*.o
+*.a
+compile_commands.json
+.cache/
+
+# Never let a real vault or a seed near the repository.
+vault.bin
+vault.bin.tmp
+*.seed
