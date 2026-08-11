@@ -7,43 +7,62 @@
 
 #include "ratchet/bip39.hpp"
 #include "ratchet/secure.hpp"
+#include "ratchet/x25519.hpp"
 
 namespace ratchet {
 
 inline constexpr std::size_t kSeedBytes = 32;
-inline constexpr std::size_t kX25519SecretBytes = 32;
-inline constexpr std::size_t kX25519PublicBytes = 32;
-
 using MasterSeed = SecureBytes<kSeedBytes>;
-using IdentitySecretKey = SecureBytes<kX25519SecretBytes>;
-using IdentityPublicKey = std::array<uint8_t, kX25519PublicBytes>;
 
-// Domain separation strings. Changing any of these changes every key the tool
-// derives, so they are versioned and must stay byte-stable across releases.
+inline constexpr std::size_t kEdSecretBytes = 64;    // crypto_sign_SECRETKEYBYTES
+inline constexpr std::size_t kEdPublicBytes = 32;    // crypto_sign_PUBLICKEYBYTES
+inline constexpr std::size_t kEdSignatureBytes = 64;  // crypto_sign_BYTES
+
+using IdentitySigningSecretKey = SecureBytes<kEdSecretBytes>;
+using IdentitySigningPublicKey = std::array<uint8_t, kEdPublicBytes>;
+using Signature = std::array<uint8_t, kEdSignatureBytes>;
+
+using IdentityDHSecretKey = x25519::SecretKey;
+using IdentityDHPublicKey = x25519::PublicKey;
+
 inline constexpr std::string_view kSeedSalt = "Ratchet-USB/v1/master-seed";
-inline constexpr std::string_view kIdentityInfo = "Ratchet-USB/v1/identity-x25519";
+inline constexpr std::string_view kIdentityEdSeedInfo =
+    "Ratchet-USB/v1/identity-ed25519-seed";
 
 // 128-bit mnemonic entropy -> 256-bit master seed, via HKDF-Extract.
-//
-// Note this is *not* the BIP-39 PBKDF2 seed derivation: the mnemonic here is a
-// transcribable backup of the entropy, and the passphrase protects the vault
-// rather than being mixed into the seed. Recovering from the 12 words alone is
-// therefore enough to rebuild every key, with no passphrase involved.
 void derive_master_seed(const bip39::Entropy& entropy, MasterSeed& out);
 
-// Master seed -> long-term X25519 identity key pair. Deterministic: the same
-// seed always yields the same pair, which is what makes the mnemonic a
-// complete backup.
-void derive_identity(const MasterSeed& seed, IdentitySecretKey& sk,
-                     IdentityPublicKey& pk);
+// The long-term identity: an Ed25519 keypair, deterministic from the seed.
+// Both signing (for the signed prekey) and Diffie-Hellman (for X3DH) need a
+// key, and X25519 cannot sign; Ed25519 can do both, by converting it to its
+// birationally equivalent Montgomery form for DH (identity_dh_keypair below).
+// One key pair, one fingerprint to verify, one thing the mnemonic backs up.
+void derive_identity(const MasterSeed& seed, IdentitySigningSecretKey& sk,
+                     IdentitySigningPublicKey& pk);
 
-// Recomputes the public key from a stored private key, so `unlock` can show
-// the identity without keeping the public half in the vault.
-void identity_public_from_secret(const IdentitySecretKey& sk,
-                                 IdentityPublicKey& pk);
+// Converts the Ed25519 identity to the X25519 keypair X3DH's Diffie-Hellman
+// steps run on.
+void identity_dh_keypair(const IdentitySigningSecretKey& ed_sk,
+                         const IdentitySigningPublicKey& ed_pk,
+                         IdentityDHSecretKey& dh_sk, IdentityDHPublicKey& dh_pk);
 
-// Lowercase hex, for displaying the public key. Public data only.
+// Same conversion for a public key alone, e.g. a contact's identity key.
+void identity_dh_public(const IdentitySigningPublicKey& ed_pk,
+                        IdentityDHPublicKey& dh_pk);
+
+void sign(const IdentitySigningSecretKey& sk, const uint8_t* msg,
+         std::size_t msg_len, Signature& sig);
+
+bool verify(const IdentitySigningPublicKey& pk, const uint8_t* msg,
+           std::size_t msg_len, const Signature& sig);
+
 std::string to_hex(const uint8_t* data, std::size_t len);
+
+// A human-checkable fingerprint of an identity public key: its hex form,
+// grouped for reading aloud over a call. This shows the raw key rather than a
+// hash of it -- at 32 bytes there is nothing a hash of it would buy over
+// showing the key itself, and one fewer thing to get subtly wrong.
+std::string fingerprint(const IdentitySigningPublicKey& pk);
 
 }  // namespace ratchet
 

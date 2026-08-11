@@ -6,10 +6,8 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
-#include <string>
 #include <vector>
 
-#include "ratchet/identity.hpp"
 #include "ratchet/secure.hpp"
 
 namespace ratchet::vault {
@@ -17,7 +15,7 @@ namespace ratchet::vault {
 // On-disk layout of vault.bin:
 //
 //   VaultHeader (41 bytes, little-endian, no padding)
-//   ciphertext  (64 bytes: seed 32B || identity_privkey 32B)
+//   ciphertext  (the serialised VaultStore, see store.hpp)
 //   Poly1305 tag(16 bytes)
 //
 // The header is serialised field by field rather than written as a raw struct:
@@ -36,12 +34,12 @@ struct VaultHeader {
 };
 
 inline constexpr std::array<uint8_t, 4> kMagic = {'R', 'C', 'H', 'T'};
-inline constexpr uint8_t kVersion = 1;
+// v1 held a fixed 64-byte seed+identity-key pair; v2 holds the full store
+// (prekeys, contacts, sessions), serialised to a variable length.
+inline constexpr uint8_t kVersion = 2;
 
 inline constexpr std::size_t kHeaderBytes = 4 + 1 + 16 + 4 + 4 + 12;  // 41
-inline constexpr std::size_t kPlaintextBytes = kSeedBytes + kX25519SecretBytes;  // 64
 inline constexpr std::size_t kTagBytes = crypto_aead_chacha20poly1305_ietf_ABYTES;
-inline constexpr std::size_t kVaultBytes = kHeaderBytes + kPlaintextBytes + kTagBytes;
 
 inline constexpr const char* kVaultFilename = "vault.bin";
 
@@ -62,12 +60,6 @@ struct Params {
   uint32_t mem_cost_kb = kDefaultMemCostKb;
 };
 
-// The plaintext held by the vault. Both halves are wiped on destruction.
-struct Secrets {
-  MasterSeed seed;
-  IdentitySecretKey identity_sk;
-};
-
 // Serialises a header into exactly kHeaderBytes bytes (little-endian).
 std::vector<uint8_t> serialize_header(const VaultHeader& header);
 
@@ -75,16 +67,17 @@ std::vector<uint8_t> serialize_header(const VaultHeader& header);
 // on anything unexpected.
 VaultHeader parse_header(const uint8_t* data, std::size_t len);
 
-// Encrypts `secrets` under `passphrase` and returns the complete file image.
-// A fresh Argon2id salt and AEAD nonce are drawn for every call, so sealing the
-// same secrets twice never produces the same bytes.
-std::vector<uint8_t> seal(const Secrets& secrets, const SecureString& passphrase,
-                          const Params& params);
+// Encrypts arbitrary-length `plaintext` (the serialised VaultStore) under
+// `passphrase` and returns the complete file image. A fresh Argon2id salt and
+// AEAD nonce are drawn for every call, so sealing the same plaintext twice
+// never produces the same bytes.
+std::vector<uint8_t> seal(const SecureBuffer& plaintext,
+                          const SecureString& passphrase, const Params& params);
 
 // Reverse of seal(). Throws Error if the passphrase is wrong or the file has
 // been altered in any way; the two cases are deliberately indistinguishable.
 void unseal(const uint8_t* data, std::size_t len, const SecureString& passphrase,
-            Secrets& out);
+           SecureBuffer& out);
 
 // vault.bin inside the given USB directory. This is the only path the tool
 // ever reads or writes secrets from.
@@ -97,7 +90,8 @@ std::filesystem::path vault_path(const std::filesystem::path& usb_path);
 void write_file(const std::filesystem::path& path, const std::vector<uint8_t>& bytes,
                 bool overwrite);
 
-// Reads a vault file, rejecting anything that is not exactly kVaultBytes long.
+// Reads a vault file, rejecting anything shorter than a header plus an AEAD
+// tag -- the smallest a valid vault could ever be.
 std::vector<uint8_t> read_file(const std::filesystem::path& path);
 
 }  // namespace ratchet::vault

@@ -9,45 +9,63 @@ namespace ratchet {
 void derive_master_seed(const bip39::Entropy& entropy, MasterSeed& out) {
   init_sodium();
   static_assert(kSeedBytes == kdf::kPrkBytes,
-                "the master seed is one HKDF-Extract output");
+               "the master seed is one HKDF-Extract output");
 
   kdf::Prk prk;
   kdf::extract(prk, reinterpret_cast<const uint8_t*>(kSeedSalt.data()),
-               kSeedSalt.size(), entropy.data(), entropy.size());
+              kSeedSalt.size(), entropy.data(), entropy.size());
   out.assign(prk.data(), prk.size());
-  // prk wipes itself on scope exit.
 }
 
-void derive_identity(const MasterSeed& seed, IdentitySecretKey& sk,
-                     IdentityPublicKey& pk) {
+void derive_identity(const MasterSeed& seed, IdentitySigningSecretKey& sk,
+                     IdentitySigningPublicKey& pk) {
   init_sodium();
-  static_assert(kX25519SecretBytes == crypto_scalarmult_curve25519_SCALARBYTES,
-                "identity secret key is an X25519 scalar");
+  static_assert(kdf::kPrkBytes == crypto_sign_SEEDBYTES,
+               "an Ed25519 seed is one HKDF-Extract/Expand output");
 
-  // The master seed is already a uniformly random PRK, so it is used directly
-  // as the HKDF-Expand key with an info string that pins this output to the
-  // identity key. Later phases (X3DH prekeys, ratchet root key) get their own
-  // info strings from the same seed.
-  kdf::Prk prk;
-  prk.assign(seed.data(), seed.size());
-  kdf::expand(sk.data(), sk.size(), kIdentityInfo, prk);
+  kdf::Prk seed_prk;
+  seed_prk.assign(seed.data(), seed.size());
 
-  // crypto_scalarmult_base clamps internally, but clamping here too means the
-  // stored scalar is exactly the one that will be used, so the private key on
-  // disk and the key in memory can never disagree.
-  sk[0] &= 248;
-  sk[31] &= 127;
-  sk[31] |= 64;
+  SecureBytes<crypto_sign_SEEDBYTES> ed_seed;
+  kdf::expand(ed_seed.data(), ed_seed.size(), kIdentityEdSeedInfo, seed_prk);
 
-  identity_public_from_secret(sk, pk);
-}
-
-void identity_public_from_secret(const IdentitySecretKey& sk,
-                                 IdentityPublicKey& pk) {
-  init_sodium();
-  if (crypto_scalarmult_base(pk.data(), sk.data()) != 0) {
-    throw Error("X25519 public key derivation failed");
+  if (crypto_sign_seed_keypair(pk.data(), sk.data(), ed_seed.data()) != 0) {
+    throw Error("Ed25519 identity derivation failed");
   }
+}
+
+void identity_dh_keypair(const IdentitySigningSecretKey& ed_sk,
+                         const IdentitySigningPublicKey& ed_pk,
+                         IdentityDHSecretKey& dh_sk, IdentityDHPublicKey& dh_pk) {
+  init_sodium();
+  if (crypto_sign_ed25519_sk_to_curve25519(dh_sk.data(), ed_sk.data()) != 0) {
+    throw Error("Ed25519 to X25519 secret key conversion failed");
+  }
+  if (crypto_sign_ed25519_pk_to_curve25519(dh_pk.data(), ed_pk.data()) != 0) {
+    throw Error("Ed25519 to X25519 public key conversion failed");
+  }
+}
+
+void identity_dh_public(const IdentitySigningPublicKey& ed_pk,
+                        IdentityDHPublicKey& dh_pk) {
+  init_sodium();
+  if (crypto_sign_ed25519_pk_to_curve25519(dh_pk.data(), ed_pk.data()) != 0) {
+    throw Error("Ed25519 to X25519 public key conversion failed");
+  }
+}
+
+void sign(const IdentitySigningSecretKey& sk, const uint8_t* msg,
+         std::size_t msg_len, Signature& sig) {
+  init_sodium();
+  if (crypto_sign_detached(sig.data(), nullptr, msg, msg_len, sk.data()) != 0) {
+    throw Error("Ed25519 signing failed");
+  }
+}
+
+bool verify(const IdentitySigningPublicKey& pk, const uint8_t* msg,
+           std::size_t msg_len, const Signature& sig) {
+  init_sodium();
+  return crypto_sign_verify_detached(sig.data(), msg, msg_len, pk.data()) == 0;
 }
 
 std::string to_hex(const uint8_t* data, std::size_t len) {
@@ -55,6 +73,18 @@ std::string to_hex(const uint8_t* data, std::size_t len) {
   sodium_bin2hex(hex.data(), hex.size(), data, len);
   hex.resize(len * 2);
   return hex;
+}
+
+std::string fingerprint(const IdentitySigningPublicKey& pk) {
+  const std::string hex = to_hex(pk.data(), pk.size());
+  std::string out;
+  for (std::size_t i = 0; i < hex.size(); i += 4) {
+    if (i > 0) {
+      out += (i % 16 == 0) ? '\n' : ' ';
+    }
+    out += hex.substr(i, 4);
+  }
+  return out;
 }
 
 }  // namespace ratchet

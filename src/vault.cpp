@@ -109,8 +109,8 @@ VaultHeader parse_header(const uint8_t* data, std::size_t len) {
   return header;
 }
 
-std::vector<uint8_t> seal(const Secrets& secrets, const SecureString& passphrase,
-                          const Params& params) {
+std::vector<uint8_t> seal(const SecureBuffer& plaintext,
+                          const SecureString& passphrase, const Params& params) {
   init_sodium();
   check_params(params.time_cost, params.mem_cost_kb);
   if (passphrase.empty()) {
@@ -127,16 +127,10 @@ std::vector<uint8_t> seal(const Secrets& secrets, const SecureString& passphrase
 
   const std::vector<uint8_t> aad = serialize_header(header);
 
-  // seed || identity_privkey, assembled in a locked buffer.
-  SecureBytes<kPlaintextBytes> plaintext;
-  std::memcpy(plaintext.data(), secrets.seed.data(), kSeedBytes);
-  std::memcpy(plaintext.data() + kSeedBytes, secrets.identity_sk.data(),
-              kX25519SecretBytes);
-
   SecureBytes<crypto_aead_chacha20poly1305_ietf_KEYBYTES> key;
   derive_vault_key(key, passphrase, header);
 
-  std::vector<uint8_t> file(kVaultBytes);
+  std::vector<uint8_t> file(kHeaderBytes + plaintext.size() + kTagBytes);
   std::memcpy(file.data(), aad.data(), aad.size());
 
   unsigned long long ct_len = 0;
@@ -148,7 +142,7 @@ std::vector<uint8_t> seal(const Secrets& secrets, const SecureString& passphrase
           key.data()) != 0) {
     throw Error("vault encryption failed");
   }
-  if (ct_len != kPlaintextBytes + kTagBytes) {
+  if (ct_len != plaintext.size() + kTagBytes) {
     throw Error("internal: unexpected ciphertext length");
   }
 
@@ -156,12 +150,10 @@ std::vector<uint8_t> seal(const Secrets& secrets, const SecureString& passphrase
 }
 
 void unseal(const uint8_t* data, std::size_t len, const SecureString& passphrase,
-            Secrets& out) {
+           SecureBuffer& out) {
   init_sodium();
-  if (len != kVaultBytes) {
-    throw Error("vault file has the wrong size (expected " +
-                std::to_string(kVaultBytes) + " bytes, got " +
-                std::to_string(len) + ")");
+  if (len < kHeaderBytes + kTagBytes) {
+    throw Error("vault file is too short to be valid");
   }
 
   const VaultHeader header = parse_header(data, len);
@@ -170,23 +162,23 @@ void unseal(const uint8_t* data, std::size_t len, const SecureString& passphrase
   SecureBytes<crypto_aead_chacha20poly1305_ietf_KEYBYTES> key;
   derive_vault_key(key, passphrase, header);
 
-  SecureBytes<kPlaintextBytes> plaintext;
+  const std::size_t ct_len = len - kHeaderBytes;
+  const std::size_t plaintext_len = ct_len - kTagBytes;
+  std::vector<uint8_t> plaintext(plaintext_len);  // decrypted here, wiped below
   unsigned long long pt_len = 0;
   if (crypto_aead_chacha20poly1305_ietf_decrypt(
-          plaintext.data(), &pt_len, nullptr, data + kHeaderBytes,
-          kPlaintextBytes + kTagBytes, aad.data(), aad.size(), header.nonce,
-          key.data()) != 0) {
+          plaintext.data(), &pt_len, nullptr, data + kHeaderBytes, ct_len,
+          aad.data(), aad.size(), header.nonce, key.data()) != 0) {
+    sodium_memzero(plaintext.data(), plaintext.size());
     // A wrong passphrase and a tampered file are the same failure here, and
     // saying which one it was would tell an attacker whether they guessed the
     // format right.
     throw Error("cannot open vault: wrong passphrase or corrupted file");
   }
-  if (pt_len != kPlaintextBytes) {
-    throw Error("internal: unexpected plaintext length");
-  }
 
-  out.seed.assign(plaintext.data(), kSeedBytes);
-  out.identity_sk.assign(plaintext.data() + kSeedBytes, kX25519SecretBytes);
+  out.clear();
+  out.append(plaintext.data(), static_cast<std::size_t>(pt_len));
+  sodium_memzero(plaintext.data(), plaintext.size());
 }
 
 std::filesystem::path vault_path(const std::filesystem::path& usb_path) {
@@ -259,10 +251,8 @@ std::vector<uint8_t> read_file(const std::filesystem::path& path) {
   if (ec) {
     throw Error("cannot stat " + path.string() + ": " + ec.message());
   }
-  if (size != kVaultBytes) {
-    throw Error("vault file has the wrong size (expected " +
-                std::to_string(kVaultBytes) + " bytes, got " +
-                std::to_string(size) + ")");
+  if (size < kHeaderBytes + kTagBytes) {
+    throw Error("vault file at " + path.string() + " is too short to be valid");
   }
 
   std::FILE* f = std::fopen(path.c_str(), "rb");
