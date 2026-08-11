@@ -3,12 +3,13 @@
 
 #include <sodium.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <stdexcept>
-#include <utility>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace ratchet {
@@ -37,7 +38,25 @@ class SecureBytes {
  public:
   static constexpr std::size_t size_value = N;
 
-  SecureBytes() { sodium_mlock(data_, N); }
+  SecureBytes() { lock(); }
+
+  // Moving relocates the one copy of the secret rather than duplicating it, so
+  // it stays safe under the same "one lifetime" rule that rules out copying:
+  // the source is wiped as part of the move. This is what lets a struct that
+  // embeds a SecureBytes (a session record, a prekey) live in a std::vector.
+  SecureBytes(SecureBytes&& other) noexcept {
+    lock();
+    std::memcpy(data_, other.data_, N);
+    other.wipe();
+  }
+
+  SecureBytes& operator=(SecureBytes&& other) noexcept {
+    if (this != &other) {
+      std::memcpy(data_, other.data_, N);
+      other.wipe();
+    }
+    return *this;
+  }
 
   ~SecureBytes() {
     sodium_memzero(data_, N);
@@ -46,8 +65,6 @@ class SecureBytes {
 
   SecureBytes(const SecureBytes&) = delete;
   SecureBytes& operator=(const SecureBytes&) = delete;
-  SecureBytes(SecureBytes&&) = delete;
-  SecureBytes& operator=(SecureBytes&&) = delete;
 
   uint8_t* data() noexcept { return data_; }
   const uint8_t* data() const noexcept { return data_; }
@@ -74,6 +91,8 @@ class SecureBytes {
   }
 
  private:
+  void lock() { sodium_mlock(data_, N); }
+
   uint8_t data_[N]{};
 };
 
@@ -138,6 +157,64 @@ class SecureString {
   }
 
   std::vector<char> buf_;
+};
+
+// Growable byte buffer for secrets whose total length is not known up front:
+// the serialised vault store (seed, prekeys, sessions), which is decrypted
+// into one of these before being parsed. Same wipe-on-grow, wipe-on-destroy
+// behaviour as SecureString; move-only for the same reason as SecureBytes.
+class SecureBuffer {
+ public:
+  SecureBuffer() = default;
+  ~SecureBuffer() { clear(); }
+
+  SecureBuffer(const SecureBuffer&) = delete;
+  SecureBuffer& operator=(const SecureBuffer&) = delete;
+  SecureBuffer(SecureBuffer&& other) noexcept { *this = std::move(other); }
+
+  SecureBuffer& operator=(SecureBuffer&& other) noexcept {
+    if (this != &other) {
+      clear();
+      buf_ = std::move(other.buf_);
+      other.buf_.clear();
+    }
+    return *this;
+  }
+
+  uint8_t* data() noexcept { return buf_.data(); }
+  const uint8_t* data() const noexcept { return buf_.data(); }
+  std::size_t size() const noexcept { return buf_.size(); }
+  bool empty() const noexcept { return buf_.empty(); }
+
+  void append(const uint8_t* p, std::size_t n) {
+    if (n == 0) {
+      return;
+    }
+    const std::size_t old_size = buf_.size();
+    if (old_size + n > buf_.capacity()) {
+      std::vector<uint8_t> bigger;
+      bigger.reserve(std::max(old_size + n, buf_.capacity() * 2));
+      bigger.insert(bigger.end(), buf_.begin(), buf_.end());
+      wipe_vector(buf_);
+      buf_.swap(bigger);
+    }
+    buf_.resize(old_size + n);
+    std::memcpy(buf_.data() + old_size, p, n);
+  }
+
+  void clear() noexcept {
+    wipe_vector(buf_);
+    buf_.clear();
+  }
+
+ private:
+  static void wipe_vector(std::vector<uint8_t>& v) noexcept {
+    if (!v.empty()) {
+      sodium_memzero(v.data(), v.size());
+    }
+  }
+
+  std::vector<uint8_t> buf_;
 };
 
 }  // namespace ratchet

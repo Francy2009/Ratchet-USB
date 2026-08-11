@@ -70,7 +70,15 @@ add_library(ratchet_core
             src/bip39.cpp
             src/bip39_wordlist.cpp
             src/kdf.cpp
+            src/x25519.cpp
             src/identity.cpp
+            src/prekey.cpp
+            src/wire.cpp
+            src/store.cpp
+            src/message.cpp
+            src/x3dh.cpp
+            src/ratchet.cpp
+            src/session.cpp
             src/vault.cpp
             src/terminal.cpp)
 

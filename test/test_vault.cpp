@@ -7,8 +7,6 @@
 #include <string>
 #include <vector>
 
-#include "ratchet/bip39.hpp"
-#include "ratchet/identity.hpp"
 #include "ratchet/vault.hpp"
 #include "test_support.hpp"
 
@@ -29,26 +27,25 @@ SecureString make_pass(std::string_view text) {
   return s;
 }
 
-// Secrets holds SecureBytes, which cannot be copied or moved on purpose, so
-// this fills a buffer owned by the caller.
-void make_secrets(vault::Secrets& secrets) {
-  bip39::Entropy entropy;
-  bip39::decode("ozone drill grab fiber curtain grace pudding thank cruise "
-                "elder eight picnic",
-                entropy);
-  derive_master_seed(entropy, secrets.seed);
-  IdentityPublicKey pk{};
-  derive_identity(secrets.seed, secrets.identity_sk, pk);
+SecureBuffer make_plaintext(std::string_view text) {
+  SecureBuffer b;
+  b.append(reinterpret_cast<const uint8_t*>(text.data()), text.size());
+  return b;
 }
 
-// Unique scratch directory per test, removed when the object goes out of scope.
+bool buffers_equal(const SecureBuffer& a, const SecureBuffer& b) {
+  return a.size() == b.size() &&
+        (a.size() == 0 || std::memcmp(a.data(), b.data(), a.size()) == 0);
+}
+
 class TempDir {
  public:
   TempDir() {
     char suffix[17];
     randombytes_buf(suffix, sizeof suffix - 1);
     for (size_t i = 0; i + 1 < sizeof suffix; ++i) {
-      suffix[i] = static_cast<char>('a' + (static_cast<unsigned char>(suffix[i]) % 26));
+      suffix[i] =
+          static_cast<char>('a' + (static_cast<unsigned char>(suffix[i]) % 26));
     }
     suffix[sizeof suffix - 1] = '\0';
     path_ = fs::temp_directory_path() / ("ratchet-test-" + std::string(suffix));
@@ -102,7 +99,6 @@ TEST("header serialises to exactly 41 bytes in the documented order") {
   CHECK_EQ(bytes[29], 0xA0u);
   CHECK_EQ(bytes[40], 0xABu);
 
-  // And it parses back to the same values.
   const vault::VaultHeader parsed =
       vault::parse_header(bytes.data(), bytes.size());
   CHECK_EQ(parsed.version, vault::kVersion);
@@ -114,10 +110,9 @@ TEST("header serialises to exactly 41 bytes in the documented order") {
 }
 
 TEST("parse_header rejects malformed headers") {
-  vault::Secrets secrets;
-  make_secrets(secrets);
+  const SecureBuffer plaintext = make_plaintext("hello vault");
   const SecureString pass = make_pass("correct horse battery staple");
-  std::vector<uint8_t> file = vault::seal(secrets, pass, kFastParams);
+  const std::vector<uint8_t> file = vault::seal(plaintext, pass, kFastParams);
 
   CHECK_THROWS(vault::parse_header(file.data(), 10));
 
@@ -146,65 +141,56 @@ TEST("parse_header rejects malformed headers") {
   CHECK_THROWS(vault::parse_header(zero_time.data(), zero_time.size()));
 }
 
-TEST("seal/unseal round-trip recovers seed and identity key") {
-  vault::Secrets secrets;
-  make_secrets(secrets);
-  const SecureString pass = make_pass("un passphrase abbastanza lunga 42");
+TEST("seal/unseal round-trip recovers arbitrary-length plaintext") {
+  const std::string long_text(5000, 'z');
+  const std::string_view cases[] = {"", "x", "a fairly ordinary short message",
+                                    long_text};
+  for (std::string_view text : cases) {
+    const SecureBuffer plaintext = make_plaintext(text);
+    const SecureString pass = make_pass("un passphrase abbastanza lunga 42");
 
-  const std::vector<uint8_t> file = vault::seal(secrets, pass, kFastParams);
-  CHECK_EQ(file.size(), vault::kVaultBytes);
-  CHECK_EQ(file.size(), 41u + 64u + 16u);
+    const std::vector<uint8_t> file = vault::seal(plaintext, pass, kFastParams);
+    CHECK_EQ(file.size(), vault::kHeaderBytes + text.size() + vault::kTagBytes);
 
-  vault::Secrets opened;
-  vault::unseal(file.data(), file.size(), pass, opened);
-  CHECK(opened.seed.equals(secrets.seed));
-  CHECK(opened.identity_sk.equals(secrets.identity_sk));
-
-  // The public key derived after a round-trip must be the original one.
-  IdentityPublicKey before{};
-  IdentityPublicKey after{};
-  identity_public_from_secret(secrets.identity_sk, before);
-  identity_public_from_secret(opened.identity_sk, after);
-  CHECK(before == after);
-}
-
-TEST("the plaintext never appears in the vault file") {
-  vault::Secrets secrets;
-  make_secrets(secrets);
-  const SecureString pass = make_pass("passphrase");
-  const std::vector<uint8_t> file = vault::seal(secrets, pass, kFastParams);
-
-  for (size_t i = 0; i + kSeedBytes <= file.size(); ++i) {
-    CHECK(std::memcmp(file.data() + i, secrets.seed.data(), kSeedBytes) != 0);
-    CHECK(std::memcmp(file.data() + i, secrets.identity_sk.data(),
-                      kX25519SecretBytes) != 0);
+    SecureBuffer opened;
+    vault::unseal(file.data(), file.size(), pass, opened);
+    CHECK(buffers_equal(opened, plaintext));
   }
 }
 
-TEST("sealing the same secrets twice produces different bytes") {
-  vault::Secrets secrets;
-  make_secrets(secrets);
+TEST("the plaintext never appears in the vault file") {
+  const std::string secret_marker = "THIS-MUST-NOT-LEAK-1234567890";
+  const SecureBuffer plaintext = make_plaintext(secret_marker);
+  const SecureString pass = make_pass("passphrase");
+  const std::vector<uint8_t> file = vault::seal(plaintext, pass, kFastParams);
+
+  for (size_t i = 0; i + secret_marker.size() <= file.size(); ++i) {
+    CHECK(std::memcmp(file.data() + i, secret_marker.data(),
+                      secret_marker.size()) != 0);
+  }
+}
+
+TEST("sealing the same plaintext twice produces different bytes") {
+  const SecureBuffer plaintext = make_plaintext("same content, sealed twice");
   const SecureString pass = make_pass("passphrase");
 
-  const std::vector<uint8_t> a = vault::seal(secrets, pass, kFastParams);
-  const std::vector<uint8_t> b = vault::seal(secrets, pass, kFastParams);
+  const std::vector<uint8_t> a = vault::seal(plaintext, pass, kFastParams);
+  const std::vector<uint8_t> b = vault::seal(plaintext, pass, kFastParams);
   CHECK(a != b);
 
-  // Both still open: the salt and the nonce differ, the secrets do not.
-  vault::Secrets from_a;
-  vault::Secrets from_b;
+  SecureBuffer from_a;
+  SecureBuffer from_b;
   vault::unseal(a.data(), a.size(), pass, from_a);
   vault::unseal(b.data(), b.size(), pass, from_b);
-  CHECK(from_a.seed.equals(from_b.seed));
+  CHECK(buffers_equal(from_a, from_b));
 }
 
 TEST("a wrong passphrase does not open the vault") {
-  vault::Secrets secrets;
-  make_secrets(secrets);
+  const SecureBuffer plaintext = make_plaintext("payload");
   const std::vector<uint8_t> file =
-      vault::seal(secrets, make_pass("right passphrase"), kFastParams);
+      vault::seal(plaintext, make_pass("right passphrase"), kFastParams);
 
-  vault::Secrets out;
+  SecureBuffer out;
   CHECK_THROWS(
       vault::unseal(file.data(), file.size(), make_pass("wrong passphrase"), out));
   CHECK_THROWS(
@@ -214,16 +200,14 @@ TEST("a wrong passphrase does not open the vault") {
 }
 
 TEST("an empty passphrase is refused") {
-  vault::Secrets secrets;
-  make_secrets(secrets);
-  CHECK_THROWS(vault::seal(secrets, make_pass(""), kFastParams));
+  const SecureBuffer plaintext = make_plaintext("payload");
+  CHECK_THROWS(vault::seal(plaintext, make_pass(""), kFastParams));
 }
 
 TEST("tampering with any byte of the file is detected") {
-  vault::Secrets secrets;
-  make_secrets(secrets);
+  const SecureBuffer plaintext = make_plaintext("a message worth protecting");
   const SecureString pass = make_pass("passphrase");
-  const std::vector<uint8_t> file = vault::seal(secrets, pass, kFastParams);
+  const std::vector<uint8_t> file = vault::seal(plaintext, pass, kFastParams);
 
   // The header is authenticated as additional data, so flipping a bit in the
   // salt, in the cost parameters or in the nonce has to fail just like
@@ -231,18 +215,17 @@ TEST("tampering with any byte of the file is detected") {
   for (size_t i = 4; i < file.size(); ++i) {
     std::vector<uint8_t> broken = file;
     broken[i] ^= 0x01;
-    vault::Secrets out;
+    SecureBuffer out;
     CHECK_THROWS(vault::unseal(broken.data(), broken.size(), pass, out));
   }
 }
 
 TEST("truncated or padded vault files are refused") {
-  vault::Secrets secrets;
-  make_secrets(secrets);
+  const SecureBuffer plaintext = make_plaintext("payload");
   const SecureString pass = make_pass("passphrase");
-  std::vector<uint8_t> file = vault::seal(secrets, pass, kFastParams);
+  std::vector<uint8_t> file = vault::seal(plaintext, pass, kFastParams);
 
-  vault::Secrets out;
+  SecureBuffer out;
   std::vector<uint8_t> short_file(file.begin(), file.end() - 1);
   CHECK_THROWS(vault::unseal(short_file.data(), short_file.size(), pass, out));
 
@@ -252,16 +235,15 @@ TEST("truncated or padded vault files are refused") {
 }
 
 TEST("seal rejects out-of-range Argon2 parameters") {
-  vault::Secrets secrets;
-  make_secrets(secrets);
+  const SecureBuffer plaintext = make_plaintext("payload");
   const SecureString pass = make_pass("passphrase");
 
-  CHECK_THROWS(vault::seal(secrets, pass, vault::Params{0, 8}));
-  CHECK_THROWS(vault::seal(secrets, pass, vault::Params{1, 4}));
+  CHECK_THROWS(vault::seal(plaintext, pass, vault::Params{0, 8}));
+  CHECK_THROWS(vault::seal(plaintext, pass, vault::Params{1, 4}));
   CHECK_THROWS(
-      vault::seal(secrets, pass, vault::Params{1, vault::kMaxMemCostKb + 1}));
+      vault::seal(plaintext, pass, vault::Params{1, vault::kMaxMemCostKb + 1}));
   CHECK_THROWS(
-      vault::seal(secrets, pass, vault::Params{vault::kMaxTimeCost + 1, 8}));
+      vault::seal(plaintext, pass, vault::Params{vault::kMaxTimeCost + 1, 8}));
 }
 
 TEST("write_file creates a 0600 file and read_file returns it unchanged") {
@@ -269,10 +251,9 @@ TEST("write_file creates a 0600 file and read_file returns it unchanged") {
   const fs::path path = vault::vault_path(dir.path());
   CHECK_EQ(path.filename().string(), std::string("vault.bin"));
 
-  vault::Secrets secrets;
-  make_secrets(secrets);
+  const SecureBuffer plaintext = make_plaintext("payload");
   const SecureString pass = make_pass("passphrase");
-  const std::vector<uint8_t> file = vault::seal(secrets, pass, kFastParams);
+  const std::vector<uint8_t> file = vault::seal(plaintext, pass, kFastParams);
 
   vault::write_file(path, file, /*overwrite=*/false);
   CHECK(fs::exists(path));
@@ -281,26 +262,24 @@ TEST("write_file creates a 0600 file and read_file returns it unchanged") {
   CHECK_EQ(::stat(path.c_str(), &st), 0);
   CHECK_EQ(st.st_mode & 0777u, 0600u);
 
-  // No temporary file is left behind.
   CHECK(!fs::exists(path.string() + ".tmp"));
 
   const std::vector<uint8_t> read_back = vault::read_file(path);
   CHECK(read_back == file);
 
-  vault::Secrets opened;
+  SecureBuffer opened;
   vault::unseal(read_back.data(), read_back.size(), pass, opened);
-  CHECK(opened.identity_sk.equals(secrets.identity_sk));
+  CHECK(buffers_equal(opened, plaintext));
 }
 
 TEST("write_file refuses to clobber an existing vault unless told to") {
   TempDir dir;
   const fs::path path = vault::vault_path(dir.path());
 
-  vault::Secrets secrets;
-  make_secrets(secrets);
+  const SecureBuffer plaintext = make_plaintext("payload");
   const SecureString pass = make_pass("passphrase");
-  const std::vector<uint8_t> first = vault::seal(secrets, pass, kFastParams);
-  const std::vector<uint8_t> second = vault::seal(secrets, pass, kFastParams);
+  const std::vector<uint8_t> first = vault::seal(plaintext, pass, kFastParams);
+  const std::vector<uint8_t> second = vault::seal(plaintext, pass, kFastParams);
 
   vault::write_file(path, first, /*overwrite=*/false);
   CHECK_THROWS(vault::write_file(path, second, /*overwrite=*/false));
@@ -310,13 +289,13 @@ TEST("write_file refuses to clobber an existing vault unless told to") {
   CHECK(vault::read_file(path) == second);
 }
 
-TEST("read_file rejects a missing or wrongly sized file") {
+TEST("read_file rejects a missing or too-short file") {
   TempDir dir;
   const fs::path path = vault::vault_path(dir.path());
   CHECK_THROWS(vault::read_file(path));
 
   std::ofstream out(path, std::ios::binary);
-  out << "not a vault";
+  out << "short";
   out.close();
   CHECK_THROWS(vault::read_file(path));
 }
