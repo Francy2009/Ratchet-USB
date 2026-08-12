@@ -1,185 +1,192 @@
 # Ratchet-USB
 
-CLI tool for over-the-top encrypted messaging: the ciphertext is produced
-locally and pasted by hand into whatever channel is at hand (WhatsApp, e-mail,
-a forum post). The channel only ever carries opaque text.
+A small command-line tool for sending encrypted messages without needing a
+server. You encrypt the message on your machine, copy the resulting text, and
+paste it wherever you want (WhatsApp, email, a forum, whatever). The other
+person copies it back into the tool to read it. The app in the middle only
+ever sees random-looking text, never your actual message.
 
-Everything sensitive lives on a removable drive. The tool never writes to the
-host's filesystem: the vault path is always taken from `--usb-path`.
+Everything that matters (your keys, your contacts, your chat history) lives
+on a USB stick or any removable drive. The tool never writes anything to the
+computer it's running on. You always point it at your drive with
+`--usb-path`.
 
-**Status: phase 2** — seed generation, the encrypted vault, X3DH key agreement
-and Double Ratchet messaging. Sending and receiving works end to end. Not yet
-done: group conversations, multi-device, and anything resembling key
-transparency (see *Out of scope*).
+**Where it's at right now:** phase 2. You can generate an identity, create
+contacts, and send/receive messages with proper forward-secret encryption.
+What's still missing: group chats, using the same identity from more than one
+device, and any kind of public key directory (more on that in "What this
+doesn't do" below).
 
-## Build
+## Building it
 
-Requires a C++20 compiler, CMake ≥ 3.16 and libsodium (1.0.19 or newer
-preferred, see *HKDF* below). libsodium is the only dependency, for the tests
-too.
+You need a C++20 compiler, CMake 3.16 or newer, and libsodium (1.0.19+ is
+best, see the HKDF note further down). That's the only library it depends
+on.
 
 ```sh
-sudo apt install libsodium-dev cmake g++      # Debian/Ubuntu
+sudo apt install libsodium-dev cmake g++      # on Debian/Ubuntu
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-## Usage
+If everything builds and the tests pass, you're good to go — the binary is
+`build/ratchet-usb`.
+
+## How to use it
 
 ```sh
-# on Alice's drive: create the vault
+# Alice sets up her vault
 ratchet-usb init --usb-path /media/usb
 
-# print Alice's contact card and send it to Bob out of band
+# Alice prints her "contact card" and sends it to Bob some other way
 ratchet-usb card --usb-path /media/usb
 
-# on Bob's drive, after doing the same init/card dance and getting Alice's card
+# Bob does the same setup, then imports Alice's card
 ratchet-usb add-contact --usb-path /media/usb --name alice --card alice_card.txt
 ratchet-usb trust --usb-path /media/usb --name alice   # after checking the fingerprint
 
-# Bob writes to Alice; the first send runs the X3DH handshake automatically
+# Bob writes to Alice — the very first message also sets up the encryption keys
 ratchet-usb send --usb-path /media/usb --to alice --message "hi" > msg.txt
-# msg.txt gets pasted into WhatsApp/email/whatever; Alice pastes it back out
+# msg.txt gets copy-pasted into WhatsApp/email/whatever, Alice copies it out again
 
-# on Alice's drive
+# Alice reads it
 ratchet-usb recv --usb-path /media/usb --message "$(cat msg.txt)"
 ```
 
 ### Commands
 
-| Command | Does |
+| Command | What it does |
 | --- | --- |
-| `init` | Generates the seed, shows the 12-word backup, creates the vault (identity, one signed prekey, a batch of one-time prekeys). |
-| `unlock` | Decrypts the vault and prints the identity fingerprint, without touching anything. |
-| `card` | Prints this identity's contact card (base64 block) to share. `--rotate-spk` and `--replenish-otpk <n>` refresh what gets published. |
-| `add-contact` | Imports a contact's card (from `--card <file>` or stdin) under an alias, verifying its signature. |
-| `contacts` | Lists contacts, their fingerprint, trust state and whether a session exists yet. |
-| `trust` | Marks a contact's fingerprint as checked out of band. |
-| `send` | Encrypts a message for a contact, running X3DH first if there is no session yet, and prints the block to paste. |
-| `recv` | Decrypts a pasted block, establishing the session automatically if it is someone's first message. |
+| `init` | Creates a new identity, shows you the 12-word backup phrase once, and sets up the vault. |
+| `unlock` | Just opens the vault and shows your fingerprint, doesn't change anything. |
+| `card` | Prints your contact card so you can share it. `--rotate-spk` and `--replenish-otpk <n>` refresh the keys it publishes. |
+| `add-contact` | Imports someone's card (from a file with `--card` or from stdin), checking that the signature is valid. |
+| `contacts` | Lists your contacts, their fingerprint, whether you've marked them trusted, and if you already have a session going. |
+| `trust` | Marks a contact as verified, meaning you checked their fingerprint through some other channel. |
+| `send` | Encrypts a message for someone. If this is the first message to them, it sets up the session automatically. |
+| `recv` | Decrypts a message someone sent you, setting up the session automatically if it's their first message to you. |
 
-`init` shows the 12 words once and never stores them: they are the seed
-backup, and anyone who reads them owns the identity. Note what they do
-**not** back up — see *What the mnemonic covers* below.
+`init` shows you the 12 recovery words exactly once and doesn't save them
+anywhere — they're your backup, and whoever has them can restore your
+identity. Note that they don't back up everything (see "What the recovery
+words actually cover" below).
 
-Argon2id cost can be tuned with `--argon2-time` and `--argon2-mem-kb` at
-`init`; the values are stored in the vault header and reused on every
-subsequent save, so a vault written on a fast machine still opens on a slow
-one and its cost does not drift.
+You can tune how expensive the passphrase check is with `--argon2-time` and
+`--argon2-mem-kb` when running `init`. Whatever values you pick get saved
+inside the vault and reused every time after that, so a vault created on a
+fast laptop still opens fine on a slower machine, and the cost doesn't
+silently change.
 
-## Cryptography
+## The crypto, in plain terms
 
-| Step | Primitive |
+| Step | What's used |
 | --- | --- |
-| Entropy | `randombytes_buf`, 128 bits |
-| Backup encoding | BIP-39, English wordlist, 12 words |
-| Master seed | HKDF-SHA256-Extract(salt = `Ratchet-USB/v1/master-seed`, ikm = entropy) |
-| Identity key | Ed25519, seed-derived via HKDF-Expand; converted to X25519 for DH (see *Identity key*) |
-| Signed prekey / one-time prekeys | Random X25519 keypairs; the signed prekey is Ed25519-signed by the identity |
-| Key agreement | X3DH (three or four Diffie-Hellman values combined with HKDF) |
-| Session ratchet | Double Ratchet (symmetric-key ratchet + DH ratchet), message keys used directly as ChaCha20-Poly1305 keys |
-| Passphrase → vault key | Argon2id, 16-byte salt, defaults 256 MiB / 3 passes |
-| Vault container | ChaCha20-Poly1305 (IETF), header authenticated as AAD |
+| Random seed | `randombytes_buf`, 128 bits |
+| Backup phrase | BIP-39, English wordlist, 12 words |
+| Master seed | HKDF-SHA256 over the random entropy |
+| Identity key | One Ed25519 key pair, derived from the seed, converted to X25519 when needed for key exchange |
+| Signed / one-time prekeys | Random X25519 key pairs, the signed one gets an Ed25519 signature from your identity key |
+| Key exchange | X3DH (the same handshake Signal uses) |
+| Ongoing chat encryption | Double Ratchet — a rotating key per message, ChaCha20-Poly1305 for the actual encryption |
+| Passphrase to vault key | Argon2id, 256 MiB / 3 passes by default |
+| Vault file | ChaCha20-Poly1305, header included as authenticated data |
 
-The mnemonic encodes the *entropy*, and the master seed is derived from it
-with HKDF rather than with BIP-39's own PBKDF2 construction. Two
-consequences worth knowing:
+The recovery phrase encodes the raw entropy, and the master seed comes from
+running that entropy through HKDF — not through BIP-39's usual PBKDF2 step.
+Two things follow from that:
 
-- the 12 words alone reproduce the seed and the long-term identity — the
-  vault passphrase protects the file on the drive, it is not mixed into the
-  seed;
-- these words will **not** reproduce the same keys in a Bitcoin wallet, and a
-  wallet's words will not reproduce a Ratchet-USB identity. The wordlist is
-  the standard one, the derivation is not.
+- the 12 words alone are enough to rebuild your seed and your long-term
+  identity. The vault passphrase only protects the file sitting on the
+  drive, it doesn't feed into the seed itself;
+- these words will **not** work in a Bitcoin wallet, and a wallet's words
+  won't work here either. Same wordlist, different math underneath.
 
-Every buffer holding key material is a `SecureBytes`/`SecureString`/
-`SecureBuffer`: locked in RAM with `sodium_mlock` where the OS permits it,
-and wiped with `sodium_memzero` on destruction. They cannot be copied — only
-moved — so a secret cannot silently acquire a second, untracked lifetime.
+Anything holding a secret key uses a wrapper (`SecureBytes`, `SecureString`,
+`SecureBuffer`) that locks the memory when the OS allows it and zeroes it out
+once it's no longer needed. You can't accidentally copy one, only move it —
+so a secret can't end up living in two places without you noticing.
 
-### Identity key: one Ed25519 pair, not two
+### Why one identity key, not two
 
-X3DH needs the identity key to both sign (the signed prekey) and perform
-Diffie-Hellman (the handshake itself), and X25519 cannot sign. Rather than
-carry two independent identity keys — doubling what a user has to verify —
-the identity is a single Ed25519 keypair, derived from the seed, converted to
-its birationally equivalent X25519 form (`crypto_sign_ed25519_*_to_curve25519`)
-whenever a Diffie-Hellman is needed. One key, one fingerprint to read aloud.
+X3DH needs the identity key to do two different jobs: sign the prekey, and
+do a Diffie-Hellman exchange during the handshake. X25519 can't sign
+anything, so a lot of designs just use two separate identity keys. Here we
+use a single Ed25519 key instead, and convert it to its X25519 equivalent on
+the fly whenever a Diffie-Hellman is needed. That means one identity, one
+fingerprint to read out loud and check with someone — not two.
 
-### Prekeys are not backed up by the mnemonic
+### Prekeys don't come back with the recovery phrase
 
-The signed prekey and one-time prekeys are random, not derived from the
-seed. If a one-time prekey could be regenerated from the seed alone,
-restoring the vault from the 12 words would resurrect an already-spent
-prekey and quietly break the "used once" guarantee that gives X3DH its
-forward secrecy for the first message. The trade-off: **prekeys, contacts
-and sessions live only in `vault.bin`**, not in the mnemonic. Losing the
-drive without a backup of the file loses those, even with the words in
-hand — a fresh `init` from the same words gets back the same long-term
-identity, but starts with an empty contact list and no sessions.
+The signed prekey and the one-time prekeys are random, they're not derived
+from your seed. That's on purpose: if a one-time prekey could be regenerated
+from the seed, restoring your vault from the 12 words would bring back a key
+you already used once, which defeats the whole point of a "use once" key.
+The trade-off is that **prekeys, contacts and ongoing chats only exist inside
+`vault.bin`**, not in the recovery phrase. If you lose the drive without a
+copy of that file, you lose your contacts and chat history even with the
+words in hand. Running `init` again with the same words gets your identity
+back, but you start from zero contacts.
 
-### X3DH, adapted to no server
+### X3DH without a server
 
-Signal's X3DH assumes a server holding prekey bundles that a sender fetches
-on demand. There is no server here: a contact's bundle is a card, exchanged
-once, out of band, exactly like the rest of this tool's ciphertext. `send`
-performs the handshake automatically the first time there is something to
-say to a contact, consuming one of their published one-time prekeys if the
-stored card still has any (falling back to a 3-DH handshake, per the X3DH
-spec's own fallback, once the pool runs out — `card --replenish-otpk`
-refills it).
+Signal's version of X3DH expects a server that hands out prekey bundles on
+request. There's no server here, so a contact's bundle is just their card,
+shared once, by hand, the same way as everything else in this tool. `send`
+runs the handshake automatically the first time you message someone, using
+up one of their one-time prekeys if they published any (and falling back to
+a slightly weaker 3-way handshake once those run out — `card
+--replenish-otpk` tops them back up).
 
-One deliberate deviation from the reference protocol: X3DH's associated data
-(both parties' identity keys) is not attached only to the first message's
-AEAD tag — it is folded into the derivation of the initial root key itself,
-so every key the Double Ratchet ever produces is transitively bound to both
-identities, not only the opening message.
+One small difference from the spec: instead of only authenticating the very
+first message with the identity keys, this implementation mixes both
+parties' identities into the very first encryption key, so every key the
+ratchet ever produces afterwards is tied back to both identities, not just
+the opening message.
 
 ### Double Ratchet
 
-Standard symmetric-key ratchet (`HMAC-SHA256`-based `KDF_CK`) plus a
-Diffie-Hellman ratchet on every change of direction (`HKDF`-based `KDF_RK`),
-following the Signal Double Ratchet specification's pseudocode field for
-field (`RK`, `DHs`, `DHr`, `CKs`, `CKr`, `Ns`, `Nr`, `PN`). Two
-simplifications relative to the reference:
+This follows the standard Signal Double Ratchet design pretty closely: a
+symmetric ratchet for keys within one direction of the conversation, plus a
+Diffie-Hellman ratchet whenever the conversation changes direction. Two
+small simplifications compared to the original spec:
 
-- a message key is used directly as the ChaCha20-Poly1305 key, instead of
-  being expanded into separate AES-CBC/HMAC/IV material — unnecessary once
-  the cipher is already an AEAD;
-- each message's AEAD nonce is drawn fresh with `randombytes_buf` and
-  carried in the envelope, rather than derived from a counter — twelve extra
-  bytes per message in exchange for one less place a counter could be
-  mishandled.
+- a message key is used straight as the ChaCha20-Poly1305 key, instead of
+  being split into separate encryption/authentication/IV pieces — not
+  needed once you're already using an authenticated cipher;
+- each message gets a random nonce instead of one derived from a counter,
+  which costs a few extra bytes per message but removes a whole category of
+  counter-handling bugs.
 
-Messages that arrive out of order are handled the same way as the spec: a
-capped cache (`kMaxSkip = 1000`) of message keys for a chain that has moved
-on, so a gap in delivery does not lose anything as long as it is not
-absurdly large. A gap bigger than that is refused outright, since a header
-is otherwise a free way to make `recv` hash without bound.
+Messages that arrive out of order are handled the same way Signal does it: a
+capped list (max 1000) of skipped message keys, so a short gap in delivery
+doesn't lose anything. A gap bigger than that gets rejected outright, since
+otherwise someone could send a bogus header and make `recv` do unbounded
+work.
 
-### Trust model
+### About trust
 
-Importing a card verifies that the signed prekey really was signed by the
-claimed identity key, and every message ties back to the sender's identity
-through the handshake — but nothing here confirms that the identity key
-belongs to the person a user thinks they are talking to. That link only
-exists once a human checks it: `add-contact` prints the fingerprint, and
-`trust` records that it was checked over a different channel (in person, a
-phone call — not the same chat the card arrived over). `send` and `recv`
-warn, but do not block, on an unverified contact.
+Importing someone's card checks that their signed prekey really was signed
+by the identity key on the card, and every message you get is cryptographically
+tied to the sender's identity through the handshake. But none of that proves
+the identity key actually belongs to the person you think it does — that's
+something only a human can confirm. `add-contact` prints a fingerprint, and
+`trust` records that you checked it some other way (in person, a phone call —
+not the same chat where the card showed up). `send` and `recv` will warn you
+about an unverified contact, but they won't stop you.
 
-### HKDF
+### A note on HKDF
 
-The build uses `crypto_kdf_hkdf_sha256_*` when libsodium provides it (1.0.19
-and later). Against older releases CMake falls back to an in-tree RFC 5869
-implementation on top of `crypto_auth_hmacsha256`; both paths are checked
-against the RFC's own test vectors, so the derived keys are identical either
-way and a vault stays portable between the two.
+The build uses libsodium's own `crypto_kdf_hkdf_sha256_*` functions when
+they're available (libsodium 1.0.19+). On older versions, it falls back to a
+small in-house RFC 5869 implementation built on `crypto_auth_hmacsha256`.
+Both are tested against the RFC's official test vectors and produce
+identical output, so a vault stays portable regardless of which path your
+libsodium version takes.
 
-## Vault format
+## Vault file layout
 
-`vault.bin`:
+`vault.bin` looks like this:
 
 ```
 offset  size  field
@@ -189,57 +196,69 @@ offset  size  field
 21      4     Argon2id time cost      (uint32, little-endian)
 25      4     Argon2id memory in KiB  (uint32, little-endian)
 29      12    ChaCha20-Poly1305 nonce
-41      N     ciphertext: the serialised vault store (seed, prekeys, contacts, sessions)
-41+N    16    Poly1305 tag
+41      N     encrypted data: seed, prekeys, contacts, sessions
+41+N    16    Poly1305 authentication tag
 ```
 
-The 41-byte header is serialised field by field, not dumped as a struct, so
-the file does not depend on the compiler's padding. The whole header is
-passed to the AEAD as additional data: altering the salt, the nonce or the
-cost parameters makes decryption fail rather than quietly deriving a
-different key. A wrong passphrase and a tampered file report the same error
-on purpose.
+The header is written out field by field rather than dumped as a raw struct,
+so the file format doesn't depend on how your compiler happens to pad
+things. The whole header also gets fed into the encryption as authenticated
+data, so tampering with the salt, nonce or cost values makes decryption fail
+instead of silently deriving the wrong key. On purpose, a wrong passphrase
+and a tampered file produce the exact same error message.
 
-The cost fields are read back from a file an attacker may have written, so
-they are range-checked (time 1–64, memory 8 KiB–4 GiB) before reaching
-Argon2.
+The cost values get read back from a file that could, in theory, have been
+tampered with, so they're range-checked (time 1–64, memory between 8 KiB and
+4 GiB) before they're ever handed to Argon2.
 
-Version 1 (phase 1) held a fixed 64-byte seed-plus-identity-key plaintext.
-Version 2 holds the full store and is not backward compatible; there was no
-released vault to migrate.
+Version 1 (phase 1) just stored a fixed 64-byte seed-plus-key blob. Version 2
+stores the whole vault and isn't compatible with version 1 — there was no
+released vault to worry about migrating anyway.
 
-### Message and card wire format
+### Message and card format
 
-Both a contact card and a message are a `-----BEGIN RATCHET <LABEL>-----`
-block of base64, wrapped at 64 columns, ignoring whitespace on decode so a
-chat app reflowing the text does not break it. A message carries a truncated
-hash of the sender's identity key (so `recv` knows which session it belongs
-to without being told), the Double Ratchet header, and — only on the message
-that opens a session — the X3DH fields.
+Both a contact card and a message are wrapped in a
+`-----BEGIN RATCHET <LABEL>-----` block of base64 text, 64 characters per
+line, and any extra whitespace is ignored when reading it back — that way a
+chat app reflowing the text doesn't break it. A message includes a short
+hash of the sender's identity (so `recv` knows which conversation it belongs
+to without being told explicitly), the Double Ratchet header, and — only on
+the message that starts a new conversation — the X3DH handshake data.
 
-## Layout
+## Project layout
 
 ```
 include/ratchet/   public headers
-src/               implementation + the BIP-39 wordlist
-test/              unit tests (no external framework)
+src/               the actual implementation, plus the BIP-39 wordlist
+test/              unit tests (no external test framework, just plain checks)
 ```
 
-## Threat model, briefly
+## What this protects you from
 
-Protects against: someone who obtains the USB drive without the passphrase,
-anyone reading the transport channel, and a compromise of one session's
-message keys not exposing past or future ones (forward secrecy and post-
-compromise security, both inherited from the Double Ratchet).
+Someone who gets hold of your USB drive but doesn't know the passphrase.
+Anyone watching or logging the channel you paste messages through. And if
+one session's keys ever leak, that doesn't expose past or future messages —
+that's forward secrecy and post-compromise security, both inherited from the
+Double Ratchet design.
 
-Does not protect against: a compromised host (a keylogger sees the
-passphrase and every plaintext typed), someone who reads the 12 words or
-steals `vault.bin`, trusting a contact's identity key without checking the
-fingerprint out of band, or the fact that the channel in between still
-records the ciphertext and its timing.
+## What it doesn't protect you from
 
-## Out of scope (for now)
+A compromised computer — if there's a keylogger running, it sees your
+passphrase and everything you type, encryption or not. Someone reading your
+12 recovery words, or stealing `vault.bin` directly. Trusting a contact's
+identity without actually checking their fingerprint. And the channel you're
+pasting messages through still sees the ciphertext go by, along with when
+you sent it, even if it can't read what's inside.
 
-Groups, multi-device, prekey rotation policy beyond a manual command, and
-anything like key transparency. Each would meaningfully grow this phase's
-surface; left for later.
+## What this doesn't do (yet)
+
+Group chats, using one identity across multiple devices, any kind of
+automatic prekey rotation beyond running a command by hand, and anything
+like key transparency. Each of these is a real chunk of work on its own, so
+they're left for later rather than half-done now.
+
+## License
+
+MIT — see [LICENSE](LICENSE). Third-party code and data used by this project
+(the BIP-39 wordlist, libsodium) are credited in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
