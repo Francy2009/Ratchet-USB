@@ -17,6 +17,15 @@ What's still missing: group chats, using the same identity from more than one
 device, and any kind of public key directory (more on that in "What this
 doesn't do" below).
 
+> **Before you rely on this for anything real:** this project has not gone
+> through an independent security audit yet. It's built carefully and tested,
+> but "carefully built by one person" and "checked by outside cryptographers"
+> are not the same guarantee. If you're a journalist, activist, or anyone
+> else who could face real consequences if a message got read, please don't
+> make this your only line of defense — treat it as one extra layer, keep
+> using other reviewed and audited tools alongside it, and get in touch if
+> you want to talk through your specific situation before trusting it.
+
 ## Building it
 
 You need a C++20 compiler, CMake 3.16 or newer, and libsodium (1.0.19+ is
