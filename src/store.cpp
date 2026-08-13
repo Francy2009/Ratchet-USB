@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <ctime>
 
 #include "ratchet/serial.hpp"
 
@@ -10,7 +11,9 @@ namespace ratchet::store {
 namespace {
 
 constexpr std::array<uint8_t, 4> kStoreMagic = {'R', 'S', 'T', 'R'};
-constexpr uint8_t kStoreVersion = 1;
+// Version 1 had no `created_at` on the signed prekey; version 2 added it so
+// `unlock` can tell how old the current one is. Both are still readable.
+constexpr uint8_t kStoreVersion = 2;
 
 void write_signed_prekey(serial::Writer<SecureBuffer>& w,
                          const prekey::SignedPrekey& spk) {
@@ -18,14 +21,22 @@ void write_signed_prekey(serial::Writer<SecureBuffer>& w,
   w.bytes(spk.pub.data(), spk.pub.size());
   w.bytes(spk.sk.data(), spk.sk.size());
   w.bytes(spk.signature.data(), spk.signature.size());
+  w.u64(spk.created_at);
 }
 
-prekey::SignedPrekey read_signed_prekey(serial::Reader& r) {
+prekey::SignedPrekey read_signed_prekey(serial::Reader& r, uint8_t version) {
   prekey::SignedPrekey spk;
   spk.id = r.u32();
   r.bytes(spk.pub.data(), spk.pub.size());
   r.bytes(spk.sk.data(), spk.sk.size());
   r.bytes(spk.signature.data(), spk.signature.size());
+  if (version >= 2) {
+    spk.created_at = r.u64();
+  } else {
+    // Vaults written before rotation tracking existed have no recorded age;
+    // treat the prekey as fresh rather than immediately flagging it stale.
+    spk.created_at = static_cast<uint64_t>(std::time(nullptr));
+  }
   return spk;
 }
 
@@ -235,7 +246,7 @@ VaultStore parse(const uint8_t* data, std::size_t len) {
     throw Error("internal: vault contents have the wrong internal format");
   }
   const uint8_t version = r.u8();
-  if (version != kStoreVersion) {
+  if (version != 1 && version != kStoreVersion) {
     throw Error("internal: unsupported vault store version " +
                std::to_string(version));
   }
@@ -247,7 +258,7 @@ VaultStore parse(const uint8_t* data, std::size_t len) {
   const uint32_t spk_count = r.u32();
   store.signed_prekeys.reserve(spk_count);
   for (uint32_t i = 0; i < spk_count; ++i) {
-    store.signed_prekeys.push_back(read_signed_prekey(r));
+    store.signed_prekeys.push_back(read_signed_prekey(r, version));
   }
 
   store.next_otpk_id = r.u32();

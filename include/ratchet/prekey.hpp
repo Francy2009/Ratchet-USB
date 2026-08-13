@@ -17,6 +17,9 @@ struct SignedPrekey {
   x25519::PublicKey pub{};
   x25519::SecretKey sk;
   Signature signature{};
+  // Unix timestamp (seconds), used to decide when the prekey is old enough
+  // to rotate automatically. Never published on the card itself.
+  uint64_t created_at = 0;
 };
 
 // A one-time prekey: an X25519 keypair meant to be consumed by exactly one

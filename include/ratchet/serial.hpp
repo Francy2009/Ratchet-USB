@@ -43,6 +43,11 @@ class Writer {
     buffer_append(out_, b, 4);
   }
 
+  void u64(uint64_t v) {
+    u32(static_cast<uint32_t>(v & 0xFFFFFFFFu));
+    u32(static_cast<uint32_t>((v >> 32) & 0xFFFFFFFFu));
+  }
+
   void bytes(const uint8_t* p, std::size_t n) { buffer_append(out_, p, n); }
 
   // Length-prefixed field, for anything whose size is not fixed by the format.
@@ -85,6 +90,12 @@ class Reader {
     need(n);
     std::memcpy(out, data_ + pos_, n);
     pos_ += n;
+  }
+
+  uint64_t u64() {
+    const uint64_t lo = u32();
+    const uint64_t hi = u32();
+    return lo | (hi << 32);
   }
 
   std::vector<uint8_t> blob() {

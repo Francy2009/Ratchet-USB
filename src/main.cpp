@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -37,6 +38,9 @@ constexpr const char* kProgram = "ratchet-usb";
 constexpr const char* kVersion = "0.2.0";
 constexpr std::size_t kDefaultOtpkCount = 10;
 constexpr std::size_t kReplenishThreshold = 5;
+// How long a signed prekey is trusted before `unlock` rotates it on its own.
+constexpr uint64_t kSpkMaxAgeDays = 30;
+constexpr uint64_t kSpkMaxAgeSeconds = kSpkMaxAgeDays * 24 * 60 * 60;
 
 void print_usage(std::ostream& os) {
   os << "Ratchet-USB " << kVersion
@@ -311,6 +315,48 @@ std::string read_file_text(const std::string& path) {
   return ss.str();
 }
 
+// Rotates the signed prekey if it has aged past kSpkMaxAgeDays, and tops the
+// one-time prekey pool back up once it drops below kReplenishThreshold. Runs
+// on every `unlock` so both stay fresh without a manual `card` command.
+// Returns whether the store was actually changed (and so needs saving).
+bool maintain_prekeys(store::VaultStore& store,
+                      const IdentitySigningSecretKey& identity_sk) {
+  bool changed = false;
+  const uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+
+  const bool spk_stale = store.signed_prekeys.empty() ||
+      now - store.signed_prekeys.back().created_at > kSpkMaxAgeSeconds;
+  if (spk_stale) {
+    store.signed_prekeys.push_back(
+        prekey::generate_signed_prekey(identity_sk, store.next_spk_id));
+    store.next_spk_id += 1;
+    // Keep only the newest two, same rule as the manual `--rotate-spk`: a
+    // peer who grabbed the card just before rotation may still use the old one.
+    while (store.signed_prekeys.size() > 2) {
+      store.signed_prekeys.erase(store.signed_prekeys.begin());
+    }
+    std::cout << "Signed prekey was older than " << kSpkMaxAgeDays
+              << " days; rotated it automatically.\n";
+    changed = true;
+  }
+
+  if (store.one_time_prekeys.size() < kReplenishThreshold) {
+    const std::size_t had = store.one_time_prekeys.size();
+    std::vector<prekey::OneTimePrekey> fresh =
+        prekey::generate_one_time_prekeys(store.next_otpk_id, kDefaultOtpkCount);
+    store.next_otpk_id += static_cast<uint32_t>(kDefaultOtpkCount);
+    for (auto& otpk : fresh) {
+      store.one_time_prekeys.push_back(std::move(otpk));
+    }
+    std::cout << "Only " << had
+              << " one-time prekey(s) were left; replenished "
+              << kDefaultOtpkCount << " automatically.\n";
+    changed = true;
+  }
+
+  return changed;
+}
+
 // --- commands ----------------------------------------------------------------
 
 int cmd_init(const Options& opts) {
@@ -373,14 +419,21 @@ int cmd_unlock(const Options& opts) {
   const fs::path path = vault::vault_path(usb);
 
   OpenedVault opened = unlock_vault(path);
+  store::VaultStore& store = opened.store;
 
   IdentitySigningSecretKey identity_sk;
   IdentitySigningPublicKey identity_pk;
-  derive_identity(opened.store.seed, identity_sk, identity_pk);
+  derive_identity(store.seed, identity_sk, identity_pk);
+
+  const bool changed = maintain_prekeys(store, identity_sk);
   identity_sk.wipe();
 
-  std::cout << "Vault unlocked (" << opened.store.contacts.size() << " contact(s), "
-            << opened.store.sessions.size() << " session(s)).\n"
+  if (changed) {
+    save_vault(path, store, opened.params, opened.passphrase);
+  }
+
+  std::cout << "Vault unlocked (" << store.contacts.size() << " contact(s), "
+            << store.sessions.size() << " session(s)).\n"
             << "Identity fingerprint:\n" << fingerprint(identity_pk) << "\n";
   return 0;
 }

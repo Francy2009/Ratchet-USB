@@ -18,6 +18,7 @@ store::VaultStore make_sample_store() {
   spk.id = 1;
   x25519::generate_keypair(spk.sk, spk.pub);
   randombytes_buf(spk.signature.data(), spk.signature.size());
+  spk.created_at = 1700000000;
   s.signed_prekeys.push_back(std::move(spk));
 
   s.next_otpk_id = 5;
@@ -87,6 +88,7 @@ TEST("VaultStore serialize/parse round-trips every field") {
   CHECK(original.signed_prekeys[0].pub == parsed.signed_prekeys[0].pub);
   CHECK(original.signed_prekeys[0].sk.equals(parsed.signed_prekeys[0].sk));
   CHECK(original.signed_prekeys[0].signature == parsed.signed_prekeys[0].signature);
+  CHECK_EQ(original.signed_prekeys[0].created_at, parsed.signed_prekeys[0].created_at);
 
   CHECK_EQ(original.next_otpk_id, parsed.next_otpk_id);
   CHECK_EQ(original.one_time_prekeys.size(), parsed.one_time_prekeys.size());

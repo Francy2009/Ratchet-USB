@@ -1,5 +1,7 @@
 #include "ratchet/prekey.hpp"
 
+#include <ctime>
+
 namespace ratchet::prekey {
 
 SignedPrekey generate_signed_prekey(const IdentitySigningSecretKey& identity_sk,
@@ -8,6 +10,7 @@ SignedPrekey generate_signed_prekey(const IdentitySigningSecretKey& identity_sk,
   record.id = id;
   x25519::generate_keypair(record.sk, record.pub);
   sign(identity_sk, record.pub.data(), record.pub.size(), record.signature);
+  record.created_at = static_cast<uint64_t>(std::time(nullptr));
   return record;
 }
 
