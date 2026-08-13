@@ -42,11 +42,25 @@ class EchoOff {
   bool active_ = false;
 };
 
+// A command that reads a message from stdin first (`send` with no message
+// argument) leaves stdin's end-of-file indicator latched by the Ctrl-D that
+// ended it. Every later fgetc would then return EOF without waiting, so the
+// passphrase prompt failed outright on a terminal where the user is perfectly
+// able to keep typing. Clearing it costs nothing on a pipe: the read simply
+// hits EOF again and the caller reports the missing value as before.
+void clear_stale_eof() {
+  if (std::feof(stdin) != 0) {
+    std::clearerr(stdin);
+  }
+}
+
 }  // namespace
 
 bool stdin_is_tty() { return isatty(STDIN_FILENO) != 0; }
 
 SecureString read_passphrase(const std::string& prompt) {
+  clear_stale_eof();
+
   // Prompts go to stderr, not stdout: stdout carries the payload a command is
   // there to produce (a contact card, a message block), so `card > file` has to
   // stay free of anything but the block itself.
@@ -101,6 +115,7 @@ std::string read_line(const std::string& prompt) {
   if (!stdin_is_tty()) {
     return {};
   }
+  clear_stale_eof();
   std::cerr << prompt << std::flush;
 
   std::string out;
