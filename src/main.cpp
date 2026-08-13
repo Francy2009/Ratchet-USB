@@ -557,6 +557,14 @@ int cmd_unlock(const Options& opts) {
 }
 
 int cmd_card(const Options& opts) {
+  // --fingerprint only reads, so pairing it with a key-refreshing flag asks for
+  // two different things at once. Refusing beats quietly skipping the refresh
+  // and letting the user believe their keys rotated.
+  if (opts.fingerprint_only && (opts.rotate_spk || opts.replenish_otpk > 0)) {
+    throw Error("--fingerprint cannot be combined with --rotate-spk or "
+                "--replenish-otpk");
+  }
+
   const fs::path usb = require_usb_path(opts);
   const fs::path path = vault::vault_path(usb);
 
