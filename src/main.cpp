@@ -48,40 +48,42 @@ void print_usage(std::ostream& os) {
      << "\n"
      << "Usage:\n"
      << "  " << kProgram
-     << " init         --usb-path <dir> [--from-mnemonic] [options]\n"
-     << "  " << kProgram << " unlock       --usb-path <dir>\n"
+     << " init     --usb-path <dir> [--from-mnemonic] [options]\n"
+     << "  " << kProgram << " unlock   --usb-path <dir>\n"
      << "  " << kProgram
-     << " card         --usb-path <dir> [--fingerprint] [--rotate-spk] "
+     << " card     --usb-path <dir> [--fingerprint] [--rotate-spk] "
         "[--replenish-otpk <n>]\n"
      << "  " << kProgram
-     << " add-contact  --usb-path <dir> --name <alias> [--card <file>]\n"
-     << "  " << kProgram << " contacts     --usb-path <dir>\n"
-     << "  " << kProgram << " trust        --usb-path <dir> --name <alias>\n"
+     << " add      --usb-path <dir> <alias> [--card <file>]\n"
+     << "  " << kProgram << " contacts --usb-path <dir>\n"
+     << "  " << kProgram << " trust    --usb-path <dir> <alias>\n"
      << "  " << kProgram
-     << " send         --usb-path <dir> --to <alias> [--message <text>]\n"
-     << "  " << kProgram << " recv         --usb-path <dir> [--message <text>]\n"
+     << " send     --usb-path <dir> <alias> [message]\n"
+     << "  " << kProgram << " recv     --usb-path <dir> [message]\n"
      << "\n"
      << "Commands:\n"
-     << "  init         Generate a 128-bit seed, show its 12-word BIP-39 backup,\n"
-     << "               and create the vault (identity, a signed prekey, one-\n"
-     << "               time prekeys) at <dir>/vault.bin. With --from-mnemonic,\n"
-     << "               rebuild the identity from an existing 12-word backup\n"
-     << "               instead of generating a new one (no contacts or chat\n"
-     << "               history come back with it; those only ever lived in\n"
-     << "               the old vault.bin).\n"
-     << "  unlock       Decrypt the vault and print the identity fingerprint.\n"
-     << "  card         Print this identity's contact card, to paste to a\n"
-     << "               contact so they can start a conversation. With\n"
-     << "               --fingerprint, print only the fingerprint.\n"
-     << "  add-contact  Import a contact's card (read from --card, or from\n"
-     << "               standard input) under the given alias.\n"
-     << "  contacts     List known contacts, their fingerprint and trust state.\n"
-     << "  trust        Mark a contact's fingerprint as verified out of band.\n"
-     << "  send         Encrypt a message for a contact (running the initial\n"
-     << "               handshake automatically if needed) and print the block\n"
-     << "               to paste into the chat.\n"
-     << "  recv         Decrypt a pasted message block (establishing the\n"
-     << "               session automatically if it is the first one).\n"
+     << "  init      Generate a 128-bit seed, show its 12-word BIP-39 backup,\n"
+     << "            and create the vault (identity, a signed prekey, one-\n"
+     << "            time prekeys) at <dir>/vault.bin. With --from-mnemonic,\n"
+     << "            rebuild the identity from an existing 12-word backup\n"
+     << "            instead of generating a new one (no contacts or chat\n"
+     << "            history come back with it; those only ever lived in\n"
+     << "            the old vault.bin).\n"
+     << "  unlock    Decrypt the vault and print the identity fingerprint.\n"
+     << "  card      Print this identity's contact card, to paste to a\n"
+     << "            contact so they can start a conversation. With\n"
+     << "            --fingerprint, print only the fingerprint.\n"
+     << "  add       Import a contact's card (read from --card, or from\n"
+     << "            standard input) under <alias>.\n"
+     << "  contacts  List known contacts, their fingerprint and trust state.\n"
+     << "  trust     Mark <alias>'s fingerprint as verified out of band.\n"
+     << "  send      Encrypt a message for <alias> (running the initial\n"
+     << "            handshake automatically if needed) and print the block\n"
+     << "            to paste into the chat. [message] falls back to standard\n"
+     << "            input, or a prompt, when omitted.\n"
+     << "  recv      Decrypt a pasted message block (establishing the\n"
+     << "            session automatically if it is the first one). [message]\n"
+     << "            falls back to standard input, or a prompt, when omitted.\n"
      << "\n"
      << "Options:\n"
      << "  --usb-path <dir>     Directory on the removable drive. Falls back to\n"
@@ -128,9 +130,47 @@ uint32_t parse_u32(std::string_view text, const char* flag) {
   return value;
 }
 
+// Commands read their "subject" (a contact alias, a message) as a positional
+// argument rather than a --flag, so `send alice "hi"` replaces
+// `send --to alice --message "hi"`. This pulls any leftover positional
+// arguments off the front of `positional` and assigns them in the order each
+// command expects.
+void assign_positional(Options& opts, std::vector<std::string>& positional) {
+  auto take = [&]() -> std::optional<std::string> {
+    if (positional.empty()) {
+      return std::nullopt;
+    }
+    std::string value = std::move(positional.front());
+    positional.erase(positional.begin());
+    return value;
+  };
+
+  if (opts.command == "add" || opts.command == "trust") {
+    if (auto v = take()) {
+      opts.name = *v;
+    }
+  } else if (opts.command == "send") {
+    if (auto v = take()) {
+      opts.to = *v;
+    }
+    if (auto v = take()) {
+      opts.message = *v;
+    }
+  } else if (opts.command == "recv") {
+    if (auto v = take()) {
+      opts.message = *v;
+    }
+  }
+
+  if (!positional.empty()) {
+    throw Error("unexpected argument: " + positional.front());
+  }
+}
+
 Options parse_args(int argc, char** argv) {
   Options opts;
   std::vector<std::string_view> args(argv + 1, argv + argc);
+  std::vector<std::string> positional;
 
   if (args.empty()) {
     throw Error("no command given (try `" + std::string(kProgram) + " --help`)");
@@ -176,22 +216,19 @@ Options parse_args(int argc, char** argv) {
       opts.fingerprint_only = true;
     } else if (arg == "--from-mnemonic") {
       opts.from_mnemonic = true;
-    } else if (arg == "--name") {
-      opts.name = std::string(next("--name"));
-    } else if (arg == "--to") {
-      opts.to = std::string(next("--to"));
     } else if (arg == "--card") {
       opts.card_file = std::string(next("--card"));
-    } else if (arg == "--message") {
-      opts.message = std::string(next("--message"));
-    } else {
+    } else if (arg.starts_with("-") && arg != "-") {
       throw Error("unknown argument: " + std::string(arg));
+    } else {
+      positional.emplace_back(arg);
     }
   }
 
   if (opts.command.empty()) {
     throw Error("no command given (try `" + std::string(kProgram) + " --help`)");
   }
+  assign_positional(opts, positional);
   return opts;
 }
 
@@ -563,7 +600,7 @@ int cmd_card(const Options& opts) {
 
 int cmd_add_contact(const Options& opts) {
   const std::string name =
-      require_value(opts.name, "Contact alias: ", "--name is required");
+      require_value(opts.name, "Contact alias: ", "an alias is required");
   const fs::path usb = require_usb_path(opts);
   const fs::path path = vault::vault_path(usb);
 
@@ -594,7 +631,7 @@ int cmd_add_contact(const Options& opts) {
             << "over a separate channel (in person, a phone call) before "
                "trusting it:\n\n"
             << fingerprint(imported.identity_pub) << "\n\n"
-            << "Then run `" << kProgram << " trust --usb-path <dir> --name "
+            << "Then run `" << kProgram << " trust --usb-path <dir> "
             << name << "`.\n";
   return 0;
 }
@@ -624,7 +661,7 @@ int cmd_contacts(const Options& opts) {
 
 int cmd_trust(const Options& opts) {
   const std::string name =
-      require_value(opts.name, "Contact alias: ", "--name is required");
+      require_value(opts.name, "Contact alias: ", "an alias is required");
   const fs::path usb = require_usb_path(opts);
   const fs::path path = vault::vault_path(usb);
 
@@ -644,7 +681,7 @@ int cmd_trust(const Options& opts) {
 
 int cmd_send(const Options& opts) {
   const std::string to =
-      require_value(opts.to, "Send to (contact alias): ", "--to is required");
+      require_value(opts.to, "Send to (contact alias): ", "a recipient alias is required");
   const fs::path usb = require_usb_path(opts);
   const fs::path path = vault::vault_path(usb);
 
@@ -738,7 +775,7 @@ int main(int argc, char** argv) {
     if (opts.command == "card") {
       return cmd_card(opts);
     }
-    if (opts.command == "add-contact") {
+    if (opts.command == "add") {
       return cmd_add_contact(opts);
     }
     if (opts.command == "contacts") {
