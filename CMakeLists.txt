@@ -80,7 +80,8 @@ add_library(ratchet_core
             src/ratchet.cpp
             src/session.cpp
             src/vault.cpp
-            src/terminal.cpp)
+            src/terminal.cpp
+            src/cli.cpp)
 
 target_include_directories(ratchet_core PUBLIC
                            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
