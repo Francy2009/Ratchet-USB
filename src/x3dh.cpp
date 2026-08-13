@@ -105,8 +105,8 @@ ImportedCard import_card(std::string_view base64_card) {
   return out;
 }
 
-InitiatorResult initiate(const IdentitySigningSecretKey& my_sk,
-                         const IdentitySigningPublicKey& my_pk,
+InitiatorResult initiate(const IdentitySigningSecretKey& my_identity_sk,
+                         const IdentitySigningPublicKey& my_identity_pk,
                          store::Contact& contact) {
   if (!contact.card) {
     throw Error(
@@ -122,7 +122,7 @@ InitiatorResult initiate(const IdentitySigningSecretKey& my_sk,
 
   IdentityDHSecretKey my_dh_sk;
   IdentityDHPublicKey my_dh_pk;
-  identity_dh_keypair(my_sk, my_pk, my_dh_sk, my_dh_pk);
+  identity_dh_keypair(my_identity_sk, my_identity_pk, my_dh_sk, my_dh_pk);
   IdentityDHPublicKey their_dh_pk;
   identity_dh_public(contact.identity_pub, their_dh_pk);
 
@@ -139,6 +139,7 @@ InitiatorResult initiate(const IdentitySigningSecretKey& my_sk,
 
   InitiatorResult result;
   result.spk_id = card.spk_id;
+  result.spk_pub = card.spk_pub;
   result.ephemeral_pk = eph_pk;
 
   std::vector<const SecureBytes<32>*> parts = {&dh1, &dh2, &dh3};
@@ -166,29 +167,29 @@ InitiatorResult initiate(const IdentitySigningSecretKey& my_sk,
   return result;
 }
 
-SecureBytes<32> respond(const IdentitySigningSecretKey& my_sk,
-                        const IdentitySigningPublicKey& my_pk,
-                        const IdentitySigningPublicKey& their_pk,
-                        const x25519::PublicKey& their_eph_pk,
+SecureBytes<32> respond(const IdentitySigningSecretKey& my_identity_sk,
+                        const IdentitySigningPublicKey& my_identity_pk,
+                        const IdentitySigningPublicKey& their_identity_pk,
+                        const x25519::PublicKey& their_ephemeral_pub,
                         const prekey::SignedPrekey& my_spk,
                         const prekey::OneTimePrekey* my_otpk) {
   IdentityDHSecretKey my_dh_sk;
   IdentityDHPublicKey my_dh_pk;
-  identity_dh_keypair(my_sk, my_pk, my_dh_sk, my_dh_pk);
+  identity_dh_keypair(my_identity_sk, my_identity_pk, my_dh_sk, my_dh_pk);
   IdentityDHPublicKey their_dh_pk;
-  identity_dh_public(their_pk, their_dh_pk);
+  identity_dh_public(their_identity_pk, their_dh_pk);
 
   SecureBytes<32> dh1;
   SecureBytes<32> dh2;
   SecureBytes<32> dh3;
   x25519::dh(my_spk.sk, their_dh_pk, dh1);    // DH(SPK_B, IK_A)
-  x25519::dh(my_dh_sk, their_eph_pk, dh2);    // DH(IK_B, EK_A)
-  x25519::dh(my_spk.sk, their_eph_pk, dh3);   // DH(SPK_B, EK_A)
+  x25519::dh(my_dh_sk, their_ephemeral_pub, dh2);    // DH(IK_B, EK_A)
+  x25519::dh(my_spk.sk, their_ephemeral_pub, dh3);   // DH(SPK_B, EK_A)
 
   std::vector<const SecureBytes<32>*> parts = {&dh1, &dh2, &dh3};
   SecureBytes<32> dh4;
   if (my_otpk != nullptr) {
-    x25519::dh(my_otpk->sk, their_eph_pk, dh4);
+    x25519::dh(my_otpk->sk, their_ephemeral_pub, dh4);
     parts.push_back(&dh4);
   }
 

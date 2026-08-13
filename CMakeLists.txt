@@ -54,12 +54,24 @@ else()
   set(CMAKE_REQUIRED_INCLUDES ${SODIUM_INCLUDE_DIR})
   set(CMAKE_REQUIRED_LIBRARIES ${SODIUM_LIBRARY})
 endif()
+# A feature check must answer "does this symbol exist", and nothing else. It
+# inherits CMAKE_CXX_FLAGS, so without this a warning-as-error build turns any
+# diagnostic in the snippet below into "feature absent" -- and the failure is
+# silent: the build simply uses the bundled HKDF and prints a status line. That
+# is exactly what -Werror plus the nonnull arguments this snippet used to pass
+# did. Suppressing -Werror for the check keeps a future warning from quietly
+# reconfiguring the crypto.
+if(NOT MSVC)
+  set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -Wno-error")
+endif()
 check_cxx_source_compiles("
 #include <sodium.h>
 int main() {
   unsigned char prk[crypto_kdf_hkdf_sha256_KEYBYTES];
-  crypto_kdf_hkdf_sha256_extract(prk, nullptr, 0, nullptr, 0);
-  return crypto_kdf_hkdf_sha256_expand(prk, sizeof prk, \"\", 0, prk);
+  unsigned char ikm[32] = {0};
+  unsigned char okm[32];
+  crypto_kdf_hkdf_sha256_extract(prk, ikm, sizeof ikm, ikm, sizeof ikm);
+  return crypto_kdf_hkdf_sha256_expand(okm, sizeof okm, \"\", 0, prk);
 }
 " RATCHET_HAVE_SODIUM_HKDF)
 cmake_pop_check_state()

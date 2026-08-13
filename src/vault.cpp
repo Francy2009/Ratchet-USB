@@ -103,7 +103,10 @@ VaultHeader parse_header(const uint8_t* data, std::size_t len) {
   off += 4;
 
   std::memcpy(header.nonce, data + off, sizeof header.nonce);
+  // The cursor is not read again, but every field advances it: dropping the
+  // last increment is how the next field added here acquires a silent bug.
   off += sizeof header.nonce;
+  (void)off;
 
   check_params(header.argon2_time_cost, header.argon2_mem_cost_kb);
   return header;
@@ -261,7 +264,9 @@ std::vector<uint8_t> read_file(const std::filesystem::path& path) {
   }
   std::vector<uint8_t> bytes(static_cast<std::size_t>(size));
   const std::size_t got = std::fread(bytes.data(), 1, bytes.size(), f);
-  std::fclose(f);
+  // Nothing was written through this handle, so a close failure has no data
+  // to lose and there is no meaningful way to recover from it here.
+  (void)std::fclose(f);
   if (got != bytes.size()) {
     throw Error("short read on " + path.string());
   }

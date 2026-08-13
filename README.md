@@ -1,5 +1,7 @@
 # Ratchet-USB
 
+[![CI](https://github.com/Francy2009/Ratchet-USB/actions/workflows/ci.yml/badge.svg)](https://github.com/Francy2009/Ratchet-USB/actions/workflows/ci.yml)
+
 A small command-line tool for sending encrypted messages without needing a
 server. You encrypt the message on your machine, copy the resulting text, and
 paste it wherever you want: WhatsApp, email, a forum, whatever. The other
@@ -320,6 +322,47 @@ that starts a new conversation, the X3DH handshake data.
 `include/ratchet/` holds the public headers, `src/` has the actual
 implementation plus the BIP-39 wordlist, and `test/` has the unit tests
 (no external test framework, just plain checks).
+
+## How the crypto is checked
+
+A round-trip test is worth less here than it looks. Encrypting and decrypting
+with the same code proves the implementation agrees with itself, and an
+implementation that is wrong in a self-consistent way agrees with itself
+perfectly. Swap the two HMAC constants in the chain-key derivation, or hand
+HKDF the Diffie-Hellman output as its salt and the root key as its input
+material, and every message still round-trips. The result is a ratchet that
+works beautifully and is not the one the specification describes.
+
+So the key schedule is also checked against known-answer vectors that came
+from somewhere else. `test/vectors/reference.py` implements the same
+derivations a second time, in Python, from the specifications rather than from
+`src/ratchet.cpp`, using only the standard library. Its own primitives are
+pinned to published test vectors first -- RFC 7748 for X25519, RFC 5869 for
+HKDF-SHA256 -- and its output is frozen into `test/vectors/vectors.hpp`, which
+the C++ suite has to reproduce byte for byte. CI regenerates that header on
+every push and fails if it differs from the committed copy, so the two
+implementations cannot quietly drift into agreement. For a bug to survive, it
+would have to be made twice, independently, in the same direction.
+
+That is a conformance check, not an interoperability claim: this tool does not
+speak libsignal's wire format and cannot be tested against it (see the
+deliberate departures noted above -- the message key is used directly as a
+ChaCha20-Poly1305 key, the nonce is random and carried in the envelope, and
+the root-key info string is this project's own).
+
+Alongside that, `test/smoke.sh` drives the actual built binary through a whole
+conversation -- two vaults, a card exchange, a handshake, a reply, out-of-order
+delivery, a tampered message, a wrong passphrase -- because none of the unit
+tests touch argument parsing, file I/O, or the copy-paste block encoding.
+
+CI runs all of it on every push: GCC and Clang, Debug and Release, warnings as
+errors, AddressSanitizer, UndefinedBehaviorSanitizer, Valgrind and clang-tidy.
+One job builds a newer libsodium from source, because Ubuntu ships 1.0.18 and
+this project carries its own RFC 5869 HKDF for releases older than 1.0.19 --
+without that job, half the HKDF code in the tree would never be compiled, let
+alone run. It also asserts that the newer libsodium's HKDF really was selected,
+since a detection failure otherwise falls back silently and leaves the badge
+green.
 
 ## What this does and doesn't protect you from
 

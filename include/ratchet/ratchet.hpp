@@ -2,6 +2,7 @@
 #define RATCHET_RATCHET_HPP
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "ratchet/message.hpp"
@@ -25,6 +26,31 @@ namespace ratchet::ratchet {
 // catch up on missed messages. Without it, a header claiming an enormous `n`
 // would make decryption allocate and hash without bound.
 inline constexpr std::size_t kMaxSkip = 1000;
+
+// The two key-derivation steps the ratchet is built from. They are exposed
+// here, rather than kept private to the .cpp, so the test suite can check them
+// against known-answer vectors produced by an independent implementation of
+// the same construction -- a round-trip test cannot tell a correct ratchet
+// from one that is wrong in a self-consistent way.
+namespace detail {
+
+// The info string bound into every root-key derivation. Part of the wire
+// contract: changing it makes this build unable to talk to any other.
+inline constexpr std::string_view kRootInfo = "Ratchet-USB/v1/ratchet-root";
+
+// KDF_RK: advances the root key across one DH ratchet step, producing a new
+// root key and a fresh chain key. `rk` and `new_rk` (or `ck`) may be the same
+// object -- every read of `rk` happens before the first write to an aliased
+// output, so that is safe.
+void kdf_rk(const SecureBytes<32>& rk, const SecureBytes<32>& dh_out,
+            SecureBytes<32>& new_rk, SecureBytes<32>& ck);
+
+// KDF_CK: advances a chain key by one message, producing a message key and
+// the next chain key. Same aliasing safety as kdf_rk.
+void kdf_ck(const SecureBytes<32>& ck, SecureBytes<32>& new_ck,
+            SecureBytes<32>& mk);
+
+}  // namespace detail
 
 // Alice: turns an X3DH shared secret into a session's sending half. Her
 // first ratchet key pair is the ephemeral she used for X3DH; `bob_dh_pub` is
