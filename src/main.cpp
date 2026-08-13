@@ -47,10 +47,12 @@ void print_usage(std::ostream& os) {
      << " -- encrypted seed vault, X3DH and Double Ratchet messaging\n"
      << "\n"
      << "Usage:\n"
-     << "  " << kProgram << " init         --usb-path <dir> [options]\n"
+     << "  " << kProgram
+     << " init         --usb-path <dir> [--from-mnemonic] [options]\n"
      << "  " << kProgram << " unlock       --usb-path <dir>\n"
-     << "  " << kProgram << " card         --usb-path <dir> [--rotate-spk] "
-                            "[--replenish-otpk <n>]\n"
+     << "  " << kProgram
+     << " card         --usb-path <dir> [--fingerprint] [--rotate-spk] "
+        "[--replenish-otpk <n>]\n"
      << "  " << kProgram
      << " add-contact  --usb-path <dir> --name <alias> [--card <file>]\n"
      << "  " << kProgram << " contacts     --usb-path <dir>\n"
@@ -62,10 +64,15 @@ void print_usage(std::ostream& os) {
      << "Commands:\n"
      << "  init         Generate a 128-bit seed, show its 12-word BIP-39 backup,\n"
      << "               and create the vault (identity, a signed prekey, one-\n"
-     << "               time prekeys) at <dir>/vault.bin.\n"
+     << "               time prekeys) at <dir>/vault.bin. With --from-mnemonic,\n"
+     << "               rebuild the identity from an existing 12-word backup\n"
+     << "               instead of generating a new one (no contacts or chat\n"
+     << "               history come back with it; those only ever lived in\n"
+     << "               the old vault.bin).\n"
      << "  unlock       Decrypt the vault and print the identity fingerprint.\n"
      << "  card         Print this identity's contact card, to paste to a\n"
-     << "               contact so they can start a conversation.\n"
+     << "               contact so they can start a conversation. With\n"
+     << "               --fingerprint, print only the fingerprint.\n"
      << "  add-contact  Import a contact's card (read from --card, or from\n"
      << "               standard input) under the given alias.\n"
      << "  contacts     List known contacts, their fingerprint and trust state.\n"
@@ -87,6 +94,9 @@ void print_usage(std::ostream& os) {
      << vault::kDefaultTimeCost << ").\n"
      << "  --argon2-mem-kb <n>  Argon2id memory in KiB (default "
      << vault::kDefaultMemCostKb << ").\n"
+     << "  --from-mnemonic      Prompt for an existing 12-word backup instead\n"
+     << "                       of generating a new one (init only).\n"
+     << "  --fingerprint        Print only the identity fingerprint (card only).\n"
      << "  -h, --help           Show this help.\n"
      << "  -V, --version        Show the version.\n";
 }
@@ -99,6 +109,8 @@ struct Options {
   std::size_t otpk_count = kDefaultOtpkCount;
   bool rotate_spk = false;
   std::size_t replenish_otpk = 0;
+  bool fingerprint_only = false;
+  bool from_mnemonic = false;
   std::string name;
   std::string to;
   std::string card_file;
@@ -160,6 +172,10 @@ Options parse_args(int argc, char** argv) {
       opts.rotate_spk = true;
     } else if (arg == "--replenish-otpk") {
       opts.replenish_otpk = parse_u32(next("--replenish-otpk"), "--replenish-otpk");
+    } else if (arg == "--fingerprint") {
+      opts.fingerprint_only = true;
+    } else if (arg == "--from-mnemonic") {
+      opts.from_mnemonic = true;
     } else if (arg == "--name") {
       opts.name = std::string(next("--name"));
     } else if (arg == "--to") {
@@ -406,12 +422,21 @@ int cmd_init(const Options& opts) {
   }
 
   bip39::Entropy entropy;
-  bip39::generate_entropy(entropy);
-
-  const std::string mnemonic = bip39::encode(entropy);
-  print_mnemonic(mnemonic);
-  terminal::wait_for_enter("Press ENTER once you have written them down...");
-  terminal::clear_screen();
+  if (opts.from_mnemonic) {
+    SecureString mnemonic =
+        terminal::read_passphrase("Recovery words (12, space-separated): ");
+    bip39::decode(std::string_view(mnemonic.data(), mnemonic.size()), entropy);
+    mnemonic.clear();
+    std::cout << "\nMnemonic verified. Rebuilding the identity from it -- this\n"
+                 "vault starts with no contacts or chat history; those only\n"
+                 "ever lived in the old vault.bin, never in the words.\n\n";
+  } else {
+    bip39::generate_entropy(entropy);
+    const std::string mnemonic = bip39::encode(entropy);
+    print_mnemonic(mnemonic);
+    terminal::wait_for_enter("Press ENTER once you have written them down...");
+    terminal::clear_screen();
+  }
 
   store::VaultStore store;
   derive_master_seed(entropy, store.seed);
@@ -484,6 +509,12 @@ int cmd_card(const Options& opts) {
   IdentitySigningSecretKey identity_sk;
   IdentitySigningPublicKey identity_pk;
   derive_identity(store.seed, identity_sk, identity_pk);
+
+  if (opts.fingerprint_only) {
+    identity_sk.wipe();
+    std::cout << fingerprint(identity_pk) << "\n";
+    return 0;
+  }
 
   bool changed = false;
 
