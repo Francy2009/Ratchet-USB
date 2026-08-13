@@ -418,9 +418,12 @@ int cmd_card(const Options& opts) {
 }
 
 int cmd_add_contact(const Options& opts) {
+  // The drive is resolved before anything else is asked for: it is the one
+  // answer that can turn out to be wrong, and there is no point collecting an
+  // alias the user then has to retype.
+  const fs::path usb = require_usb_path(opts);
   const std::string name =
       require_value(opts.name, "Contact alias: ", "an alias is required");
-  const fs::path usb = require_usb_path(opts);
   const fs::path path = vault::vault_path(usb);
 
   const std::string card_text =
@@ -479,9 +482,9 @@ int cmd_contacts(const Options& opts) {
 }
 
 int cmd_trust(const Options& opts) {
+  const fs::path usb = require_usb_path(opts);
   const std::string name =
       require_value(opts.name, "Contact alias: ", "an alias is required");
-  const fs::path usb = require_usb_path(opts);
   const fs::path path = vault::vault_path(usb);
 
   OpenedVault opened = unlock_vault(path);
@@ -499,9 +502,9 @@ int cmd_trust(const Options& opts) {
 }
 
 int cmd_send(const Options& opts) {
+  const fs::path usb = require_usb_path(opts);
   const std::string to =
       require_value(opts.to, "Send to (contact alias): ", "a recipient alias is required");
-  const fs::path usb = require_usb_path(opts);
   const fs::path path = vault::vault_path(usb);
 
   const std::string plaintext =
