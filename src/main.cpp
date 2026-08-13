@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <charconv>
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
@@ -22,6 +23,7 @@
 #include "ratchet/bip39.hpp"
 #include "ratchet/cli.hpp"
 #include "ratchet/identity.hpp"
+#include "ratchet/media.hpp"
 #include "ratchet/secure.hpp"
 #include "ratchet/session.hpp"
 #include "ratchet/store.hpp"
@@ -43,20 +45,64 @@ constexpr std::size_t kReplenishThreshold = 5;
 constexpr uint64_t kSpkMaxAgeDays = 30;
 constexpr uint64_t kSpkMaxAgeSeconds = kSpkMaxAgeDays * 24 * 60 * 60;
 
-// The vault must live on the removable drive, so the path has to be an
-// existing, writable directory. It is never created for the user: a typo would
-// otherwise silently produce a vault in a directory on the host disk.
+// Asks the user to pick one of `choices`, or returns an empty path if there is
+// no terminal to ask on or the answer was not a choice.
+fs::path choose_drive(const std::vector<fs::path>& choices, const char* what) {
+  if (choices.empty() || !terminal::stdin_is_tty()) {
+    return {};
+  }
+
+  if (choices.size() == 1) {
+    std::cerr << "Found a removable drive " << what << ":\n  "
+              << choices.front().string() << "\n";
+    const std::string answer = terminal::read_line("Use it? [Y/n] ");
+    if (answer.empty() || answer == "y" || answer == "Y" || answer == "yes") {
+      return choices.front();
+    }
+    return {};
+  }
+
+  std::cerr << "Several removable drives " << what << ":\n";
+  for (std::size_t i = 0; i < choices.size(); ++i) {
+    std::cerr << "  " << (i + 1) << ") " << choices[i].string() << "\n";
+  }
+  const std::string answer = terminal::read_line("Which one? [1-" +
+                                                 std::to_string(choices.size()) +
+                                                 "] ");
+  std::size_t pick = 0;
+  const auto result =
+      std::from_chars(answer.data(), answer.data() + answer.size(), pick);
+  if (result.ec != std::errc() || pick < 1 || pick > choices.size()) {
+    return {};
+  }
+  return choices[pick - 1];
+}
+
+// Where the vault lives. Resolved in this order: --usb-path, the
+// RATCHET_USB_PATH environment variable, an auto-detected removable drive, and
+// finally a prompt.
 //
-// Resolved in this order: --usb-path, then the RATCHET_USB_PATH environment
-// variable, then (only when stdin is a terminal) an interactive prompt.
-fs::path require_usb_path(const Options& opts) {
+// `for_init` splits the two questions being asked. Every other command wants a
+// drive that already holds a vault, so a single match can be offered straight
+// away. `init` is about to write, so it looks at removable drives generally and
+// always asks before touching one -- guessing would be the one mistake this
+// tool cannot afford.
+fs::path require_usb_path(const Options& opts, bool for_init = false) {
   fs::path usb_path = opts.usb_path;
+  bool auto_detected = false;
 
   if (usb_path.empty()) {
     if (const char* env = std::getenv("RATCHET_USB_PATH");
         env != nullptr && env[0] != '\0') {
       usb_path = fs::path(env);
     }
+  }
+
+  if (usb_path.empty()) {
+    const std::vector<fs::path> candidates =
+        for_init ? media::removable_drives() : media::drives_with_vault();
+    usb_path = choose_drive(candidates, for_init ? "to set up" : "with a vault");
+    auto_detected = !usb_path.empty();
   }
 
   if (usb_path.empty()) {
@@ -70,7 +116,22 @@ fs::path require_usb_path(const Options& opts) {
     throw Error("--usb-path is required (or set RATCHET_USB_PATH)");
   }
 
+  // The directory is created only when its parent is a mounted removable drive.
+  // A bare typo cannot reach this: it would have to name a subdirectory of a
+  // drive the user has actually plugged in.
   std::error_code ec;
+  if (for_init && !fs::exists(usb_path, ec)) {
+    const fs::path parent = usb_path.parent_path();
+    const std::vector<fs::path> drives = media::removable_drives();
+    if (!parent.empty() &&
+        std::find(drives.begin(), drives.end(), parent) != drives.end()) {
+      if (!fs::create_directory(usb_path, ec) || ec) {
+        throw Error("cannot create " + usb_path.string());
+      }
+      std::cerr << "Created " << usb_path.string() << "\n";
+    }
+  }
+
   const fs::path resolved = fs::canonical(usb_path, ec);
   if (ec) {
     throw Error("--usb-path does not exist: " + usb_path.string());
@@ -80,6 +141,9 @@ fs::path require_usb_path(const Options& opts) {
   }
   if (::access(resolved.c_str(), W_OK | X_OK) != 0) {
     throw Error("--usb-path is not writable: " + resolved.string());
+  }
+  if (auto_detected) {
+    std::cerr << "Using " << resolved.string() << "\n";
   }
   return resolved;
 }
@@ -260,7 +324,7 @@ bool maintain_prekeys(store::VaultStore& store,
 // --- commands ----------------------------------------------------------------
 
 int cmd_init(const Options& opts) {
-  const fs::path usb = require_usb_path(opts);
+  const fs::path usb = require_usb_path(opts, /*for_init=*/true);
   warn_if_host_disk(usb);
 
   const fs::path path = vault::vault_path(usb);
