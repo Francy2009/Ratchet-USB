@@ -21,26 +21,25 @@ store::Session& get_or_create_session(store::VaultStore& vault,
 
 }  // namespace
 
-std::string send(store::VaultStore& vault, const IdentitySigningSecretKey& my_sk,
-                 const IdentitySigningPublicKey& my_pk, std::size_t contact_index,
+std::string send(store::VaultStore& vault, const IdentitySigningSecretKey& my_identity_sk,
+                 const IdentitySigningPublicKey& my_identity_pk, std::size_t contact_index,
                  const std::string& plaintext) {
   store::Contact& contact = vault.contacts.at(contact_index);
   store::Session& s = get_or_create_session(vault, contact_index);
 
   message::Envelope env;
-  env.sender_id = message::sender_id_for(my_pk);
+  env.sender_id = message::sender_id_for(my_identity_pk);
 
   // A session freshly created by get_or_create_session (or one that was never
   // handed a shared secret) has no sending chain yet: that is the signal that
   // X3DH still needs to run before the ratchet can encrypt anything.
   if (!s.has_cks) {
-    x3dh::InitiatorResult hs = x3dh::initiate(my_sk, my_pk, contact);
-    const x25519::PublicKey bob_dh_pub = contact.card->spk_pub;
+    x3dh::InitiatorResult hs = x3dh::initiate(my_identity_sk, my_identity_pk, contact);
     ratchet::init_sender(s, hs.shared_secret, hs.ephemeral_sk, hs.ephemeral_pk,
-                         bob_dh_pub);
+                         hs.spk_pub);
 
     message::InitialFields fields;
-    fields.initiator_identity_pub = my_pk;
+    fields.initiator_identity_pub = my_identity_pk;
     fields.spk_id = hs.spk_id;
     fields.otpk_id = hs.otpk_id;
     env.initial = fields;
@@ -50,8 +49,8 @@ std::string send(store::VaultStore& vault, const IdentitySigningSecretKey& my_sk
   return message::encode(env);
 }
 
-ReceiveResult receive(store::VaultStore& vault, const IdentitySigningSecretKey& my_sk,
-                      const IdentitySigningPublicKey& my_pk, const std::string& block) {
+ReceiveResult receive(store::VaultStore& vault, const IdentitySigningSecretKey& my_identity_sk,
+                      const IdentitySigningPublicKey& my_identity_pk, const std::string& block) {
   const message::Envelope env = message::decode(block);
 
   if (env.initial) {
@@ -94,7 +93,7 @@ ReceiveResult receive(store::VaultStore& vault, const IdentitySigningSecretKey& 
       }
     }
 
-    SecureBytes<32> shared = x3dh::respond(my_sk, my_pk, f.initiator_identity_pub,
+    SecureBytes<32> shared = x3dh::respond(my_identity_sk, my_identity_pk, f.initiator_identity_pub,
                                            env.header.dh_pub, *spk, otpk);
 
     store::Session fresh;

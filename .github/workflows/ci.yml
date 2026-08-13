@@ -1,0 +1,305 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  # A crypto project's dependencies rot quietly. A weekly run catches a
+  # libsodium or toolchain change that breaks the build long before the next
+  # time anyone happens to push.
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+# Only the newest run per branch matters; cancel the rest.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Keep warnings fatal everywhere. The project already builds clean with
+  # -Wall -Wextra -Wpedantic; this stops that from silently regressing.
+  WARN_FLAGS: "-Wall -Wextra -Wpedantic -Werror"
+
+jobs:
+  # ---------------------------------------------------------------------
+  # The key schedule is checked against vectors produced by an independent
+  # Python implementation. That only means anything if the two are still in
+  # sync, so regenerate the header and fail on any difference.
+  # ---------------------------------------------------------------------
+  vectors:
+    name: Test vectors are in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Reference implementation reproduces the published RFC vectors
+        run: python3 test/vectors/reference.py --check
+
+      - name: Regenerate vectors.hpp and check it matches what is committed
+        run: |
+          python3 test/vectors/reference.py --emit > /tmp/vectors.hpp
+          if ! diff -u test/vectors/vectors.hpp /tmp/vectors.hpp; then
+            echo
+            echo "test/vectors/vectors.hpp is out of date with reference.py."
+            echo "Regenerate it with:"
+            echo "  python3 test/vectors/reference.py --emit > test/vectors/vectors.hpp"
+            exit 1
+          fi
+
+  # ---------------------------------------------------------------------
+  # The main build matrix. Both compilers, both build types -- Debug catches
+  # what assertions and unoptimised code catch, Release catches what the
+  # optimiser changes.
+  # ---------------------------------------------------------------------
+  build:
+    name: ${{ matrix.compiler }} / ${{ matrix.build_type }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        build_type: [Debug, Release]
+        include:
+          - compiler: gcc
+            cxx: g++
+          - compiler: clang
+            cxx: clang++
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsodium-dev cmake ${{ matrix.compiler }}
+
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+          -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
+          -DCMAKE_CXX_FLAGS="$WARN_FLAGS"
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: End-to-end smoke test
+        run: ./test/smoke.sh build/ratchet-usb
+
+  # ---------------------------------------------------------------------
+  # There are two HKDF implementations in this tree: libsodium's, and the
+  # project's own RFC 5869 fallback for releases older than 1.0.19. Ubuntu
+  # ships 1.0.18, so the matrix above only ever compiles the fallback. This
+  # job builds a newer libsodium so the other path gets exercised too, and
+  # checks both derive the same keys from the same vectors.
+  # ---------------------------------------------------------------------
+  libsodium-native-hkdf:
+    name: libsodium 1.0.20 (native HKDF path)
+    runs-on: ubuntu-latest
+    env:
+      SODIUM_VERSION: 1.0.20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache the libsodium build
+        id: sodium-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/sodium-prefix
+          key: sodium-${{ env.SODIUM_VERSION }}-${{ runner.os }}
+
+      - name: Build libsodium from source
+        if: steps.sodium-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -sSL -o sodium.tar.gz \
+            "https://github.com/jedisct1/libsodium/releases/download/${SODIUM_VERSION}-RELEASE/libsodium-${SODIUM_VERSION}.tar.gz"
+          tar xzf sodium.tar.gz
+          cd "libsodium-${SODIUM_VERSION}"
+          ./configure --prefix="$HOME/sodium-prefix" --disable-dependency-tracking
+          make -j"$(nproc)"
+          make install
+
+      - name: Configure against it
+        run: |
+          export PKG_CONFIG_PATH="$HOME/sodium-prefix/lib/pkgconfig"
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_FLAGS="$WARN_FLAGS"
+
+      - name: Confirm the native HKDF path was actually selected
+        # Without this the job is worthless: if detection breaks, CMake
+        # quietly compiles the fallback again and everything still passes,
+        # leaving libsodium's own HKDF untested while the badge stays green.
+        run: |
+          if ! grep -q RATCHET_HAVE_SODIUM_HKDF \
+               build/CMakeFiles/ratchet_core.dir/flags.make; then
+            echo "RATCHET_HAVE_SODIUM_HKDF is not defined -- this build fell"
+            echo "back to the bundled HKDF, so it is not testing what this"
+            echo "job exists to test."
+            exit 1
+          fi
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Unit tests
+        run: |
+          export LD_LIBRARY_PATH="$HOME/sodium-prefix/lib"
+          ctest --test-dir build --output-on-failure
+
+      - name: End-to-end smoke test
+        run: |
+          export LD_LIBRARY_PATH="$HOME/sodium-prefix/lib"
+          ./test/smoke.sh build/ratchet-usb
+
+  # ---------------------------------------------------------------------
+  # This code does its own buffer arithmetic on key material. Sanitizers are
+  # not optional here.
+  # ---------------------------------------------------------------------
+  sanitizers:
+    name: AddressSanitizer + UndefinedBehaviorSanitizer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsodium-dev cmake g++
+
+      # GCC rather than clang: its sanitizer runtimes ship with the compiler
+      # package, whereas clang's live in a separate libclang-rt-*-dev that is
+      # easy to end up without. The checks are the same either way.
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_COMPILER=g++
+          -DCMAKE_CXX_FLAGS="$WARN_FLAGS -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all -g"
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Unit tests
+        env:
+          ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1:detect_stack_use_after_return=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: ctest --test-dir build --output-on-failure
+
+      - name: End-to-end smoke test
+        env:
+          ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1:detect_stack_use_after_return=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: ./test/smoke.sh build/ratchet-usb
+
+  # ---------------------------------------------------------------------
+  # Valgrind catches reads of uninitialised memory that ASan does not, which
+  # for key material is exactly the class of bug worth catching.
+  # ---------------------------------------------------------------------
+  valgrind:
+    name: Valgrind
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsodium-dev cmake valgrind
+
+      - name: Configure and build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS="$WARN_FLAGS -g"
+          cmake --build build -j"$(nproc)"
+
+      - name: Unit tests under Valgrind
+        run: |
+          valgrind --error-exitcode=99 --leak-check=full \
+                   --errors-for-leak-kinds=definite -q \
+                   ./build/test/ratchet_tests
+
+  # ---------------------------------------------------------------------
+  # Static analysis.
+  # ---------------------------------------------------------------------
+  clang-tidy:
+    name: clang-tidy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsodium-dev cmake clang-tidy
+
+      - name: Generate the compilation database
+        run: cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      - name: Run clang-tidy
+        # Only the .cpp files are passed in; the headers are analysed through
+        # the translation units that include them, per HeaderFilterRegex in
+        # .clang-tidy. The check list and warnings-as-errors live in that file
+        # rather than on this command line, so running the linter locally
+        # gives the same answer CI does.
+        run: find src -name '*.cpp' -print0 | xargs -0 clang-tidy -p build --quiet
+
+  # ---------------------------------------------------------------------
+  # The README says macOS "should build" but that nobody has tried it. This
+  # job is what turns that sentence into something checkable. It is allowed
+  # to fail without blocking: an unverified platform should report its state,
+  # not gate a Linux change.
+  # ---------------------------------------------------------------------
+  macos:
+    name: macOS (unverified platform)
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: brew install libsodium cmake
+
+      - name: Configure and build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_FLAGS="$WARN_FLAGS"
+          cmake --build build -j"$(sysctl -n hw.ncpu)"
+
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: End-to-end smoke test
+        run: ./test/smoke.sh build/ratchet-usb
+
+  # ---------------------------------------------------------------------
+  # A single gate for branch protection to point at, so adding a job above
+  # does not mean remembering to update a required-checks list.
+  # ---------------------------------------------------------------------
+  ci:
+    name: CI
+    if: always()
+    needs:
+      - vectors
+      - build
+      - libsodium-native-hkdf
+      - sanitizers
+      - valgrind
+      - clang-tidy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if any required job did not succeed
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
+      - name: All required jobs passed
+        run: echo "ok"

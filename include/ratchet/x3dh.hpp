@@ -47,6 +47,11 @@ struct InitiatorResult {
   x25519::SecretKey ephemeral_sk;
   x25519::PublicKey ephemeral_pk{};
   uint32_t spk_id = 0;
+  // The signed prekey this handshake actually ran against, returned so the
+  // caller can seed the ratchet with it directly. Reading it back out of the
+  // contact's card instead would be re-deriving a fact the handshake already
+  // established, against a card that is mutated during the call.
+  x25519::PublicKey spk_pub{};
   std::optional<uint32_t> otpk_id;
 };
 

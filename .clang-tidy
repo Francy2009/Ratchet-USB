@@ -1,0 +1,48 @@
+# Static analysis configuration.
+#
+# The check list is written out explicitly rather than left to clang-tidy's
+# defaults. CI runs with --warnings-as-errors, and an unpinned check set means
+# every clang-tidy release can turn the build red over something nobody
+# changed. Adding checks here should be a deliberate act.
+#
+# The emphasis is on the categories that find actual defects in code like this
+# -- manual buffer arithmetic over key material -- rather than on style.
+# Formatting opinions are left out on purpose; they generate noise that trains
+# people to ignore the tool.
+
+Checks: >
+  -*,
+  bugprone-*,
+  cert-*,
+  clang-analyzer-*,
+  misc-*,
+  performance-*,
+  portability-*,
+  readability-braces-around-statements,
+  readability-inconsistent-declaration-parameter-name,
+  readability-misleading-indentation,
+  readability-non-const-parameter,
+  readability-redundant-control-flow,
+  -bugprone-easily-swappable-parameters,
+  -misc-const-correctness,
+  -misc-include-cleaner,
+  -misc-no-recursion,
+  -misc-non-private-member-variables-in-classes,
+  -readability-magic-numbers,
+  -cert-err58-cpp
+
+# Only diagnose the project's own headers; anything under /usr/include is not
+# ours to fix and would drown the real findings.
+HeaderFilterRegex: '.*/(include/ratchet|src|test)/.*'
+
+WarningsAsErrors: '*'
+
+FormatStyle: none
+
+CheckOptions:
+  # The project's naming: types in CamelCase, functions and variables in
+  # lower_case, constants k-prefixed. Not enforced as a check (readability-
+  # identifier-naming is more trouble than it is worth on an existing tree),
+  # recorded here so the intent is written down somewhere.
+  - key: readability-braces-around-statements.ShortStatementLines
+    value: '1'

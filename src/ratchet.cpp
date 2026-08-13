@@ -8,14 +8,8 @@
 #include "ratchet/kdf.hpp"
 
 namespace ratchet::ratchet {
-namespace {
+namespace detail {
 
-constexpr std::string_view kRootInfo = "Ratchet-USB/v1/ratchet-root";
-
-// KDF_RK: advances the root key across one DH ratchet step, producing a new
-// root key and a fresh chain key. `rk` and `new_rk` (or `ck`) may be the same
-// object -- every read of `rk` happens before the first write to an aliased
-// output, so that is safe.
 void kdf_rk(const SecureBytes<32>& rk, const SecureBytes<32>& dh_out,
            SecureBytes<32>& new_rk, SecureBytes<32>& ck) {
   init_sodium();
@@ -28,8 +22,6 @@ void kdf_rk(const SecureBytes<32>& rk, const SecureBytes<32>& dh_out,
   sodium_memzero(okm, sizeof okm);
 }
 
-// KDF_CK: advances a chain key by one message, producing a message key and
-// the next chain key. Same aliasing safety as kdf_rk.
 void kdf_ck(const SecureBytes<32>& ck, SecureBytes<32>& new_ck, SecureBytes<32>& mk) {
   init_sodium();
   const uint8_t byte1 = 0x01;
@@ -43,6 +35,13 @@ void kdf_ck(const SecureBytes<32>& ck, SecureBytes<32>& new_ck, SecureBytes<32>&
   sodium_memzero(mk_tmp, sizeof mk_tmp);
   sodium_memzero(ck_tmp, sizeof ck_tmp);
 }
+
+}  // namespace detail
+
+namespace {
+
+using detail::kdf_ck;
+using detail::kdf_rk;
 
 std::vector<uint8_t> aead_encrypt(const SecureBytes<32>& mk, const std::string& plaintext,
                                   const std::vector<uint8_t>& aad) {

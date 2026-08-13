@@ -8,7 +8,8 @@ add_executable(ratchet_tests
                test_ratchet.cpp
                test_message.cpp
                test_cli.cpp
-               test_media.cpp)
+               test_media.cpp
+               test_vectors.cpp)
 
 target_link_libraries(ratchet_tests PRIVATE ratchet_core)
 target_include_directories(ratchet_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
