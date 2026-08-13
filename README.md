@@ -68,8 +68,8 @@ ratchet-usb recv --usb-path /media/usb --message "$(cat msg.txt)"
 | Command | What it does |
 | --- | --- |
 | `init` | Creates a new identity, shows you the 12-word backup phrase once, and sets up the vault. |
-| `unlock` | Just opens the vault and shows your fingerprint, doesn't change anything. |
-| `card` | Prints your contact card so you can share it. `--rotate-spk` and `--replenish-otpk <n>` refresh the keys it publishes. |
+| `unlock` | Opens the vault and shows your fingerprint. Along the way it checks your prekeys: if the signed prekey is more than 30 days old it's rotated, and if fewer than 5 one-time prekeys are left, 10 fresh ones are generated — both automatically, no flags needed. |
+| `card` | Prints your contact card so you can share it. `--rotate-spk` and `--replenish-otpk <n>` refresh the keys it publishes on demand, on top of the automatic upkeep `unlock` already does. |
 | `add-contact` | Imports someone's card (from a file with `--card` or from stdin), checking that the signature is valid. |
 | `contacts` | Lists your contacts, their fingerprint, whether you've marked them trusted, and if you already have a session going. |
 | `trust` | Marks a contact as verified, meaning you checked their fingerprint through some other channel. |
@@ -144,8 +144,9 @@ request. There's no server here, so a contact's bundle is just their card,
 shared once, by hand, the same way as everything else in this tool. `send`
 runs the handshake automatically the first time you message someone, using
 up one of their one-time prekeys if they published any (and falling back to
-a slightly weaker 3-way handshake once those run out — `card
---replenish-otpk` tops them back up).
+a slightly weaker 3-way handshake once those run out — `unlock` tops them
+back up on its own once the pool runs low, or `card --replenish-otpk` does
+it on demand).
 
 One small difference from the spec: instead of only authenticating the very
 first message with the identity keys, this implementation mixes both
@@ -261,9 +262,8 @@ you sent it, even if it can't read what's inside.
 
 ## What this doesn't do (yet)
 
-Group chats, using one identity across multiple devices, any kind of
-automatic prekey rotation beyond running a command by hand, and anything
-like key transparency. Each of these is a real chunk of work on its own, so
+Group chats, using one identity across multiple devices, and anything like
+key transparency. Each of these is a real chunk of work on its own, so
 they're left for later rather than half-done now.
 
 ## License
