@@ -53,36 +53,56 @@ ratchet-usb init --usb-path /media/usb
 ratchet-usb card --usb-path /media/usb
 
 # Bob does the same setup, then imports Alice's card
-ratchet-usb add-contact --usb-path /media/usb --name alice --card alice_card.txt
-ratchet-usb trust --usb-path /media/usb --name alice   # after checking the fingerprint
+ratchet-usb add --usb-path /media/usb alice --card alice_card.txt
+ratchet-usb trust --usb-path /media/usb alice   # after checking the fingerprint
 
 # Bob writes to Alice -- the very first message also sets up the encryption keys
-ratchet-usb send --usb-path /media/usb --to alice --message "hi" > msg.txt
+ratchet-usb send --usb-path /media/usb alice "hi" > msg.txt
 # msg.txt gets copy-pasted into WhatsApp/email/whatever, Alice copies it out again
 
 # Alice reads it
-ratchet-usb recv --usb-path /media/usb --message "$(cat msg.txt)"
+ratchet-usb recv --usb-path /media/usb "$(cat msg.txt)"
 ```
+
+Since `--usb-path` is on every command, it's usually easier to export it once
+per session instead of repeating it:
+
+```sh
+export RATCHET_USB_PATH=/media/usb
+ratchet-usb card
+```
+
+`--usb-path` still wins if both are given, and if neither is and the terminal
+is interactive, the tool just asks for the path instead of erroring out. The
+same goes for a contact alias or a message left off the command line: `send`
+without a message, for instance, prompts for one (or reads it from a pipe).
 
 `init` creates a new identity, shows you the 12-word backup phrase once, and
 sets up the vault. `unlock` just opens the vault and shows your fingerprint,
 though along the way it also checks your prekeys: a signed prekey older than
 30 days gets rotated, and if fewer than 5 one-time prekeys are left, 10 fresh
 ones are generated, both automatically, no flags needed. `card` prints your
-contact card so you can share it; `--rotate-spk` and `--replenish-otpk <n>`
-refresh those keys on demand, on top of the automatic upkeep `unlock` already
-does. `add-contact` imports someone's card, from a file with `--card` or from
-stdin, and checks that the signature is valid. `contacts` lists who you know,
-their fingerprint, whether you've marked them trusted, and whether you
-already have a session going with them. `trust` marks a contact as verified,
-meaning you checked their fingerprint through some other channel. `send`
-encrypts a message for someone, setting up the session automatically if it's
-the first one. `recv` decrypts a message someone sent you, again setting up
-the session automatically if it's the first one to arrive.
+contact card so you can share it, or just your fingerprint with
+`--fingerprint`; `--rotate-spk` and `--replenish-otpk <n>` refresh those keys
+on demand, on top of the automatic upkeep `unlock` already does. `add`
+imports someone's card, from a file with `--card` or from stdin, under the
+alias you give it, and checks that the signature is valid. `contacts` lists
+who you know, their fingerprint, whether you've marked them trusted, and
+whether you already have a session going with them. `trust <alias>` marks a
+contact as verified, meaning you checked their fingerprint through some other
+channel. `send <alias> [message]` encrypts a message for someone, setting up
+the session automatically if it's the first one. `recv [message]` decrypts a
+message someone sent you, again setting up the session automatically if it's
+the first one to arrive.
 
 `init` shows you the 12 recovery words exactly once and doesn't save them
 anywhere; they're your backup, and whoever has them can restore your
-identity. They don't back up everything though, more on that below.
+identity. They don't back up everything though, more on that below. If you
+already have a backup phrase, from a previous vault or a fresh one someone
+generated for you, `init --from-mnemonic` asks for the 12 words instead of
+generating new ones and rebuilds the identity from them; it still starts you
+off with a brand new, empty vault, since contacts and chat history never
+lived in the words to begin with.
 
 You can also tune how expensive the passphrase check is with `--argon2-time`
 and `--argon2-mem-kb` when running `init`. Whatever values you pick get saved
@@ -116,8 +136,8 @@ you'd already used once, defeating the whole point of a "use once" key. The
 trade-off is that prekeys, contacts and ongoing chats only exist inside
 `vault.bin`, not in the recovery phrase. Lose the drive without a copy of
 that file and you lose your contacts and chat history even with the words in
-hand; running `init` again with the same words gets your identity back, but
-you start from zero contacts.
+hand; running `init --from-mnemonic` with the same words gets your identity
+back, but you start from zero contacts.
 
 Key exchange is X3DH, the same handshake Signal uses, though without
 Signal's server handing out prekey bundles on request. Here a contact's
@@ -157,7 +177,7 @@ None of this proves that an identity key actually belongs to the person you
 think it does; that's something only a human can confirm. Importing someone's
 card checks that their signed prekey really was signed by the identity key on
 the card, and every message you get is cryptographically tied to the
-sender's identity through the handshake, but `add-contact` still just prints
+sender's identity through the handshake, but `add` still just prints
 a fingerprint for you to check. `trust` records that you verified it some
 other way, in person or over a phone call, not the same chat where the card
 showed up. `send` and `recv` will warn you about an unverified contact, but
