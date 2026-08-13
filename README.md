@@ -27,6 +27,30 @@ your only line of defense. Treat it as one extra layer, keep using other
 reviewed and audited tools alongside it, and get in touch if you want to talk
 through your specific situation before trusting it.
 
+## Which systems this runs on
+
+**Linux**, and that is the only one it has actually been run on. `setup.sh`
+knows dnf, apt, pacman and zypper; on any other distribution install
+libsodium's development package, CMake and a C++20 compiler yourself and pass
+`--no-deps`.
+
+**macOS** should build — every system call used here exists there, and
+libsodium supports it — but nobody has tried, so treat it as unverified. Two
+things would be worse if you do: drive detection reads `/proc/mounts` and so
+finds nothing, leaving you to pass `--usb-path`; and macOS's `fsync` does not
+force a physical flush without `F_FULLFSYNC`, which weakens the guarantee that
+a vault survives the drive being pulled out mid-write.
+
+**Windows** does not build. Not the crypto, which is portable, but the parts
+around it: turning terminal echo off for the passphrase goes through
+`termios`, and the vault is written durably using `fsync` on both the file and
+its directory, neither of which Windows has an equivalent for. Porting it is a
+few hundred lines in `src/terminal.cpp` and `src/vault.cpp`, and both are
+places where a subtle mistake fails quietly rather than loudly -- an echo that
+is not really off puts your passphrase on screen, and a mis-ported durable
+write corrupts vaults. **WSL works today** and is Linux as far as this is
+concerned.
+
 ## Getting started
 
 Two commands, once:
