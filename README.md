@@ -9,8 +9,8 @@ message.
 
 Everything that matters, your keys, your contacts, your chat history, lives
 on a USB stick or any removable drive. The tool never writes anything to the
-computer it's running on. You always point it at your drive with
-`--usb-path`.
+computer it's running on. It finds the drive by itself when it can, and you
+can always name it explicitly with `--usb-path`.
 
 Where it's at right now: phase 2. You can generate an identity, add contacts,
 and send and receive messages with proper forward-secret encryption. Still
@@ -27,55 +27,113 @@ your only line of defense. Treat it as one extra layer, keep using other
 reviewed and audited tools alongside it, and get in touch if you want to talk
 through your specific situation before trusting it.
 
-## Building it
+## Getting started
 
-You need a C++20 compiler, CMake 3.16 or newer, and libsodium (1.0.19 or
-later is best; see the HKDF note further down). That's the only library it
-depends on.
+Two commands, once:
 
 ```sh
-sudo apt install libsodium-dev cmake g++      # on Debian/Ubuntu
+git clone https://github.com/Francy2009/Ratchet-USB.git && cd Ratchet-USB
+./setup.sh
+```
+
+`setup.sh` installs the packages it needs (asking first), builds, runs the
+tests, and puts the binary in `~/.local/bin`, which is on your PATH on most
+current distributions. No `sudo` for the install itself, and no `export PATH`
+afterwards: `ratchet-usb` becomes an ordinary command. If the tests fail it
+stops before installing anything.
+
+Then plug in a USB drive and:
+
+```sh
+ratchet-usb init
+```
+
+That's the whole setup. `init` looks for a mounted removable drive and asks
+before using it:
+
+```
+Found a removable drive to set up:
+  /run/media/you/KINGSTON
+Use it? [Y/n]
+```
+
+From then on, every other command finds that drive on its own, so there is
+nothing to type and nothing to remember:
+
+```sh
+ratchet-usb contacts
+```
+
+`./setup.sh --prefix /usr/local` installs system-wide instead (that one does
+need sudo), and `--no-deps` skips the package step. To build by hand rather
+than through the script, you need a C++20 compiler, CMake 3.16 or newer, and
+libsodium (1.0.19 or later is best; see the HKDF note further down), which is
+the only library this depends on:
+
+```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-If everything builds and the tests pass, you're good to go. The binary ends
-up at `build/ratchet-usb`.
+The binary then sits at `build/ratchet-usb`.
 
 ## How to use it
 
 ```sh
 # Alice sets up her vault
-ratchet-usb init --usb-path /media/usb
+ratchet-usb init
 
 # Alice prints her "contact card" and sends it to Bob some other way
-ratchet-usb card --usb-path /media/usb
+ratchet-usb card
 
 # Bob does the same setup, then imports Alice's card
-ratchet-usb add --usb-path /media/usb alice --card alice_card.txt
-ratchet-usb trust --usb-path /media/usb alice   # after checking the fingerprint
+ratchet-usb add alice --card alice_card.txt
+ratchet-usb trust alice        # after checking the fingerprint
 
 # Bob writes to Alice -- the very first message also sets up the encryption keys
-ratchet-usb send --usb-path /media/usb alice "hi" > msg.txt
+ratchet-usb send alice "hi" > msg.txt
 # msg.txt gets copy-pasted into WhatsApp/email/whatever, Alice copies it out again
 
 # Alice reads it
-ratchet-usb recv --usb-path /media/usb "$(cat msg.txt)"
+ratchet-usb recv "$(cat msg.txt)"
 ```
 
-Since `--usb-path` is on every command, it's usually easier to export it once
-per session instead of repeating it:
+## Telling it which drive to use
+
+Most of the time you don't have to. Every command works out where the vault
+is, in this order:
+
+1. `--usb-path <dir>`, if you pass it
+2. the `RATCHET_USB_PATH` environment variable
+3. a mounted removable drive that already holds a vault, which it offers you
+4. failing all that, it simply asks
+
+So `--usb-path` is always there when you want to be explicit, and setting
+`RATCHET_USB_PATH` once per session still works:
 
 ```sh
 export RATCHET_USB_PATH=/media/usb
 ratchet-usb card
 ```
 
-`--usb-path` still wins if both are given, and if neither is and the terminal
-is interactive, the tool just asks for the path instead of erroring out. The
-same goes for a contact alias or a message left off the command line: `send`
-without a message, for instance, prompts for one (or reads it from a pipe).
+The auto-detection is deliberately narrow. It only ever considers drives the
+kernel reports as removable, or that hang off a USB bus; it never offers `/`;
+and it always asks before writing. `init` will create a directory for you, but
+only inside a removable drive that is already mounted, so a mistyped path can
+never quietly put a vault on the computer's own disk. Anything non-interactive
+(a script, a pipe) skips detection and the prompts entirely and requires
+`--usb-path`, because there is nobody there to confirm.
+
+Detecting drives means reading `/proc/mounts` and `/sys`, so it is Linux-only
+and best-effort by nature. When it finds nothing, you are back to case 1 or 2
+and nothing is lost.
+
+The same goes for a contact alias or a message left off the command line:
+`send` without a message, for instance, prompts for one (or reads it from a
+pipe).
+
+## What each command does
 
 `init` creates a new identity, shows you the 12-word backup phrase once, and
 sets up the vault. `unlock` just opens the vault and shows your fingerprint,

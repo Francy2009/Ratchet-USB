@@ -81,6 +81,7 @@ add_library(ratchet_core
             src/session.cpp
             src/vault.cpp
             src/terminal.cpp
+            src/media.cpp
             src/cli.cpp)
 
 target_include_directories(ratchet_core PUBLIC
