@@ -182,6 +182,7 @@ Options parse_args(int argc, char** argv) {
     i = 1;
   }
 
+  bool flags_done = false;
   for (; i < args.size(); ++i) {
     const std::string_view arg = args[i];
     auto next = [&](const char* flag) -> std::string_view {
@@ -190,6 +191,25 @@ Options parse_args(int argc, char** argv) {
       }
       return args[++i];
     };
+
+    // Everything after a bare `--` is a value, however it starts.
+    if (arg == "--") {
+      flags_done = true;
+      continue;
+    }
+    if (flags_done) {
+      positional.emplace_back(arg);
+      continue;
+    }
+
+    // A pasted card or message block opens with `-----BEGIN RATCHET ...`, so it
+    // would otherwise look like a flag. No flag here carries a run of dashes,
+    // which makes this unambiguous and saves the user from having to type `--`
+    // before every pasted block.
+    if (arg.starts_with("-----BEGIN")) {
+      positional.emplace_back(arg);
+      continue;
+    }
 
     if (arg == "-h" || arg == "--help") {
       opts.command = "help";
@@ -360,7 +380,7 @@ OpenedVault unlock_vault(const fs::path& path, const char* prompt = "Vault passp
 
   OpenedVault result;
   result.passphrase = terminal::read_passphrase(prompt);
-  std::cout << "Deriving the vault key with Argon2id...\n";
+  std::cerr << "Deriving the vault key with Argon2id...\n";
 
   SecureBuffer plaintext;
   vault::unseal(file.data(), file.size(), result.passphrase, plaintext);
@@ -389,7 +409,7 @@ std::string read_text_arg_or_stdin(const std::optional<std::string>& arg,
     return *arg;
   }
   if (terminal::stdin_is_tty()) {
-    std::cout << prompt_if_tty << std::flush;
+    std::cerr << prompt_if_tty << std::flush;
   }
   return read_all_stdin();
 }
@@ -495,7 +515,7 @@ int cmd_init(const Options& opts) {
   SecureString passphrase =
       terminal::read_new_passphrase("Vault passphrase: ", "Confirm passphrase: ");
 
-  std::cout << "Deriving the vault key with Argon2id ("
+  std::cerr << "Deriving the vault key with Argon2id ("
             << opts.params.mem_cost_kb / 1024 << " MiB, " << opts.params.time_cost
             << " passes)...\n";
 
@@ -716,7 +736,10 @@ int cmd_send(const Options& opts) {
 
   save_vault(path, store, opened.params, opened.passphrase);
 
-  std::cout << "\n" << block;
+  // stdout is only the block, so `send alice "hi" > msg.txt` yields a file that
+  // can be pasted as-is; the blank separator is part of the terminal display.
+  std::cerr << "\n";
+  std::cout << block;
   return 0;
 }
 
@@ -741,7 +764,7 @@ int cmd_recv(const Options& opts) {
   save_vault(path, store, opened.params, opened.passphrase);
 
   if (result.session_established) {
-    std::cout << "(new session established with '" << result.alias << "')\n";
+    std::cerr << "(new session established with '" << result.alias << "')\n";
   }
   if (!store.contacts[result.contact_index].verified) {
     std::cerr << "warning: '" << result.alias
