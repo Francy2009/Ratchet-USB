@@ -47,7 +47,10 @@ class EchoOff {
 bool stdin_is_tty() { return isatty(STDIN_FILENO) != 0; }
 
 SecureString read_passphrase(const std::string& prompt) {
-  std::cout << prompt << std::flush;
+  // Prompts go to stderr, not stdout: stdout carries the payload a command is
+  // there to produce (a contact card, a message block), so `card > file` has to
+  // stay free of anything but the block itself.
+  std::cerr << prompt << std::flush;
 
   EchoOff guard;
   SecureString out;
@@ -61,12 +64,12 @@ SecureString read_passphrase(const std::string& prompt) {
     out.push_back(static_cast<char>(c));
   }
   if (c == EOF && out.empty()) {
-    std::cout << "\n";
+    std::cerr << "\n";
     throw Error("no passphrase on standard input");
   }
   if (!stdin_is_tty()) {
     // No ECHONL to print the newline for us.
-    std::cout << "\n";
+    std::cerr << "\n";
   }
   return out;
 }
@@ -88,10 +91,27 @@ void wait_for_enter(const std::string& prompt) {
   if (!stdin_is_tty()) {
     return;
   }
-  std::cout << prompt << std::flush;
+  std::cerr << prompt << std::flush;
   int c;
   while ((c = std::fgetc(stdin)) != EOF && c != '\n') {
   }
+}
+
+std::string read_line(const std::string& prompt) {
+  if (!stdin_is_tty()) {
+    return {};
+  }
+  std::cerr << prompt << std::flush;
+
+  std::string out;
+  int c;
+  while ((c = std::fgetc(stdin)) != EOF && c != '\n') {
+    if (c == '\r') {
+      continue;
+    }
+    out.push_back(static_cast<char>(c));
+  }
+  return out;
 }
 
 void clear_screen() {
