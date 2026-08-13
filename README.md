@@ -126,7 +126,13 @@ else in this tool. `send` runs the handshake automatically the first time you
 message someone, using up one of their one-time prekeys if they published
 any, and falling back to a slightly weaker 3-way handshake once those run
 out (`unlock` tops the pool back up on its own once it runs low, or `card
---replenish-otpk` does it on demand). One small difference from the spec:
+--replenish-otpk` does it on demand). Which prekey gets used is picked at
+random, because the same card usually ends up in several people's hands and
+they'd otherwise all reach for the same one; the first to write would consume
+it and everyone else would be left pointing at a key you no longer have.
+Sharing a fixed set of one-time prekeys by hand means a clash is always
+possible, but this keeps it from being the normal case. One small difference
+from the spec:
 instead of only authenticating the very first message with the identity
 keys, this implementation mixes both parties' identities into the very first
 encryption key, so every key the ratchet ever produces afterwards is tied

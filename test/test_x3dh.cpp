@@ -1,3 +1,4 @@
+#include <set>
 #include <string>
 
 #include "ratchet/x3dh.hpp"
@@ -73,13 +74,6 @@ TEST("initiate/respond agree on the shared secret, with a one-time prekey") {
   const prekey::SignedPrekey bob_spk = prekey::generate_signed_prekey(bob.sk, 1);
   std::vector<prekey::OneTimePrekey> bob_otpks =
       prekey::generate_one_time_prekeys(1, 2);
-  const prekey::OneTimePrekey bob_otpk_copy_for_responder = [&] {
-    prekey::OneTimePrekey copy;
-    copy.id = bob_otpks.back().id;
-    copy.pub = bob_otpks.back().pub;
-    copy.sk.assign(bob_otpks.back().sk.data(), bob_otpks.back().sk.size());
-    return copy;
-  }();
 
   const std::string card_text = x3dh::export_card(bob.pk, bob_spk, bob_otpks);
   const x3dh::ImportedCard imported = x3dh::import_card(card_text);
@@ -91,15 +85,70 @@ TEST("initiate/respond agree on the shared secret, with a one-time prekey") {
   const x3dh::InitiatorResult init_result =
       x3dh::initiate(alice.sk, alice.pk, contact);
   CHECK(init_result.otpk_id.has_value());
-  CHECK_EQ(*init_result.otpk_id, bob_otpk_copy_for_responder.id);
   // The consumed prekey must be gone from the contact's stored card.
   CHECK_EQ(contact.card->one_time_prekeys.size(), bob_otpks.size() - 1);
+
+  // Which prekey gets used is chosen at random, so the responder looks it up
+  // by the id the initiator reported rather than assuming a position.
+  const prekey::OneTimePrekey bob_otpk_copy_for_responder = [&] {
+    prekey::OneTimePrekey copy;
+    for (const prekey::OneTimePrekey& o : bob_otpks) {
+      if (o.id == *init_result.otpk_id) {
+        copy.id = o.id;
+        copy.pub = o.pub;
+        copy.sk.assign(o.sk.data(), o.sk.size());
+        break;
+      }
+    }
+    return copy;
+  }();
+  CHECK_EQ(bob_otpk_copy_for_responder.id, *init_result.otpk_id);
 
   const SecureBytes<32> responder_secret =
       x3dh::respond(bob.sk, bob.pk, alice.pk, init_result.ephemeral_pk, bob_spk,
                    &bob_otpk_copy_for_responder);
 
   CHECK(init_result.shared_secret.equals(responder_secret));
+}
+
+TEST("separate contacts holding the same card do not all pick the same prekey") {
+  const Identity bob = make_identity();
+  const prekey::SignedPrekey bob_spk = prekey::generate_signed_prekey(bob.sk, 1);
+  const std::vector<prekey::OneTimePrekey> bob_otpks =
+      prekey::generate_one_time_prekeys(1, 10);
+
+  // One card, exported once and handed to everybody -- the case that used to
+  // make every contact collide on the same prekey.
+  const std::string card_text = x3dh::export_card(bob.pk, bob_spk, bob_otpks);
+  const x3dh::ImportedCard imported = x3dh::import_card(card_text);
+
+  std::set<uint32_t> picked;
+  for (int i = 0; i < 40; ++i) {
+    const Identity sender = make_identity();
+    store::Contact contact;
+    contact.identity_pub = bob.pk;
+    contact.card = imported.card;
+
+    const x3dh::InitiatorResult r =
+        x3dh::initiate(sender.sk, sender.pk, contact);
+    CHECK(r.otpk_id.has_value());
+    // Whatever is picked has to be one Bob actually published, and exactly
+    // one has to disappear from this contact's copy of the card.
+    CHECK_EQ(contact.card->one_time_prekeys.size(), bob_otpks.size() - 1);
+    bool known = false;
+    for (const prekey::OneTimePrekey& o : bob_otpks) {
+      if (o.id == *r.otpk_id) {
+        known = true;
+        break;
+      }
+    }
+    CHECK(known);
+    picked.insert(*r.otpk_id);
+  }
+
+  // With 10 prekeys and 40 draws, landing on the same one every time has
+  // probability 10^-39, so this is a fixed choice rather than a flaky test.
+  CHECK(picked.size() > 1);
 }
 
 TEST("initiate/respond agree without a one-time prekey (exhausted pool)") {
