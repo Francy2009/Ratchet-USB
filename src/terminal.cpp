@@ -94,6 +94,23 @@ void wait_for_enter(const std::string& prompt) {
   }
 }
 
+std::string read_line(const std::string& prompt) {
+  if (!stdin_is_tty()) {
+    return {};
+  }
+  std::cout << prompt << std::flush;
+
+  std::string out;
+  int c;
+  while ((c = std::fgetc(stdin)) != EOF && c != '\n') {
+    if (c == '\r') {
+      continue;
+    }
+    out.push_back(static_cast<char>(c));
+  }
+  return out;
+}
+
 void clear_screen() {
   if (isatty(STDOUT_FILENO) == 0) {
     return;

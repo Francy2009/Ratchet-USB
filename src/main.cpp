@@ -77,7 +77,9 @@ void print_usage(std::ostream& os) {
      << "               session automatically if it is the first one).\n"
      << "\n"
      << "Options:\n"
-     << "  --usb-path <dir>     Directory on the removable drive (required).\n"
+     << "  --usb-path <dir>     Directory on the removable drive. Falls back to\n"
+     << "                       the RATCHET_USB_PATH environment variable, then\n"
+     << "                       to an interactive prompt if the terminal allows.\n"
      << "  --force              Replace an existing vault (init only).\n"
      << "  --otpk-count <n>     One-time prekeys to generate at init (default "
      << kDefaultOtpkCount << ").\n"
@@ -180,15 +182,34 @@ Options parse_args(int argc, char** argv) {
 // The vault must live on the removable drive, so the path has to be an
 // existing, writable directory. It is never created for the user: a typo would
 // otherwise silently produce a vault in a directory on the host disk.
+//
+// Resolved in this order: --usb-path, then the RATCHET_USB_PATH environment
+// variable, then (only when stdin is a terminal) an interactive prompt.
 fs::path require_usb_path(const Options& opts) {
-  if (opts.usb_path.empty()) {
-    throw Error("--usb-path is required");
+  fs::path usb_path = opts.usb_path;
+
+  if (usb_path.empty()) {
+    if (const char* env = std::getenv("RATCHET_USB_PATH");
+        env != nullptr && env[0] != '\0') {
+      usb_path = fs::path(env);
+    }
+  }
+
+  if (usb_path.empty()) {
+    const std::string entered = terminal::read_line("USB drive path: ");
+    if (!entered.empty()) {
+      usb_path = fs::path(entered);
+    }
+  }
+
+  if (usb_path.empty()) {
+    throw Error("--usb-path is required (or set RATCHET_USB_PATH)");
   }
 
   std::error_code ec;
-  const fs::path resolved = fs::canonical(opts.usb_path, ec);
+  const fs::path resolved = fs::canonical(usb_path, ec);
   if (ec) {
-    throw Error("--usb-path does not exist: " + opts.usb_path.string());
+    throw Error("--usb-path does not exist: " + usb_path.string());
   }
   if (!fs::is_directory(resolved, ec)) {
     throw Error("--usb-path is not a directory: " + resolved.string());
@@ -197,6 +218,21 @@ fs::path require_usb_path(const Options& opts) {
     throw Error("--usb-path is not writable: " + resolved.string());
   }
   return resolved;
+}
+
+// Falls back to an interactive prompt for a required, non-secret value (an
+// alias, a contact name) when it was not passed as a flag and stdin is a
+// terminal; throws flag_error otherwise.
+std::string require_value(const std::string& value, const std::string& prompt,
+                          const char* flag_error) {
+  if (!value.empty()) {
+    return value;
+  }
+  const std::string entered = terminal::read_line(prompt);
+  if (entered.empty()) {
+    throw Error(flag_error);
+  }
+  return entered;
 }
 
 // Best-effort warning when the given path sits on the same filesystem as the
@@ -495,9 +531,8 @@ int cmd_card(const Options& opts) {
 }
 
 int cmd_add_contact(const Options& opts) {
-  if (opts.name.empty()) {
-    throw Error("--name is required");
-  }
+  const std::string name =
+      require_value(opts.name, "Contact alias: ", "--name is required");
   const fs::path usb = require_usb_path(opts);
   const fs::path path = vault::vault_path(usb);
 
@@ -509,27 +544,27 @@ int cmd_add_contact(const Options& opts) {
   OpenedVault opened = unlock_vault(path);
   store::VaultStore& store = opened.store;
 
-  if (store.find_contact(opts.name) >= 0) {
-    throw Error("a contact named '" + opts.name + "' already exists");
+  if (store.find_contact(name) >= 0) {
+    throw Error("a contact named '" + name + "' already exists");
   }
   if (store.find_contact_by_identity(imported.identity_pub) >= 0) {
     throw Error("this identity is already saved under a different alias");
   }
 
   store::Contact contact;
-  contact.alias = opts.name;
+  contact.alias = name;
   contact.identity_pub = imported.identity_pub;
   contact.card = imported.card;
   store.contacts.push_back(std::move(contact));
 
   save_vault(path, store, opened.params, opened.passphrase);
 
-  std::cout << "Added '" << opts.name << "'. Verify this fingerprint with them\n"
+  std::cout << "Added '" << name << "'. Verify this fingerprint with them\n"
             << "over a separate channel (in person, a phone call) before "
                "trusting it:\n\n"
             << fingerprint(imported.identity_pub) << "\n\n"
             << "Then run `" << kProgram << " trust --usb-path <dir> --name "
-            << opts.name << "`.\n";
+            << name << "`.\n";
   return 0;
 }
 
@@ -557,30 +592,28 @@ int cmd_contacts(const Options& opts) {
 }
 
 int cmd_trust(const Options& opts) {
-  if (opts.name.empty()) {
-    throw Error("--name is required");
-  }
+  const std::string name =
+      require_value(opts.name, "Contact alias: ", "--name is required");
   const fs::path usb = require_usb_path(opts);
   const fs::path path = vault::vault_path(usb);
 
   OpenedVault opened = unlock_vault(path);
   store::VaultStore& store = opened.store;
 
-  const int idx = store.find_contact(opts.name);
+  const int idx = store.find_contact(name);
   if (idx < 0) {
-    throw Error("no contact named '" + opts.name + "'");
+    throw Error("no contact named '" + name + "'");
   }
   store.contacts[static_cast<std::size_t>(idx)].verified = true;
 
   save_vault(path, store, opened.params, opened.passphrase);
-  std::cout << "'" << opts.name << "' marked as verified.\n";
+  std::cout << "'" << name << "' marked as verified.\n";
   return 0;
 }
 
 int cmd_send(const Options& opts) {
-  if (opts.to.empty()) {
-    throw Error("--to is required");
-  }
+  const std::string to =
+      require_value(opts.to, "Send to (contact alias): ", "--to is required");
   const fs::path usb = require_usb_path(opts);
   const fs::path path = vault::vault_path(usb);
 
@@ -593,14 +626,14 @@ int cmd_send(const Options& opts) {
   OpenedVault opened = unlock_vault(path);
   store::VaultStore& store = opened.store;
 
-  const int idx = store.find_contact(opts.to);
+  const int idx = store.find_contact(to);
   if (idx < 0) {
-    throw Error("no contact named '" + opts.to + "' (see `contacts`)");
+    throw Error("no contact named '" + to + "' (see `contacts`)");
   }
   const std::size_t contact_index = static_cast<std::size_t>(idx);
 
   if (!store.contacts[contact_index].verified) {
-    std::cerr << "warning: '" << opts.to
+    std::cerr << "warning: '" << to
               << "' has not been marked as trusted; run `trust` once you have "
                  "checked the fingerprint.\n";
   }

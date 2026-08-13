@@ -20,6 +20,11 @@ SecureString read_new_passphrase(const std::string& prompt,
 // Waits for ENTER. No-op when stdin is not a tty.
 void wait_for_enter(const std::string& prompt);
 
+// Prints prompt and reads one line with normal echo, for values that are not
+// secret (a path, an alias). Returns an empty string on EOF or when stdin is
+// not a tty, so callers can fall back to treating the value as missing.
+std::string read_line(const std::string& prompt);
+
 // Clears the screen and the scrollback buffer, so the mnemonic does not stay
 // visible behind the session. Only emitted when stdout is a tty.
 void clear_screen();
