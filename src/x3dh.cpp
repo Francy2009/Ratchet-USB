@@ -144,8 +144,18 @@ InitiatorResult initiate(const IdentitySigningSecretKey& my_sk,
   std::vector<const SecureBytes<32>*> parts = {&dh1, &dh2, &dh3};
   SecureBytes<32> dh4;
   if (!card.one_time_prekeys.empty()) {
-    const store::PeerOtpk otpk = card.one_time_prekeys.back();
-    card.one_time_prekeys.pop_back();
+    // Picked at random rather than from a fixed position. The same card is
+    // handed to everyone, so a fixed choice makes every contact pick the very
+    // same prekey: the first to write consumes it and everybody else is left
+    // referring to one the recipient no longer has. Choosing at random does
+    // not make that impossible -- prekeys shared by hand are finite and a
+    // collision is always on the table -- but it stops it from happening
+    // every single time.
+    const std::size_t pick = randombytes_uniform(
+        static_cast<uint32_t>(card.one_time_prekeys.size()));
+    const store::PeerOtpk otpk = card.one_time_prekeys[pick];
+    card.one_time_prekeys.erase(card.one_time_prekeys.begin() +
+                                static_cast<std::ptrdiff_t>(pick));
     result.otpk_id = otpk.id;
     x25519::dh(eph_sk, otpk.pub, dh4);
     parts.push_back(&dh4);
