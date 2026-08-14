@@ -1,81 +1,71 @@
 # Ratchet-USB
 
+**English** · [Italiano](README.it.md)
+
 [![CI](https://github.com/Francy2009/Ratchet-USB/actions/workflows/ci.yml/badge.svg)](https://github.com/Francy2009/Ratchet-USB/actions/workflows/ci.yml)
 
-A small command-line tool for sending encrypted messages without needing a
-server. You encrypt the message on your machine, copy the resulting text, and
-paste it wherever you want: WhatsApp, email, a forum, whatever. The other
-person copies it back into the tool to read it. Whatever app carries the text
-in between only ever sees random-looking gibberish, never your actual
-message.
+A small command-line tool for sending encrypted messages without a server.
+You encrypt on your machine, copy the text it prints, and paste it wherever:
+WhatsApp, email, a forum. The other person pastes it back into the tool to
+read it. Whatever carries the text in between just sees gibberish.
 
-Everything that matters, your keys, your contacts, your chat history, lives
-on a USB stick or any removable drive. The tool never writes anything to the
-computer it's running on. It finds the drive by itself when it can, and you
-can always name it explicitly with `--usb-path`.
+Keys, contacts, chat history — all of it lives on a USB stick or some other
+removable drive, never on the computer itself. The tool finds the drive on
+its own most of the time; `--usb-path` is there for when you'd rather not
+leave it to guessing.
 
-Where it's at right now: phase 2. You can generate an identity, add contacts,
-and send and receive messages with proper forward-secret encryption. Still
-missing are group chats, using the same identity from more than one device,
-and any kind of public key directory (more on that near the bottom, under
-"What this doesn't do").
+Phase 2 right now: you can make an identity, add contacts, send and receive
+with forward-secret encryption. No group chats yet, no using one identity
+from two machines, no public key directory. More on all of that at the
+bottom.
 
-Before you rely on this for anything real: this project hasn't gone through
-an independent security audit yet. It's built carefully and tested, but
-"carefully built by one person" and "checked by outside cryptographers" are
-not the same guarantee. If you're a journalist, activist, or anyone else who
-could face real consequences if a message got read, please don't make this
-your only line of defense. Treat it as one extra layer, keep using other
-reviewed and audited tools alongside it, and get in touch if you want to talk
-through your specific situation before trusting it.
+One thing worth saying plainly before you rely on this for anything real: it
+hasn't been through an independent security audit. I've built it carefully
+and tested it hard, but that's not the same thing as someone else checking
+it who isn't me. If you're the kind of person who'd face real trouble over a
+read message — a journalist, an activist, whoever — don't make this your
+only layer. Use it next to tools that have actually been audited, and get in
+touch if you want to talk through your situation first.
 
-## Which systems this runs on
+## Platforms
 
-**Linux**, and that is the only one it has actually been run on. `setup.sh`
-knows dnf, apt, pacman and zypper; on any other distribution install
-libsodium's development package, CMake and a C++20 compiler yourself and pass
-`--no-deps`.
+Only actually run on **Linux**. `setup.sh` knows dnf, apt, pacman and
+zypper; anywhere else, install libsodium's dev package, CMake and a C++20
+compiler yourself and pass `--no-deps`.
 
-**macOS** should build — every system call used here exists there, and
-libsodium supports it — but nobody has tried, so treat it as unverified. Two
-things would be worse if you do: drive detection reads `/proc/mounts` and so
-finds nothing, leaving you to pass `--usb-path`; and macOS's `fsync` does not
-force a physical flush without `F_FULLFSYNC`, which weakens the guarantee that
-a vault survives the drive being pulled out mid-write.
+**macOS** probably builds — nothing here is Linux-specific at the API level
+— but I haven't tried it, so I can't promise it. Two things would bite:
+drive detection reads `/proc/mounts`, which doesn't exist there, so you'll
+need `--usb-path` every time; and `fsync` on macOS doesn't force a real
+flush to disk without `F_FULLFSYNC`, which matters if you yank the drive
+mid-write.
 
-**Windows** does not build. Not the crypto, which is portable, but the parts
-around it: turning terminal echo off for the passphrase goes through
-`termios`, and the vault is written durably using `fsync` on both the file and
-its directory, neither of which Windows has an equivalent for. Porting it is a
-few hundred lines in `src/terminal.cpp` and `src/vault.cpp`, and both are
-places where a subtle mistake fails quietly rather than loudly -- an echo that
-is not really off puts your passphrase on screen, and a mis-ported durable
-write corrupts vaults. **WSL works today** and is Linux as far as this is
-concerned.
+**Windows** doesn't build, and it's not the crypto's fault — that part is
+portable. It's `termios` for turning off terminal echo, and `fsync` on both
+the file and its directory for a durable write, neither of which Windows
+has. Porting `src/terminal.cpp` and `src/vault.cpp` is maybe a few hundred
+lines, but both are the kind of code where a subtle mistake fails quietly:
+get the echo wrong and your passphrase ends up on screen, get the durable
+write wrong and vaults corrupt. WSL works fine today, it's just Linux as far
+as this is concerned.
 
 ## Getting started
-
-Two commands, once:
 
 ```sh
 git clone https://github.com/Francy2009/Ratchet-USB.git && cd Ratchet-USB
 ./setup.sh
 ```
 
-`setup.sh` installs the packages it needs (asking first), builds, runs the
-tests, and puts the binary in `~/.local/bin`, which is on your PATH on most
-current distributions. No `sudo` for the install itself, and no `export PATH`
-afterwards: `ratchet-usb` becomes an ordinary command. If the tests fail it
-stops before installing anything.
+That installs whatever it needs (asks first), builds, runs the tests, drops
+the binary in `~/.local/bin`. No sudo, nothing to add to your PATH — it's
+already there on most distros. Tests failing stops it before it installs
+anything.
 
-Then plug in a USB drive and:
+Plug in a drive, then:
 
 ```sh
 ratchet-usb init
 ```
-
-That's the whole setup. `init` looks for a mounted removable drive and asks
-before using it:
 
 ```
 Found a removable drive to set up:
@@ -83,18 +73,16 @@ Found a removable drive to set up:
 Use it? [Y/n]
 ```
 
-From then on, every other command finds that drive on its own, so there is
-nothing to type and nothing to remember:
+That's it. Every command after this finds the same drive on its own:
 
 ```sh
 ratchet-usb contacts
 ```
 
-`./setup.sh --prefix /usr/local` installs system-wide instead (that one does
-need sudo), and `--no-deps` skips the package step. To build by hand rather
-than through the script, you need a C++20 compiler, CMake 3.16 or newer, and
-libsodium (1.0.19 or later is best; see the HKDF note further down), which is
-the only library this depends on:
+`--prefix /usr/local` installs system-wide (needs sudo for that one),
+`--no-deps` skips the package install. Building by hand: C++20 compiler,
+CMake 3.16+, libsodium (1.0.19+ preferred — see the HKDF note further
+down).
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -102,9 +90,9 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-The binary then sits at `build/ratchet-usb`.
+Binary ends up at `build/ratchet-usb`.
 
-## How to use it
+## Using it
 
 ```sh
 # Alice sets up her vault
@@ -125,173 +113,144 @@ ratchet-usb send alice "hi" > msg.txt
 ratchet-usb recv "$(cat msg.txt)"
 ```
 
-## Telling it which drive to use
+## Which drive it uses
 
-Most of the time you don't have to. Every command works out where the vault
-is, in this order:
+Usually you don't have to think about this. The order is:
 
-1. `--usb-path <dir>`, if you pass it
-2. the `RATCHET_USB_PATH` environment variable
-3. a mounted removable drive that already holds a vault, which it offers you
-4. failing all that, it simply asks
+1. `--usb-path <dir>`, if given
+2. `RATCHET_USB_PATH`
+3. a mounted removable drive that already has a vault on it
+4. it just asks
 
-So `--usb-path` is always there when you want to be explicit, and setting
-`RATCHET_USB_PATH` once per session still works:
+`RATCHET_USB_PATH` is handy for a whole terminal session:
 
 ```sh
 export RATCHET_USB_PATH=/media/usb
 ratchet-usb card
 ```
 
-The auto-detection is deliberately narrow. It only ever considers drives the
-kernel reports as removable, or that hang off a USB bus; it never offers `/`;
-and it always asks before writing. `init` will create a directory for you, but
-only inside a removable drive that is already mounted, so a mistyped path can
-never quietly put a vault on the computer's own disk. Anything non-interactive
-(a script, a pipe) skips detection and the prompts entirely and requires
-`--usb-path`, because there is nobody there to confirm.
+Detection stays narrow on purpose — only drives the kernel flags as
+removable or that hang off USB, never `/`, and it always asks before
+writing anywhere. `init` will make a directory for you, but only inside a
+drive that's already mounted, so a typo in a path can't quietly land a
+vault on your actual disk. Run it non-interactively (a script, a pipe) and
+all of that gets skipped — you need `--usb-path`, because there's nobody
+around to answer the prompt.
 
-Detecting drives means reading `/proc/mounts` and `/sys`, so it is Linux-only
-and best-effort by nature. When it finds nothing, you are back to case 1 or 2
-and nothing is lost.
+This is Linux-only and best-effort, since it means poking at `/proc/mounts`
+and `/sys`. Finds nothing, falls back to option 1 or 2, no harm done.
 
-The same goes for a contact alias or a message left off the command line:
-`send` without a message, for instance, prompts for one (or reads it from a
-pipe).
+Same idea applies to a contact alias or a message you leave off the command
+line — `send` with no message just asks for one, or reads it from a pipe.
 
-## What each command does
+## Commands
 
-`init` creates a new identity, shows you the 12-word backup phrase once, and
-sets up the vault. `unlock` just opens the vault and shows your fingerprint,
-though along the way it also checks your prekeys: a signed prekey older than
-30 days gets rotated, and if fewer than 5 one-time prekeys are left, 10 fresh
-ones are generated, both automatically, no flags needed. `card` prints your
-contact card so you can share it, or just your fingerprint with
-`--fingerprint`; `--rotate-spk` and `--replenish-otpk <n>` refresh those keys
-on demand, on top of the automatic upkeep `unlock` already does. `add`
-imports someone's card, from a file with `--card` or from stdin, under the
-alias you give it, and checks that the signature is valid. `contacts` lists
-who you know, their fingerprint, whether you've marked them trusted, and
-whether you already have a session going with them. `trust <alias>` marks a
-contact as verified, meaning you checked their fingerprint through some other
-channel. `send <alias> [message]` encrypts a message for someone, setting up
-the session automatically if it's the first one. `recv [message]` decrypts a
-message someone sent you, again setting up the session automatically if it's
-the first one to arrive.
+`init` makes a new identity, shows the 12-word phrase once, sets up the
+vault. `unlock` opens it and prints your fingerprint — and while it's at
+it, rotates a signed prekey if it's past 30 days old and tops up one-time
+prekeys if fewer than 5 are left, no flags needed for either. `card` prints
+the card to share, or just the fingerprint with `--fingerprint`;
+`--rotate-spk` and `--replenish-otpk <n>` do the same maintenance on
+demand. `add` imports someone's card (a file with `--card`, or stdin) under
+whatever alias you give it, checking the signature along the way.
+`contacts` lists who you know: fingerprint, trusted or not, session or not.
+`trust <alias>` marks someone verified — meaning you checked their
+fingerprint some other way. `send <alias> [message]` encrypts for someone,
+setting up the session first if there isn't one yet. `recv [message]` does
+the same on the receiving end.
 
-`init` shows you the 12 recovery words exactly once and doesn't save them
-anywhere; they're your backup, and whoever has them can restore your
-identity. They don't back up everything though, more on that below. If you
-already have a backup phrase, from a previous vault or a fresh one someone
-generated for you, `init --from-mnemonic` asks for the 12 words instead of
-generating new ones and rebuilds the identity from them; it still starts you
-off with a brand new, empty vault, since contacts and chat history never
-lived in the words to begin with.
+Those 12 words from `init` are shown once and saved nowhere — they're the
+backup, and whoever has them can rebuild your identity. Not everything,
+though: contacts and chat history aren't in there, see below for why.
+Already have a phrase from somewhere — an old vault, one someone generated
+for you? `init --from-mnemonic` takes the 12 words instead of making new
+ones. You still start with an empty vault either way.
 
-You can also tune how expensive the passphrase check is with `--argon2-time`
-and `--argon2-mem-kb` when running `init`. Whatever values you pick get saved
-inside the vault and reused every time after, so a vault created on a fast
-laptop still opens fine on a slower machine, and the cost doesn't silently
-change.
+`--argon2-time` and `--argon2-mem-kb` on `init` let you tune how expensive
+the passphrase check is. Whatever you pick gets saved in the vault itself,
+so it opens the same way later even on a slower machine.
 
-## The crypto, in plain terms
+## The crypto
 
-The seed starts as 128 random bits from `randombytes_buf`, encoded into a
-12-word BIP-39 backup phrase. The master seed itself comes from running that
-raw entropy through HKDF-SHA256, not through BIP-39's usual PBKDF2 step. Two
-things follow from that: the 12 words alone are enough to rebuild your seed
-and your long-term identity (the vault passphrase only protects the file
-sitting on the drive, it doesn't feed into the seed itself), and these words
-will not work in a Bitcoin wallet, nor will a wallet's words work here. Same
-wordlist, different math underneath.
+128 random bits out of `randombytes_buf`, turned into 12 BIP-39 words. The
+master seed comes from running that entropy through HKDF-SHA256 rather than
+BIP-39's usual PBKDF2 — so the 12 words rebuild your identity on their own
+(the vault passphrase only guards the file, it's not part of the seed at
+all), but they're also useless in a Bitcoin wallet, and a wallet's words are
+useless here. Same list of words, different math underneath.
 
-Your identity is a single Ed25519 key pair derived from that seed, converted
-to X25519 on the fly whenever a Diffie-Hellman exchange needs it. X3DH needs
-the identity key for two different jobs, signing the prekey and doing a
-Diffie-Hellman exchange, and X25519 can't sign anything on its own, so a lot
-of designs end up using two separate identity keys. Using one Ed25519 key
-here instead means one identity and one fingerprint to read out loud and
-check with someone, not two.
+One Ed25519 keypair is the identity, converted to X25519 on the fly for
+Diffie-Hellman. X3DH needs the identity key to both sign and do DH, and
+X25519 alone can't sign, which is usually why people end up carrying two
+identity keys instead of one. Here it's just the one — one fingerprint to
+read out and check, not two.
 
-Signed and one-time prekeys are random X25519 key pairs, not derived from
-your seed. That's on purpose: if a one-time prekey could be regenerated from
-the seed, restoring your vault from the 12 words would bring back a key
-you'd already used once, defeating the whole point of a "use once" key. The
-trade-off is that prekeys, contacts and ongoing chats only exist inside
-`vault.bin`, not in the recovery phrase. Lose the drive without a copy of
-that file and you lose your contacts and chat history even with the words in
-hand; running `init --from-mnemonic` with the same words gets your identity
-back, but you start from zero contacts.
+Prekeys, signed and one-time both, are random X25519 pairs rather than
+anything derived from the seed — if a one-time prekey could be regenerated
+from the seed, restoring from the 12 words would resurrect a key you'd
+already burned, which defeats the point of "one time" entirely. Cost of
+that: prekeys, contacts, ongoing chats live only in `vault.bin`. Lose the
+drive without a copy and the words get your identity back but not your
+contacts.
 
-Key exchange is X3DH, the same handshake Signal uses, though without
-Signal's server handing out prekey bundles on request. Here a contact's
-bundle is just their card, shared once, by hand, the same way as everything
-else in this tool. `send` runs the handshake automatically the first time you
-message someone, using up one of their one-time prekeys if they published
-any, and falling back to a slightly weaker 3-way handshake once those run
-out (`unlock` tops the pool back up on its own once it runs low, or `card
---replenish-otpk` does it on demand). Which prekey gets used is picked at
-random, because the same card usually ends up in several people's hands and
-they'd otherwise all reach for the same one; the first to write would consume
-it and everyone else would be left pointing at a key you no longer have.
-Sharing a fixed set of one-time prekeys by hand means a clash is always
-possible, but this keeps it from being the normal case. One small difference
-from the spec:
-instead of only authenticating the very first message with the identity
-keys, this implementation mixes both parties' identities into the very first
-encryption key, so every key the ratchet ever produces afterwards is tied
-back to both identities, not just the opening message.
+X3DH does the key exchange, same handshake as Signal, minus Signal's server
+handing out bundles — here the bundle is just the card someone gave you by
+hand. `send` runs it automatically on the first message, spending one of
+the recipient's one-time prekeys if they published any (falling back to a
+slightly weaker 3-way handshake once those run dry — `unlock` and `card
+--replenish-otpk` both top the pool back up). The prekey it picks is
+random, not the next one in line: the same card usually ends up in several
+inboxes, and picking a fixed one means whoever writes first consumes it and
+everyone else hits a key that's already gone. Random doesn't remove the
+collision, since a hand-shared pool is finite either way, but it stops it
+from being guaranteed. One departure from the spec worth flagging: instead
+of authenticating just the opening message with the identity keys, both
+identities get folded into the very first encryption key, so everything the
+ratchet produces afterward stays tied to both of them, not only to how the
+conversation opened.
 
-Ongoing messages are encrypted with a Double Ratchet, following Signal's
-design fairly closely: a symmetric ratchet for keys within one direction of
-the conversation, plus a Diffie-Hellman ratchet whenever the conversation
-changes direction, with ChaCha20-Poly1305 doing the actual encryption. Two
-small simplifications compared to the original spec: a message key is used
-straight as the ChaCha20-Poly1305 key instead of being split into separate
-encryption, authentication and IV pieces (not needed once you're already
-using an authenticated cipher), and each message gets a random nonce instead
-of one derived from a counter, which costs a few extra bytes per message but
-removes a whole category of counter-handling bugs. Messages that arrive out
-of order are handled the way Signal does it too: a capped list of up to 1000
-skipped message keys, so a short gap in delivery doesn't lose anything, while
-a bigger gap gets rejected outright, since otherwise someone could send a
-bogus header and make `recv` do unbounded work. Those cached keys also expire
-after a week. A skipped key is the only part of the ratchet that doesn't move
-on by itself -- the chains either side of it have already ratcheted forward,
-but the key sits there waiting for a message that may never arrive -- so
-without an expiry a vault stolen months later would still open those old
-messages, and keys left behind by a chain the conversation has long since
-moved past would keep eating the 1000-key budget. `recv` sweeps the expired
-ones before it does anything else, and `unlock` sweeps every session, so a
-vault you only ever open expires them too. The trade-off is that a message
-that turns up more than a week late no longer decrypts.
+After that it's a Double Ratchet for every message, close to how Signal
+does it — a symmetric chain within each direction of the conversation, a
+Diffie-Hellman step whenever the conversation switches direction,
+ChaCha20-Poly1305 doing the actual encrypting. Two things simplified from
+the original: the message key goes straight into ChaCha20-Poly1305 instead
+of being split into encryption/auth/IV pieces (not needed with an
+authenticated cipher already), and the nonce is random per message rather
+than counter-derived, a few extra bytes for not having to think about
+counter bugs. Out-of-order delivery is handled with a capped cache of up to
+1000 skipped keys — a real gap in delivery doesn't lose the message, a gap
+past the cap gets refused outright rather than letting a forged header make
+`recv` chew through unbounded work. Those cached keys expire after a week
+now. It's the one part of the ratchet that doesn't move forward on its own:
+the chains on either side keep advancing, the skipped key just sits there
+waiting. Without an expiry, a stolen vault would still open month-old
+messages, and stale keys from long-abandoned chains would keep eating into
+that 1000-key budget until no new gap could be tolerated at all. `recv`
+sweeps expired ones before doing anything else, `unlock` sweeps every
+session, so even a vault you only open and never receive into stays clean.
+The cost: a message more than a week late doesn't decrypt anymore.
 
-None of this proves that an identity key actually belongs to the person you
-think it does; that's something only a human can confirm. Importing someone's
-card checks that their signed prekey really was signed by the identity key on
-the card, and every message you get is cryptographically tied to the
-sender's identity through the handshake, but `add` still just prints
-a fingerprint for you to check. `trust` records that you verified it some
-other way, in person or over a phone call, not the same chat where the card
-showed up. `send` and `recv` will warn you about an unverified contact, but
-they won't stop you.
+None of this proves an identity key belongs to who you think it does —
+that part's on you. Importing a card checks the signed prekey's signature,
+and every message you get afterward is tied to the sender's identity
+through the handshake, but `add` still just hands you a fingerprint to go
+verify. `trust` is you recording that you did — over the phone, in person,
+somewhere that isn't the same chat the card arrived on. `send` and `recv`
+will nag about an unverified contact but won't stop you.
 
-Anything holding a secret key uses a wrapper (`SecureBytes`, `SecureString`,
-`SecureBuffer`) that locks the memory when the OS allows it and zeroes it out
-once it's no longer needed. You can't accidentally copy one of these, only
-move it, so a secret can't end up living in two places without you noticing.
-The passphrase itself is turned into the vault key with Argon2id, 256 MiB and
-3 passes by default, and the vault file is sealed with ChaCha20-Poly1305.
+Secret key material lives in `SecureBytes` / `SecureString` / `SecureBuffer`
+— locked in memory where the OS allows it, zeroed once it's done, and
+move-only so a copy can't quietly exist somewhere you forgot about. The
+passphrase becomes the vault key via Argon2id (256 MiB, 3 passes by
+default), and the file itself is sealed with ChaCha20-Poly1305.
 
-One last detail: the build uses libsodium's own `crypto_kdf_hkdf_sha256_*`
-functions when they're available (libsodium 1.0.19+), and falls back to a
-small in-house RFC 5869 implementation on older versions. Both are tested
-against the RFC's official test vectors and produce identical output, so a
-vault stays portable no matter which path your libsodium takes.
+Worth knowing: the build reaches for libsodium's native
+`crypto_kdf_hkdf_sha256_*` when it's there (1.0.19+), and falls back to a
+small RFC 5869 implementation of its own otherwise. Both get checked
+against the RFC's vectors and produce the same bytes, so vaults move
+between the two without trouble.
 
 ## Vault file layout
-
-`vault.bin` looks like this:
 
 ```
 offset  size  field
@@ -305,98 +264,91 @@ offset  size  field
 41+N    16    Poly1305 authentication tag
 ```
 
-The header is written out field by field rather than dumped as a raw struct,
-so the file format doesn't depend on how your compiler happens to pad
-things. The whole header also gets fed into the encryption as authenticated
-data, so tampering with the salt, nonce or cost values makes decryption fail
-instead of silently deriving the wrong key; on purpose, a wrong passphrase
-and a tampered file produce the exact same error message. The cost values
-get read back from a file that could, in theory, have been tampered with, so
-they're range-checked (time 1 to 64, memory between 8 KiB and 4 GiB) before
-they're ever handed to Argon2. An early version of the format just stored a
-fixed 64-byte seed-plus-key blob; the current one stores the whole vault and
-isn't compatible with that, though there was no released vault to worry
-about migrating anyway.
+Written field by field rather than dumped as a struct, so padding decisions
+your compiler makes don't leak into the file format. The header is
+authenticated data on the encryption, not just cleartext sitting next to
+it, so touching the salt, nonce or cost values breaks decryption instead of
+quietly deriving a different key — and a wrong passphrase gives you the
+exact same error as a tampered file, deliberately. The cost values get
+range-checked before they ever reach Argon2 (time 1–64, memory 8 KiB–4 GiB),
+since they're read back from a file that could in principle have been
+messed with. There was an older format, just a fixed 64-byte seed-and-key
+blob — nothing published ever used it, so there's no migration to worry
+about.
 
-A contact card and a message are both wrapped in a
-`-----BEGIN RATCHET <LABEL>-----` block of base64 text, 64 characters per
-line, with any extra whitespace ignored when reading it back, so a chat app
-reflowing the text doesn't break it. A message includes a short hash of the
-sender's identity, so `recv` knows which conversation it belongs to without
-being told explicitly, the Double Ratchet header, and, only on the message
-that starts a new conversation, the X3DH handshake data.
+Cards and messages both come wrapped in
+`-----BEGIN RATCHET <LABEL>-----`, base64, 64 characters a line, extra
+whitespace ignored on the way back in — so a chat app reflowing your
+paragraph doesn't break the block. A message carries a short hash of the
+sender's identity (so `recv` knows which conversation without being told),
+the ratchet header, and, only on the message that opens a conversation, the
+X3DH handshake data.
 
-## Project layout
+## Layout
 
-`include/ratchet/` holds the public headers, `src/` has the actual
-implementation plus the BIP-39 wordlist, and `test/` has the unit tests
-(no external test framework, just plain checks).
+`include/ratchet/` for public headers, `src/` for the implementation and
+the BIP-39 wordlist, `test/` for the unit tests — no framework, just plain
+checks.
 
 ## How the crypto is checked
 
-A round-trip test is worth less here than it looks. Encrypting and decrypting
-with the same code proves the implementation agrees with itself, and an
-implementation that is wrong in a self-consistent way agrees with itself
-perfectly. Swap the two HMAC constants in the chain-key derivation, or hand
-HKDF the Diffie-Hellman output as its salt and the root key as its input
-material, and every message still round-trips. The result is a ratchet that
-works beautifully and is not the one the specification describes.
+A round-trip test doesn't prove much here. Encrypting and decrypting with
+the same code just proves the code agrees with itself, and code that's
+wrong in a consistent way agrees with itself perfectly. Swap the two HMAC
+constants in the chain-key step, or feed HKDF the DH output as salt instead
+of input, and messages still round-trip fine. What you'd get is a ratchet
+that works and isn't the one the spec describes.
 
-So the key schedule is also checked against known-answer vectors that came
-from somewhere else. `test/vectors/reference.py` implements the same
-derivations a second time, in Python, from the specifications rather than from
-`src/ratchet.cpp`, using only the standard library. Its own primitives are
-pinned to published test vectors first -- RFC 7748 for X25519, RFC 5869 for
-HKDF-SHA256 -- and its output is frozen into `test/vectors/vectors.hpp`, which
-the C++ suite has to reproduce byte for byte. CI regenerates that header on
-every push and fails if it differs from the committed copy, so the two
-implementations cannot quietly drift into agreement. For a bug to survive, it
-would have to be made twice, independently, in the same direction.
+So the key schedule also gets checked against vectors from somewhere else
+entirely. `test/vectors/reference.py` is the same derivations written a
+second time, in Python, from the specs rather than from `src/ratchet.cpp`,
+using nothing but the standard library. Its own primitives are pinned to
+published vectors first (RFC 7748 for X25519, RFC 5869 for HKDF-SHA256),
+and its output is frozen into `test/vectors/vectors.hpp`, which the C++
+side has to match byte for byte. CI regenerates that header on every push
+and fails on any difference, so the two can't drift into quiet agreement —
+a bug would have to show up twice, independently, in the same direction.
 
-That is a conformance check, not an interoperability claim: this tool does not
-speak libsignal's wire format and cannot be tested against it (see the
-deliberate departures noted above -- the message key is used directly as a
-ChaCha20-Poly1305 key, the nonce is random and carried in the envelope, and
-the root-key info string is this project's own).
+That's conformance, not interoperability — this doesn't speak libsignal's
+wire format and there's no way to test it against the real thing (the
+departures noted above make sure of that: direct message key as the AEAD
+key, a random nonce in the envelope, a root-key info string that's this
+project's own).
 
-Alongside that, `test/smoke.sh` drives the actual built binary through a whole
-conversation -- two vaults, a card exchange, a handshake, a reply, out-of-order
-delivery, a tampered message, a wrong passphrase -- because none of the unit
-tests touch argument parsing, file I/O, or the copy-paste block encoding.
+`test/smoke.sh` separately drives the actual binary through a full
+conversation — two vaults, a card exchange, handshake, reply, messages
+arriving out of order, a tampered one, a wrong passphrase — since none of
+the unit tests touch argument parsing, file I/O, or the copy-paste
+encoding.
 
-CI runs all of it on every push: GCC and Clang, Debug and Release, warnings as
-errors, AddressSanitizer, UndefinedBehaviorSanitizer, Valgrind and clang-tidy.
-One job builds a newer libsodium from source, because Ubuntu ships 1.0.18 and
-this project carries its own RFC 5869 HKDF for releases older than 1.0.19 --
-without that job, half the HKDF code in the tree would never be compiled, let
-alone run. It also asserts that the newer libsodium's HKDF really was selected,
-since a detection failure otherwise falls back silently and leaves the badge
-green.
+CI runs the lot on every push: GCC and Clang, Debug and Release, warnings
+as errors, ASan, UBSan, Valgrind, clang-tidy. One job builds a newer
+libsodium from source, since Ubuntu ships 1.0.18 and the fallback HKDF
+would otherwise never actually compile, let alone run, in CI. It also
+double-checks that the newer libsodium's HKDF got picked, because a
+detection bug would otherwise fall back silently and the badge would stay
+green regardless.
 
-## What this does and doesn't protect you from
+## What it protects against, and what it doesn't
 
-It protects you from someone who gets hold of your USB drive but doesn't
-know the passphrase, and from anyone watching or logging the channel you
-paste messages through. If one session's keys ever leak, that doesn't expose
-past or future messages either, thanks to the forward secrecy and
-post-compromise security built into the Double Ratchet design.
+Someone who gets your drive but not your passphrase. Anyone watching the
+channel you paste messages through. A leaked session key doesn't expose
+past or future messages either, courtesy of forward secrecy and
+post-compromise security in the ratchet.
 
-It doesn't protect you from a compromised computer: a keylogger sees your
-passphrase and everything you type, encryption or not. It doesn't protect
-you if someone reads your 12 recovery words or steals `vault.bin` directly,
-or if you trust a contact's identity without actually checking their
-fingerprint. And the channel you're pasting messages through still sees the
-ciphertext go by, along with when you sent it, even if it can't read what's
-inside.
+What it can't help with: a compromised computer — a keylogger sees your
+passphrase and everything else regardless of encryption. Someone reading
+your 12 words or grabbing `vault.bin` outright. Trusting a contact without
+actually checking their fingerprint. And whatever channel you're pasting
+through still sees ciphertext go by, plus timing — it just can't read the
+contents.
 
-## What this doesn't do yet
+## Not there yet
 
-Group chats, using one identity across multiple devices, and anything like
-key transparency. Each of these is a real chunk of work on its own, so
-they're left for later rather than half-done now.
+Group chats, one identity across multiple devices, key transparency. All
+real work, none of it worth doing halfway, so it waits.
 
 ## License
 
-MIT, see [LICENSE](LICENSE). Third-party code and data used by this project,
-the BIP-39 wordlist and libsodium, are credited in
-[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+MIT, see [LICENSE](LICENSE). The BIP-39 wordlist and libsodium are
+third-party and credited in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
