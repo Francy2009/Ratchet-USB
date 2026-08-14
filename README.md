@@ -1,5 +1,7 @@
 # Ratchet-USB
 
+**English** · [Italiano](README.it.md)
+
 [![CI](https://github.com/Francy2009/Ratchet-USB/actions/workflows/ci.yml/badge.svg)](https://github.com/Francy2009/Ratchet-USB/actions/workflows/ci.yml)
 
 A small command-line tool for sending encrypted messages without needing a
