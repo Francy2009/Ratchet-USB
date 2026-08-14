@@ -83,7 +83,9 @@ ImportedCard import_card(std::string_view base64_card) {
   r.bytes(out.card.spk_signature.data(), out.card.spk_signature.size());
 
   const uint32_t otpk_count = r.u32();
-  out.card.one_time_prekeys.reserve(otpk_count);
+  // A one-time prekey is a u32 id plus a 32-byte public key on the wire; the
+  // count is capped by how many of those the rest of the card could hold.
+  out.card.one_time_prekeys.reserve(r.bounded_count(otpk_count, 4 + 32));
   for (uint32_t i = 0; i < otpk_count; ++i) {
     store::PeerOtpk o;
     o.id = r.u32();

@@ -113,6 +113,28 @@ class Reader {
 
   bool at_end() const noexcept { return pos_ == len_; }
 
+  std::size_t remaining() const noexcept { return len_ - pos_; }
+
+  // How many records to reserve room for, given a count field that came out of
+  // the input itself.
+  //
+  // Reserving `count` directly is the bug this exists to prevent: a contact
+  // card is 250 bytes of pasted text and its count field is four bytes wide, so
+  // a card claiming 2^32-1 one-time prekeys asks for a ~150 GB allocation
+  // before a single one of them is read. The read loop would reject the input a
+  // moment later -- the bytes are not there -- but the allocation happens
+  // first. Capping by what the remaining input could physically hold keeps the
+  // reservation proportional to the data actually in hand, and costs nothing
+  // when the count is honest.
+  std::size_t bounded_count(uint32_t count,
+                            std::size_t min_bytes_per_item) const noexcept {
+    if (min_bytes_per_item == 0) {
+      return 0;
+    }
+    const std::size_t affordable = remaining() / min_bytes_per_item;
+    return count < affordable ? static_cast<std::size_t>(count) : affordable;
+  }
+
  private:
   void need(std::size_t n) const {
     // pos_ + n cannot overflow in practice (every caller passes a length that

@@ -74,7 +74,7 @@ PeerCard read_peer_card(serial::Reader& r) {
   r.bytes(card.spk_pub.data(), card.spk_pub.size());
   r.bytes(card.spk_signature.data(), card.spk_signature.size());
   const uint32_t count = r.u32();
-  card.one_time_prekeys.reserve(count);
+  card.one_time_prekeys.reserve(r.bounded_count(count, 4 + 32));
   for (uint32_t i = 0; i < count; ++i) {
     PeerOtpk o;
     o.id = r.u32();
@@ -177,8 +177,9 @@ Session read_session(serial::Reader& r, uint8_t version) {
   s.nr = r.u32();
   s.pn = r.u32();
 
+  // dh_pub(32) + n(4) + message_key(32); version 3 adds created_at(8).
   const uint32_t skipped_count = r.u32();
-  s.skipped.reserve(skipped_count);
+  s.skipped.reserve(r.bounded_count(skipped_count, 32 + 4 + 32));
   for (uint32_t i = 0; i < skipped_count; ++i) {
     s.skipped.push_back(read_skipped_key(r, version));
   }
@@ -265,28 +266,36 @@ VaultStore parse(const uint8_t* data, std::size_t len) {
   VaultStore store;
   r.bytes(store.seed.data(), store.seed.size());
 
+  // Each reservation below is capped by how many records the remaining bytes
+  // could actually contain. The store is authenticated by the time it gets
+  // here, so this is defence in depth rather than the front line -- but it is
+  // the same Reader the pasted formats use, and a count field is a count field.
   store.next_spk_id = r.u32();
   const uint32_t spk_count = r.u32();
-  store.signed_prekeys.reserve(spk_count);
+  // id(4) + pub(32) + sk(32) + signature(64); version 2 adds created_at(8).
+  store.signed_prekeys.reserve(r.bounded_count(spk_count, 4 + 32 + 32 + 64));
   for (uint32_t i = 0; i < spk_count; ++i) {
     store.signed_prekeys.push_back(read_signed_prekey(r, version));
   }
 
   store.next_otpk_id = r.u32();
   const uint32_t otpk_count = r.u32();
-  store.one_time_prekeys.reserve(otpk_count);
+  // id(4) + pub(32) + sk(32).
+  store.one_time_prekeys.reserve(r.bounded_count(otpk_count, 4 + 32 + 32));
   for (uint32_t i = 0; i < otpk_count; ++i) {
     store.one_time_prekeys.push_back(read_one_time_prekey(r));
   }
 
   const uint32_t contact_count = r.u32();
-  store.contacts.reserve(contact_count);
+  // An empty alias(4) + identity_pub(32) + verified(1) + has_card(1).
+  store.contacts.reserve(r.bounded_count(contact_count, 4 + 32 + 1 + 1));
   for (uint32_t i = 0; i < contact_count; ++i) {
     store.contacts.push_back(read_contact(r));
   }
 
   const uint32_t session_count = r.u32();
-  store.sessions.reserve(session_count);
+  // Fixed session fields, before the skipped-key list: 216 bytes.
+  store.sessions.reserve(r.bounded_count(session_count, 216));
   for (uint32_t i = 0; i < session_count; ++i) {
     store.sessions.push_back(read_session(r, version));
   }

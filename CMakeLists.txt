@@ -15,6 +15,13 @@ endif()
 
 option(RATCHET_BUILD_TESTS "Build the unit tests" ON)
 option(RATCHET_HARDENED "Enable hardening flags" ON)
+option(RATCHET_BUILD_FUZZERS "Build the libFuzzer targets (clang only)" OFF)
+
+# Shared by ratchet_core and the harnesses, so the library the fuzzer explores
+# and the harness driving it agree on their sanitizer runtimes -- mixing them
+# links but misreports.
+set(RATCHET_FUZZ_FLAGS
+    -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g)
 
 # --- libsodium -------------------------------------------------------------
 # The only crypto dependency. pkg-config first, then a manual search so the
@@ -116,6 +123,15 @@ if(RATCHET_HARDENED AND NOT MSVC)
   target_compile_definitions(ratchet_core PRIVATE _FORTIFY_SOURCE=2)
 endif()
 
+# Instrument the library itself, not just the harness: libFuzzer steers by
+# coverage, and coverage it cannot see is code it will not explore.
+if(RATCHET_BUILD_FUZZERS)
+  target_compile_options(ratchet_core PUBLIC
+                         -fsanitize=fuzzer-no-link,address,undefined
+                         -fno-omit-frame-pointer -g)
+  target_link_options(ratchet_core PUBLIC -fsanitize=address,undefined)
+endif()
+
 # --- executable ------------------------------------------------------------
 add_executable(ratchet-usb src/main.cpp)
 target_link_libraries(ratchet-usb PRIVATE ratchet_core)
@@ -127,6 +143,10 @@ endif()
 if(RATCHET_BUILD_TESTS)
   enable_testing()
   add_subdirectory(test)
+endif()
+
+if(RATCHET_BUILD_FUZZERS)
+  add_subdirectory(test/fuzz)
 endif()
 
 install(TARGETS ratchet-usb RUNTIME DESTINATION bin)
