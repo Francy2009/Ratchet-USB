@@ -66,6 +66,22 @@ ReceiveResult receive(store::VaultStore& vault, const IdentitySigningSecretKey& 
     }
     const std::size_t contact_index = static_cast<std::size_t>(idx);
 
+    // Before anything is looked up, consumed or replaced. Accepting an initial
+    // message throws away whatever session already exists with this contact,
+    // so a replay that got this far would cost the conversation every message
+    // sent after the one being replayed -- see store::AcceptedHandshake.
+    //
+    // env.header.dh_pub is the initiator's X3DH ephemeral: `initiate` draws a
+    // fresh one every time, so this rejects the same handshake arriving twice
+    // without ever rejecting a genuine new one.
+    if (vault.handshake_already_accepted(f.initiator_identity_pub,
+                                         env.header.dh_pub)) {
+      throw Error(
+          "this opening message has already been received once; ignoring it "
+          "(a repeated copy cannot tell us anything new, and acting on it "
+          "would discard the conversation you have had since)");
+    }
+
     const prekey::SignedPrekey* spk = nullptr;
     for (const prekey::SignedPrekey& candidate : vault.signed_prekeys) {
       if (candidate.id == f.spk_id) {
@@ -121,6 +137,11 @@ ReceiveResult receive(store::VaultStore& vault, const IdentitySigningSecretKey& 
     result.contact_index = contact_index;
     result.alias = vault.contacts[contact_index].alias;
     result.plaintext = ratchet::decrypt(s, env.header, env.ciphertext);
+    // Only now: decrypt throws on a bad tag, so a handshake is remembered
+    // once it has proved to be one, and a failed attempt cannot put an entry
+    // of someone else's choosing into the list.
+    vault.remember_handshake(f.initiator_identity_pub, env.header.dh_pub,
+                             static_cast<uint64_t>(std::time(nullptr)));
     result.session_established = true;
     return result;
   }

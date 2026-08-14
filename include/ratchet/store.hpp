@@ -57,6 +57,31 @@ struct SkippedKey {
   uint64_t created_at = 0;
 };
 
+// An X3DH handshake this vault has already accepted.
+//
+// Without this record, an initial message that used no one-time prekey can be
+// delivered more than once: X3DH with no one-time prekey is a function of
+// nothing but long-term and published keys, so replaying the same block
+// re-derives the same shared secret and decrypts again. That is bad on its own,
+// but the damage is what it does on the way: accepting an initial message
+// replaces the session it belongs to, so a block captured at the start of a
+// conversation and pasted back weeks later throws away the ratchet state both
+// sides have moved on to, and nothing either of them sends afterwards can be
+// read. The one-time prekey is what normally prevents this -- it is erased on
+// first use, so the second attempt finds it gone -- and this covers the case
+// where there was none left to use.
+//
+// The initiator's ephemeral public key is what identifies a handshake: it is
+// drawn fresh in every x3dh::initiate, so two genuine handshakes never share
+// one, and a replay by definition carries the same one again. The identity is
+// kept alongside it to make the record legible, not because the ephemeral
+// needs help being unique.
+struct AcceptedHandshake {
+  IdentitySigningPublicKey initiator_identity{};
+  x25519::PublicKey ephemeral_pub{};
+  uint64_t accepted_at = 0;
+};
+
 // Double Ratchet state for one contact. Field names follow the Signal Double
 // Ratchet specification's pseudocode (RK, DHs, DHr, CKs, CKr, Ns, Nr, PN) so
 // the two can be read side by side.
@@ -96,12 +121,36 @@ struct VaultStore {
 
   std::vector<Contact> contacts;
   std::vector<Session> sessions;
+  std::vector<AcceptedHandshake> accepted_handshakes;
 
   // Returns the index into `contacts`, or -1 if there is no match.
   int find_contact(std::string_view alias) const;
   int find_contact_by_identity(const IdentitySigningPublicKey& id) const;
   int find_session(std::size_t contact_index) const;
+
+  // Whether this exact handshake has been accepted before, i.e. whether an
+  // initial message carrying this ephemeral has already been received from
+  // this identity. True means the message being examined is a replay.
+  bool handshake_already_accepted(const IdentitySigningPublicKey& initiator,
+                                  const x25519::PublicKey& ephemeral_pub) const;
+
+  // Records an accepted handshake, evicting the oldest once the list is full.
+  // Call it only after the message actually decrypted: recording an attempt
+  // that failed would let anyone fill the list with entries of their choosing.
+  void remember_handshake(const IdentitySigningPublicKey& initiator,
+                          const x25519::PublicKey& ephemeral_pub, uint64_t now);
 };
+
+// How many accepted handshakes are remembered before the oldest is dropped.
+//
+// Each entry is 72 bytes, so the whole list is a few tens of kilobytes at this
+// size -- small enough not to matter next to the sessions it protects. Eviction
+// is what puts a ceiling on the vault rather than an expiry date, because an
+// entry that expires makes its handshake replayable again, and there is no age
+// at which that becomes safe. Reaching the ceiling takes 512 handshakes that
+// each decrypted, which over a channel where every message is pasted by hand is
+// not something an attacker arranges quietly.
+inline constexpr std::size_t kMaxAcceptedHandshakes = 512;
 
 // Serialises into a freshly allocated SecureBuffer, ready to be handed to
 // vault::seal.

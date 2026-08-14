@@ -14,8 +14,11 @@ constexpr std::array<uint8_t, 4> kStoreMagic = {'R', 'S', 'T', 'R'};
 // Version 1 had no `created_at` on the signed prekey; version 2 added it so
 // `unlock` can tell how old the current one is. Version 3 added the same
 // field to a skipped message key, so one that is never claimed expires
-// instead of sitting in the vault forever. All three are still readable.
-constexpr uint8_t kStoreVersion = 3;
+// instead of sitting in the vault forever. Version 4 added the list of X3DH
+// handshakes already accepted, so an initial message cannot be replayed. All
+// four are still readable: a vault written before the guard existed simply
+// starts with an empty list, which is the same state a fresh vault is in.
+constexpr uint8_t kStoreVersion = 4;
 
 void write_signed_prekey(serial::Writer<SecureBuffer>& w,
                          const prekey::SignedPrekey& spk) {
@@ -206,6 +209,35 @@ int VaultStore::find_contact_by_identity(const IdentitySigningPublicKey& id) con
   return -1;
 }
 
+bool VaultStore::handshake_already_accepted(
+    const IdentitySigningPublicKey& initiator,
+    const x25519::PublicKey& ephemeral_pub) const {
+  for (const AcceptedHandshake& h : accepted_handshakes) {
+    if (h.ephemeral_pub == ephemeral_pub && h.initiator_identity == initiator) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void VaultStore::remember_handshake(const IdentitySigningPublicKey& initiator,
+                                    const x25519::PublicKey& ephemeral_pub,
+                                    uint64_t now) {
+  if (handshake_already_accepted(initiator, ephemeral_pub)) {
+    return;
+  }
+  // Oldest first, so dropping from the front drops the one whose replay window
+  // has been open longest.
+  while (accepted_handshakes.size() >= kMaxAcceptedHandshakes) {
+    accepted_handshakes.erase(accepted_handshakes.begin());
+  }
+  AcceptedHandshake h;
+  h.initiator_identity = initiator;
+  h.ephemeral_pub = ephemeral_pub;
+  h.accepted_at = now;
+  accepted_handshakes.push_back(h);
+}
+
 int VaultStore::find_session(std::size_t contact_index) const {
   for (std::size_t i = 0; i < sessions.size(); ++i) {
     if (sessions[i].contact_index == contact_index) {
@@ -244,6 +276,15 @@ SecureBuffer serialize(const VaultStore& store) {
   w.u32(static_cast<uint32_t>(store.sessions.size()));
   for (const Session& s : store.sessions) {
     write_session(w, s);
+  }
+
+  // Appended last, so a version 3 vault is exactly this file minus these
+  // bytes and the reader below can tell the two apart on the version alone.
+  w.u32(static_cast<uint32_t>(store.accepted_handshakes.size()));
+  for (const AcceptedHandshake& h : store.accepted_handshakes) {
+    w.bytes(h.initiator_identity.data(), h.initiator_identity.size());
+    w.bytes(h.ephemeral_pub.data(), h.ephemeral_pub.size());
+    w.u64(h.accepted_at);
   }
 
   return out;
@@ -299,6 +340,23 @@ VaultStore parse(const uint8_t* data, std::size_t len) {
   for (uint32_t i = 0; i < session_count; ++i) {
     store.sessions.push_back(read_session(r, version));
   }
+
+  if (version >= 4) {
+    const uint32_t handshake_count = r.u32();
+    // initiator_identity(32) + ephemeral_pub(32) + accepted_at(8).
+    store.accepted_handshakes.reserve(
+        r.bounded_count(handshake_count, 32 + 32 + 8));
+    for (uint32_t i = 0; i < handshake_count; ++i) {
+      AcceptedHandshake h;
+      r.bytes(h.initiator_identity.data(), h.initiator_identity.size());
+      r.bytes(h.ephemeral_pub.data(), h.ephemeral_pub.size());
+      h.accepted_at = r.u64();
+      store.accepted_handshakes.push_back(h);
+    }
+  }
+  // Older vaults leave the list empty. That is the same state a vault created
+  // today starts in, so the guard simply begins protecting from the next
+  // handshake onwards; there is no history to reconstruct.
 
   if (!r.at_end()) {
     throw Error("internal: trailing data after the vault contents");

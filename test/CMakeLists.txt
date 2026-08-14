@@ -6,6 +6,7 @@ add_executable(ratchet_tests
                test_store.cpp
                test_x3dh.cpp
                test_ratchet.cpp
+               test_session.cpp
                test_message.cpp
                test_cli.cpp
                test_media.cpp
