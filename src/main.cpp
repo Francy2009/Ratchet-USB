@@ -48,7 +48,7 @@ constexpr uint64_t kSpkMaxAgeSeconds = kSpkMaxAgeDays * 24 * 60 * 60;
 // Only for the message `unlock` prints; the expiry rule itself lives in
 // ratchet::kSkippedKeyMaxAgeSeconds.
 constexpr uint64_t kSkippedKeyMaxAgeDays =
-    ::ratchet::ratchet::kSkippedKeyMaxAgeSeconds / (24 * 60 * 60);
+    ::ratchet::ratchet::kSkippedKeyMaxAgeDays;
 
 // Asks the user to pick one of `choices`, or returns an empty path if there is
 // no terminal to ask on or the answer was not a choice.

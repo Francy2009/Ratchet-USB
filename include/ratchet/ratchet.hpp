@@ -38,7 +38,9 @@ inline constexpr std::size_t kMaxSkip = 1000;
 // gap can be tolerated at all. A week is long enough for any delivery this is
 // meant to survive -- a message handed over on a USB stick, not one waiting on
 // a server.
-inline constexpr uint64_t kSkippedKeyMaxAgeSeconds = 7 * 24 * 60 * 60;
+inline constexpr uint64_t kSkippedKeyMaxAgeDays = 7;
+inline constexpr uint64_t kSkippedKeyMaxAgeSeconds =
+    kSkippedKeyMaxAgeDays * 24 * 60 * 60;
 
 // The two key-derivation steps the ratchet is built from. They are exposed
 // here, rather than kept private to the .cpp, so the test suite can check them
