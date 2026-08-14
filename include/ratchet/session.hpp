@@ -31,6 +31,13 @@ ReceiveResult receive(store::VaultStore& vault,
                       const IdentitySigningPublicKey& my_identity_pk,
                       const std::string& block);
 
+// Throws away every skipped message key in the vault that nobody claimed
+// within ratchet::kSkippedKeyMaxAgeSeconds, and returns how many were
+// dropped. `receive` already expires the keys of the session it touches; this
+// is the sweep `unlock` runs, so a vault that is opened but never received
+// into does not keep them forever either.
+std::size_t expire_skipped_keys(store::VaultStore& vault);
+
 }  // namespace ratchet::session
 
 #endif  // RATCHET_SESSION_HPP

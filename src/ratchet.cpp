@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <cstring>
+#include <ctime>
+#include <iterator>
 
 #include "ratchet/kdf.hpp"
 
@@ -123,10 +125,12 @@ void skip_message_keys(store::Session& s, uint32_t until) {
         "too many skipped messages in this chain (possible attack, or a very "
         "large gap in delivery)");
   }
+  const uint64_t now = static_cast<uint64_t>(std::time(nullptr));
   while (s.nr < until) {
     store::SkippedKey sk;
     sk.dh_pub = s.dhr_pub;
     sk.n = s.nr;
+    sk.created_at = now;
     SecureBytes<32> new_ckr;
     kdf_ck(s.chain_key_recv, new_ckr, sk.message_key);
     s.chain_key_recv = std::move(new_ckr);
@@ -193,8 +197,27 @@ void encrypt(store::Session& s, const std::string& plaintext,
   ciphertext = aead_encrypt(mk, plaintext, aad);
 }
 
+std::size_t expire_skipped_keys(store::Session& s, uint64_t now) {
+  const auto stale = [now](const store::SkippedKey& sk) {
+    // A key stamped in the future is left alone: that is a clock that went
+    // backwards, not an old key, and expiring it would lose a live message.
+    return now > sk.created_at && now - sk.created_at > kSkippedKeyMaxAgeSeconds;
+  };
+  const auto first = std::remove_if(s.skipped.begin(), s.skipped.end(), stale);
+  const std::size_t dropped =
+      static_cast<std::size_t>(std::distance(first, s.skipped.end()));
+  // Erasing runs SecureBytes' destructor over the tail, which zeroes the key
+  // material rather than just releasing it.
+  s.skipped.erase(first, s.skipped.end());
+  return dropped;
+}
+
 std::string decrypt(store::Session& s, const message::RatchetHeader& header,
                     const std::vector<uint8_t>& ciphertext) {
+  // Before anything else, so an expired key can neither decrypt a message nor
+  // keep occupying a slot in the kMaxSkip budget.
+  expire_skipped_keys(s, static_cast<uint64_t>(std::time(nullptr)));
+
   const std::vector<uint8_t> aad = message::header_aad(header);
 
   // Try a cached key from an earlier out-of-order gap first.

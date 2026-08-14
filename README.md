@@ -255,7 +255,16 @@ removes a whole category of counter-handling bugs. Messages that arrive out
 of order are handled the way Signal does it too: a capped list of up to 1000
 skipped message keys, so a short gap in delivery doesn't lose anything, while
 a bigger gap gets rejected outright, since otherwise someone could send a
-bogus header and make `recv` do unbounded work.
+bogus header and make `recv` do unbounded work. Those cached keys also expire
+after a week. A skipped key is the only part of the ratchet that doesn't move
+on by itself -- the chains either side of it have already ratcheted forward,
+but the key sits there waiting for a message that may never arrive -- so
+without an expiry a vault stolen months later would still open those old
+messages, and keys left behind by a chain the conversation has long since
+moved past would keep eating the 1000-key budget. `recv` sweeps the expired
+ones before it does anything else, and `unlock` sweeps every session, so a
+vault you only ever open expires them too. The trade-off is that a message
+that turns up more than a week late no longer decrypts.
 
 None of this proves that an identity key actually belongs to the person you
 think it does; that's something only a human can confirm. Importing someone's

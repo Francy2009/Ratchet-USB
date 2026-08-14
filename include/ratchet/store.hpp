@@ -51,6 +51,10 @@ struct SkippedKey {
   x25519::PublicKey dh_pub{};
   uint32_t n = 0;
   SecureBytes<32> message_key;
+  // Unix timestamp (seconds) of the moment the key was stashed, used to
+  // expire it once the message it belongs to is too late to still be coming.
+  // See ratchet::kSkippedKeyMaxAgeSeconds.
+  uint64_t created_at = 0;
 };
 
 // Double Ratchet state for one contact. Field names follow the Signal Double

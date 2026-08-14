@@ -68,6 +68,7 @@ store::VaultStore make_sample_store() {
   randombytes_buf(sk.dh_pub.data(), sk.dh_pub.size());
   sk.n = 1;
   randombytes_buf(sk.message_key.data(), sk.message_key.size());
+  sk.created_at = 1700000000;
   session.skipped.push_back(std::move(sk));
   s.sessions.push_back(std::move(session));
 
@@ -131,6 +132,7 @@ TEST("VaultStore serialize/parse round-trips every field") {
   CHECK(os.skipped[0].dh_pub == ps.skipped[0].dh_pub);
   CHECK_EQ(os.skipped[0].n, ps.skipped[0].n);
   CHECK(os.skipped[0].message_key.equals(ps.skipped[0].message_key));
+  CHECK_EQ(os.skipped[0].created_at, ps.skipped[0].created_at);
 }
 
 TEST("VaultStore round-trips an entirely empty store") {
