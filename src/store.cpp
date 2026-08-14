@@ -12,8 +12,10 @@ namespace {
 
 constexpr std::array<uint8_t, 4> kStoreMagic = {'R', 'S', 'T', 'R'};
 // Version 1 had no `created_at` on the signed prekey; version 2 added it so
-// `unlock` can tell how old the current one is. Both are still readable.
-constexpr uint8_t kStoreVersion = 2;
+// `unlock` can tell how old the current one is. Version 3 added the same
+// field to a skipped message key, so one that is never claimed expires
+// instead of sitting in the vault forever. All three are still readable.
+constexpr uint8_t kStoreVersion = 3;
 
 void write_signed_prekey(serial::Writer<SecureBuffer>& w,
                          const prekey::SignedPrekey& spk) {
@@ -107,13 +109,22 @@ void write_skipped_key(serial::Writer<SecureBuffer>& w, const SkippedKey& sk) {
   w.bytes(sk.dh_pub.data(), sk.dh_pub.size());
   w.u32(sk.n);
   w.bytes(sk.message_key.data(), sk.message_key.size());
+  w.u64(sk.created_at);
 }
 
-SkippedKey read_skipped_key(serial::Reader& r) {
+SkippedKey read_skipped_key(serial::Reader& r, uint8_t version) {
   SkippedKey sk;
   r.bytes(sk.dh_pub.data(), sk.dh_pub.size());
   sk.n = r.u32();
   r.bytes(sk.message_key.data(), sk.message_key.size());
+  if (version >= 3) {
+    sk.created_at = r.u64();
+  } else {
+    // Vaults written before expiry existed have no recorded age. Start the
+    // clock now rather than at the epoch: dropping keys the user has been
+    // carrying around would silently lose messages that are still in flight.
+    sk.created_at = static_cast<uint64_t>(std::time(nullptr));
+  }
   return sk;
 }
 
@@ -144,7 +155,7 @@ void write_session(serial::Writer<SecureBuffer>& w, const Session& s) {
   }
 }
 
-Session read_session(serial::Reader& r) {
+Session read_session(serial::Reader& r, uint8_t version) {
   Session s;
   s.contact_index = r.u32();
   r.bytes(s.root_key.data(), s.root_key.size());
@@ -169,7 +180,7 @@ Session read_session(serial::Reader& r) {
   const uint32_t skipped_count = r.u32();
   s.skipped.reserve(skipped_count);
   for (uint32_t i = 0; i < skipped_count; ++i) {
-    s.skipped.push_back(read_skipped_key(r));
+    s.skipped.push_back(read_skipped_key(r, version));
   }
   return s;
 }
@@ -246,7 +257,7 @@ VaultStore parse(const uint8_t* data, std::size_t len) {
     throw Error("internal: vault contents have the wrong internal format");
   }
   const uint8_t version = r.u8();
-  if (version != 1 && version != kStoreVersion) {
+  if (version < 1 || version > kStoreVersion) {
     throw Error("internal: unsupported vault store version " +
                std::to_string(version));
   }
@@ -277,7 +288,7 @@ VaultStore parse(const uint8_t* data, std::size_t len) {
   const uint32_t session_count = r.u32();
   store.sessions.reserve(session_count);
   for (uint32_t i = 0; i < session_count; ++i) {
-    store.sessions.push_back(read_session(r));
+    store.sessions.push_back(read_session(r, version));
   }
 
   if (!r.at_end()) {

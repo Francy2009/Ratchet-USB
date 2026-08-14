@@ -1,3 +1,5 @@
+#include <cstdint>
+#include <ctime>
 #include <string>
 #include <vector>
 
@@ -183,4 +185,77 @@ TEST("a gap larger than kMaxSkip is refused") {
   }
 
   CHECK_THROWS(rr::decrypt(pair.bob, last_header, last_ct));
+}
+
+TEST("a skipped key is dropped once it is older than the TTL") {
+  Pair pair = make_established_pair();
+
+  message::RatchetHeader h0;
+  std::vector<uint8_t> ct0;
+  rr::encrypt(pair.alice, "first", h0, ct0);
+  message::RatchetHeader h1;
+  std::vector<uint8_t> ct1;
+  rr::encrypt(pair.alice, "second", h1, ct1);
+
+  // Delivering the second message first caches the key for the first.
+  CHECK_EQ(rr::decrypt(pair.bob, h1, ct1), std::string("second"));
+  CHECK_EQ(pair.bob.skipped.size(), std::size_t{1});
+
+  // Backdate it to just inside the window: still usable.
+  const uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+  pair.bob.skipped[0].created_at = now - (rr::kSkippedKeyMaxAgeSeconds - 60);
+  CHECK_EQ(rr::expire_skipped_keys(pair.bob, now), std::size_t{0});
+
+  // One second past the window, and the message can no longer be read.
+  pair.bob.skipped[0].created_at = now - (rr::kSkippedKeyMaxAgeSeconds + 1);
+  CHECK_EQ(rr::expire_skipped_keys(pair.bob, now), std::size_t{1});
+  CHECK(pair.bob.skipped.empty());
+  CHECK_THROWS(rr::decrypt(pair.bob, h0, ct0));
+}
+
+TEST("decrypt expires stale keys on its own, freeing the kMaxSkip budget") {
+  Pair pair = make_established_pair();
+
+  // Open a gap that fills the cache, leaving no room for another skip.
+  message::RatchetHeader header;
+  std::vector<uint8_t> ct;
+  for (std::size_t i = 0; i < rr::kMaxSkip; ++i) {
+    rr::encrypt(pair.alice, "x", header, ct);
+  }
+  rr::encrypt(pair.alice, "the far side of the gap", header, ct);
+  CHECK_EQ(rr::decrypt(pair.bob, header, ct),
+           std::string("the far side of the gap"));
+  CHECK_EQ(pair.bob.skipped.size(), rr::kMaxSkip);
+
+  // Age the whole cache out. The next gap must be tolerated again rather than
+  // rejected by a budget that stale keys were still holding.
+  const uint64_t stale =
+      static_cast<uint64_t>(std::time(nullptr)) - rr::kSkippedKeyMaxAgeSeconds - 1;
+  for (store::SkippedKey& sk : pair.bob.skipped) {
+    sk.created_at = stale;
+  }
+
+  for (std::size_t i = 0; i < 10; ++i) {
+    rr::encrypt(pair.alice, "y", header, ct);
+  }
+  rr::encrypt(pair.alice, "after the sweep", header, ct);
+  CHECK_EQ(rr::decrypt(pair.bob, header, ct), std::string("after the sweep"));
+  CHECK_EQ(pair.bob.skipped.size(), std::size_t{10});
+}
+
+TEST("a key stamped in the future is not expired by a clock that slipped") {
+  Pair pair = make_established_pair();
+
+  message::RatchetHeader h0;
+  std::vector<uint8_t> ct0;
+  rr::encrypt(pair.alice, "first", h0, ct0);
+  message::RatchetHeader h1;
+  std::vector<uint8_t> ct1;
+  rr::encrypt(pair.alice, "second", h1, ct1);
+  CHECK_EQ(rr::decrypt(pair.bob, h1, ct1), std::string("second"));
+
+  const uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+  pair.bob.skipped[0].created_at = now + 10 * rr::kSkippedKeyMaxAgeSeconds;
+  CHECK_EQ(rr::expire_skipped_keys(pair.bob, now), std::size_t{0});
+  CHECK_EQ(rr::decrypt(pair.bob, h0, ct0), std::string("first"));
 }

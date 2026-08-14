@@ -1,5 +1,7 @@
 #include "ratchet/session.hpp"
 
+#include <ctime>
+
 #include "ratchet/message.hpp"
 #include "ratchet/ratchet.hpp"
 #include "ratchet/x3dh.hpp"
@@ -142,6 +144,15 @@ ReceiveResult receive(store::VaultStore& vault, const IdentitySigningSecretKey& 
   }
 
   throw Error("message from an unrecognised sender");
+}
+
+std::size_t expire_skipped_keys(store::VaultStore& vault) {
+  const uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+  std::size_t dropped = 0;
+  for (store::Session& s : vault.sessions) {
+    dropped += ratchet::expire_skipped_keys(s, now);
+  }
+  return dropped;
 }
 
 }  // namespace ratchet::session

@@ -24,6 +24,7 @@
 #include "ratchet/cli.hpp"
 #include "ratchet/identity.hpp"
 #include "ratchet/media.hpp"
+#include "ratchet/ratchet.hpp"
 #include "ratchet/secure.hpp"
 #include "ratchet/session.hpp"
 #include "ratchet/store.hpp"
@@ -44,6 +45,10 @@ constexpr std::size_t kReplenishThreshold = 5;
 // How long a signed prekey is trusted before `unlock` rotates it on its own.
 constexpr uint64_t kSpkMaxAgeDays = 30;
 constexpr uint64_t kSpkMaxAgeSeconds = kSpkMaxAgeDays * 24 * 60 * 60;
+// Only for the message `unlock` prints; the expiry rule itself lives in
+// ratchet::kSkippedKeyMaxAgeSeconds.
+constexpr uint64_t kSkippedKeyMaxAgeDays =
+    ::ratchet::ratchet::kSkippedKeyMaxAgeDays;
 
 // Asks the user to pick one of `choices`, or returns an empty path if there is
 // no terminal to ask on or the answer was not a choice.
@@ -321,6 +326,20 @@ bool maintain_prekeys(store::VaultStore& store,
   return changed;
 }
 
+// Throws away skipped message keys nobody claimed in time. `recv` already
+// does this for the session it touches, but a vault that is only ever opened
+// would keep them indefinitely, so `unlock` sweeps all of them. Returns
+// whether anything was dropped (and so whether the store needs saving).
+bool expire_skipped_keys(store::VaultStore& store) {
+  const std::size_t dropped = session::expire_skipped_keys(store);
+  if (dropped > 0) {
+    std::cout << "Dropped " << dropped << " skipped message key(s) unclaimed for\n"
+              << "more than " << kSkippedKeyMaxAgeDays
+              << " days; those messages can no longer be decrypted.\n";
+  }
+  return dropped > 0;
+}
+
 // --- commands ----------------------------------------------------------------
 
 int cmd_init(const Options& opts) {
@@ -398,8 +417,9 @@ int cmd_unlock(const Options& opts) {
   IdentitySigningPublicKey identity_pk;
   derive_identity(store.seed, identity_sk, identity_pk);
 
-  const bool changed = maintain_prekeys(store, identity_sk);
+  bool changed = maintain_prekeys(store, identity_sk);
   identity_sk.wipe();
+  changed = expire_skipped_keys(store) || changed;
 
   if (changed) {
     save_vault(path, store, opened.params, opened.passphrase);

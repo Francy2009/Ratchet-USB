@@ -1,6 +1,7 @@
 #ifndef RATCHET_RATCHET_HPP
 #define RATCHET_RATCHET_HPP
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -26,6 +27,20 @@ namespace ratchet::ratchet {
 // catch up on missed messages. Without it, a header claiming an enormous `n`
 // would make decryption allocate and hash without bound.
 inline constexpr std::size_t kMaxSkip = 1000;
+
+// How long a cached skipped message key is kept before it is thrown away. A
+// skipped key is the one piece of ratchet state that does not move on by
+// itself: the chain keys either side of it have already been ratcheted
+// forward, but the key sits in the vault waiting for a message that may never
+// arrive. Without an expiry it would wait forever, so a vault stolen months
+// later still decrypts those old messages, and a chain the conversation left
+// behind long ago keeps eating room from the kMaxSkip budget until no further
+// gap can be tolerated at all. A week is long enough for any delivery this is
+// meant to survive -- a message handed over on a USB stick, not one waiting on
+// a server.
+inline constexpr uint64_t kSkippedKeyMaxAgeDays = 7;
+inline constexpr uint64_t kSkippedKeyMaxAgeSeconds =
+    kSkippedKeyMaxAgeDays * 24 * 60 * 60;
 
 // The two key-derivation steps the ratchet is built from. They are exposed
 // here, rather than kept private to the .cpp, so the test suite can check them
@@ -70,6 +85,14 @@ void init_receiver(store::Session& session, const SecureBytes<32>& shared_secret
 // in the envelope's ratchet header.
 void encrypt(store::Session& session, const std::string& plaintext,
             message::RatchetHeader& header, std::vector<uint8_t>& ciphertext);
+
+// Drops every cached skipped key stashed more than kSkippedKeyMaxAgeSeconds
+// before `now` (a Unix timestamp in seconds), and returns how many were
+// dropped. `decrypt` runs this against the system clock before it does
+// anything else; it is exposed so `unlock` can expire keys on a vault that is
+// opened but never received into, and so tests can drive it from a fixed
+// clock.
+std::size_t expire_skipped_keys(store::Session& session, uint64_t now);
 
 // Decrypts an incoming envelope, performing a DH ratchet step first if its
 // header carries a new ratchet public key, and caching any message keys
