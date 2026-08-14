@@ -274,8 +274,22 @@ jobs:
 
       # Every committed corpus entry is replayed on every run, so an input that
       # once found a bug can never quietly stop being checked.
-      - name: Replay the committed corpus
-        run: ./build-fuzz/test/fuzz/fuzz_parsers test/fuzz/corpus -runs=0
+      - name: Replay the committed corpora
+        run: |
+          ./build-fuzz/test/fuzz/fuzz_parsers test/fuzz/corpus -runs=0
+          ./build-fuzz/test/fuzz/fuzz_session test/fuzz/corpus_session -runs=0
+
+      - name: Fuzz the protocol state machine
+        env:
+          DURATION: ${{ github.event_name == 'schedule' && '600' || '60' }}
+        # Separate from the parser run below because it is checking something
+        # else: not that malformed input is refused, but that no interleaving
+        # of sends, deliveries, alterations and repeats ever gets a message to
+        # decrypt when it should not. A violation aborts.
+        run: |
+          mkdir -p .fuzz-out
+          ./build-fuzz/test/fuzz/fuzz_session .fuzz-out test/fuzz/corpus_session \
+            -max_total_time="$DURATION" -rss_limit_mb=2048 -print_final_stats=1
 
       - name: Fuzz
         env:
