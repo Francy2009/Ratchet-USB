@@ -41,8 +41,14 @@ void init_sodium();
 // memory, no crash required.
 //
 // Best-effort by design: a hardening step that cannot be applied is not a
-// reason to refuse to run, so failures are silent and the function returns
-// whether both took effect, for the tests to check.
+// reason to refuse to run, so failures are silent.
+//
+// Returns true only when *both* protections are in place. Outside Linux that
+// is false by construction: the core-dump limit still applies, but the ptrace
+// half has no portable equivalent here, so a macOS build really is the weaker
+// of the two and the return value says so rather than flattering itself.
+// Callers that only want the process hardened as far as it goes can ignore the
+// result; it is there so a test can tell the two cases apart.
 bool harden_process() noexcept;
 
 // Fixed-size buffer for key material.

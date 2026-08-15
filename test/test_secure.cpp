@@ -25,9 +25,21 @@ TEST("harden_process disables core dumps and ptrace attachment") {
   CHECK(pid >= 0);
 
   if (pid == 0) {
-    if (!harden_process()) {
-      _exit(10);  // reported failure on a platform where both should work
+    const bool fully_hardened = harden_process();
+
+    // The return value says whether *everything* was applied, and on a platform
+    // without the ptrace half it is honestly false -- so it is only an
+    // assertion where both halves exist. Asserting it everywhere is what broke
+    // this test on macOS: the code was right and the test was wrong about what
+    // the platform promises. What follows checks the effects themselves, which
+    // is the property that actually matters.
+#if defined(__linux__)
+    if (!fully_hardened) {
+      _exit(10);
     }
+#else
+    (void)fully_hardened;
+#endif
 
     struct rlimit core {};
     if (getrlimit(RLIMIT_CORE, &core) != 0) {

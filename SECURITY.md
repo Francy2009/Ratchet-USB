@@ -40,6 +40,12 @@ to defend against it:
 - **A compromised host.** Malware on the machine you plug the drive into can
   read the passphrase as you type it and the plaintext as it is printed.
   Nothing in this tool can fix that.
+- **Another process running as you, on macOS.** On Linux the tool clears its
+  dumpable flag at startup, which stops a process running as the same user from
+  attaching with ptrace and reading an open vault out of memory. There is no
+  portable equivalent in this codebase for macOS, so a macOS build does not have
+  that protection — one more reason the platform is listed as unverified.
+  Refusing to write a core dump works on both.
 - **Traffic analysis.** The transport sees a base64 block of a certain size at
   a certain time, addressed to somebody. That metadata is not hidden.
 - **A forgotten passphrase.** There is no recovery path, by design. The BIP-39
