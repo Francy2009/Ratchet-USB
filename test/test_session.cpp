@@ -10,6 +10,7 @@
 
 #include "ratchet/session.hpp"
 #include "ratchet/store.hpp"
+#include "ratchet/wire.hpp"
 #include "ratchet/x3dh.hpp"
 #include "test_support.hpp"
 
@@ -197,4 +198,85 @@ TEST("remember_handshake evicts the oldest once the list is full") {
   const std::size_t before = s.accepted_handshakes.size();
   s.remember_handshake(id, ephemerals.back(), 1700009999);
   CHECK_EQ(s.accepted_handshakes.size(), before);
+}
+
+// RU-03. decrypt() ratchets chains, caches skipped keys and can perform a whole
+// DH step before the AEAD tag is checked -- it has to, since the tag cannot be
+// verified until the key exists. So a forged message rearranges the session and
+// only then fails, and the question is whether that rearrangement survives.
+//
+// It used to survive in memory and was saved from mattering only by `recv` not
+// writing the vault when a command throws: a real property, resting on an
+// invariant written down nowhere. These tests state it directly, against the
+// serialised store, so it holds regardless of what any caller does afterwards.
+namespace {
+
+// The bytes a failed delivery must not change.
+std::vector<uint8_t> snapshot(const store::VaultStore& vault) {
+  const SecureBuffer buf = store::serialize(vault);
+  return std::vector<uint8_t>(buf.data(), buf.data() + buf.size());
+}
+
+// Corrupts the last byte of the envelope body, which is inside the Poly1305
+// tag. Everything structural survives -- the sender id, the flag that says
+// whether this is an opening message, the ratchet header -- so the message is
+// routed to the right contact and the ratchet is driven exactly as far as a
+// genuine one would drive it, and only the tag check fails. Flipping a byte at
+// a guessed offset in the armour is not good enough: it tends to break the
+// framing instead, and the delivery then fails before the session is touched
+// at all, which makes the test pass whether or not the bug is present.
+std::string forge(const std::string& block) {
+  std::vector<uint8_t> body = wire::decode_block("MESSAGE", block);
+  body.back() ^= 0x01u;
+  return wire::encode_block("MESSAGE", body.data(), body.size());
+}
+
+}  // namespace
+
+TEST("a forged message leaves an established session byte-for-byte unchanged") {
+  Party alice = make_party(3);
+  Party bob = make_party(3);
+  introduce(bob, alice, "bob");
+  introduce(alice, bob, "alice");
+
+  // Establish, and exchange enough that the session carries real state.
+  const std::string opening =
+      session::send(alice.vault, alice.sk, alice.pk, 0, "one");
+  CHECK_EQ(session::receive(bob.vault, bob.sk, bob.pk, opening).plaintext, "one");
+  const std::string reply = session::send(bob.vault, bob.sk, bob.pk, 0, "two");
+  CHECK_EQ(session::receive(alice.vault, alice.sk, alice.pk, reply).plaintext, "two");
+
+  const std::string genuine =
+      session::send(alice.vault, alice.sk, alice.pk, 0, "three");
+  const std::vector<uint8_t> before = snapshot(bob.vault);
+
+  CHECK_THROWS(session::receive(bob.vault, bob.sk, bob.pk, forge(genuine)));
+
+  CHECK(snapshot(bob.vault) == before);
+
+  // And the session is not merely unchanged, it still works: the genuine
+  // message that follows the forgery decrypts exactly as it would have.
+  CHECK_EQ(session::receive(bob.vault, bob.sk, bob.pk, genuine).plaintext, "three");
+}
+
+TEST("a forged opening message consumes no one-time prekey") {
+  Party alice = make_party(3);
+  Party bob = make_party(3);
+  introduce(bob, alice, "bob");
+  introduce(alice, bob, "alice");
+
+  const std::string opening =
+      session::send(alice.vault, alice.sk, alice.pk, 0, "hello");
+  const std::size_t prekeys_before = bob.vault.one_time_prekeys.size();
+  const std::vector<uint8_t> before = snapshot(bob.vault);
+
+  CHECK_THROWS(session::receive(bob.vault, bob.sk, bob.pk, forge(opening)));
+
+  // Erasing the prekey before the message proved genuine would have let anyone
+  // exhaust the pool by pasting nonsense.
+  CHECK_EQ(bob.vault.one_time_prekeys.size(), prekeys_before);
+  CHECK(snapshot(bob.vault) == before);
+
+  // The real opening still establishes the session afterwards.
+  CHECK_EQ(session::receive(bob.vault, bob.sk, bob.pk, opening).plaintext, "hello");
 }

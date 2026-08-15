@@ -247,6 +247,41 @@ int VaultStore::find_session(std::size_t contact_index) const {
   return -1;
 }
 
+Session clone_session(const Session& session) {
+  Session out;
+  out.contact_index = session.contact_index;
+  out.root_key.assign(session.root_key);
+
+  out.has_dhs = session.has_dhs;
+  out.dhs_sk.assign(session.dhs_sk);
+  out.dhs_pub = session.dhs_pub;
+
+  out.has_dhr = session.has_dhr;
+  out.dhr_pub = session.dhr_pub;
+
+  out.has_cks = session.has_cks;
+  out.chain_key_send.assign(session.chain_key_send);
+
+  out.has_ckr = session.has_ckr;
+  out.chain_key_recv.assign(session.chain_key_recv);
+
+  out.ns = session.ns;
+  out.nr = session.nr;
+  out.pn = session.pn;
+
+  out.skipped.reserve(session.skipped.size());
+  for (const SkippedKey& sk : session.skipped) {
+    SkippedKey copy;
+    copy.dh_pub = sk.dh_pub;
+    copy.n = sk.n;
+    copy.message_key.assign(sk.message_key);
+    copy.created_at = sk.created_at;
+    out.skipped.push_back(std::move(copy));
+  }
+
+  return out;
+}
+
 SecureBuffer serialize(const VaultStore& store) {
   SecureBuffer out;
   serial::Writer<SecureBuffer> w(out);

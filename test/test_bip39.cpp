@@ -88,7 +88,10 @@ TEST("encode matches the BIP-39 reference vectors") {
   for (const Vector& v : vectors) {
     Entropy entropy;
     from_hex(entropy, v.entropy);
-    CHECK_EQ(encode(entropy), std::string(v.mnemonic));
+    SecureString mnemonic;
+    encode(entropy, mnemonic);
+    CHECK_EQ(std::string(mnemonic.data(), mnemonic.size()),
+             std::string(v.mnemonic));
   }
 }
 
@@ -102,7 +105,9 @@ TEST("decode is the inverse of encode on the reference vectors") {
     Entropy entropy;
     from_hex(entropy, hex);
     Entropy round_trip;
-    decode(encode(entropy), round_trip);
+    SecureString mnemonic;
+    encode(entropy, mnemonic);
+    decode(std::string_view(mnemonic.data(), mnemonic.size()), round_trip);
     CHECK_EQ(to_hex(round_trip), std::string(hex));
   }
 }
@@ -112,7 +117,9 @@ TEST("encode/decode round-trip on freshly generated entropy") {
     Entropy entropy;
     generate_entropy(entropy);
 
-    const std::string mnemonic = encode(entropy);
+    SecureString secure_mnemonic;
+    encode(entropy, secure_mnemonic);
+    const std::string mnemonic(secure_mnemonic.data(), secure_mnemonic.size());
 
     size_t spaces = 0;
     for (char c : mnemonic) {

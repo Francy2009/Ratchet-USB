@@ -55,8 +55,9 @@ void generate_entropy(Entropy& out) {
   randombytes_buf(out.data(), out.size());
 }
 
-std::string encode(const Entropy& entropy) {
+void encode(const Entropy& entropy, SecureString& out) {
   init_sodium();
+  out.clear();
 
   // The checksum is the first 4 bits of SHA-256(entropy); appending it to the
   // entropy gives the 132 bits that split evenly into 12 eleven-bit indices.
@@ -67,22 +68,24 @@ std::string encode(const Entropy& entropy) {
   std::memcpy(bits, entropy.data(), kEntropyBytes);
   bits[kEntropyBytes] = digest[0];
 
-  std::string mnemonic;
-  mnemonic.reserve(kWordCount * 9);
   for (std::size_t w = 0; w < kWordCount; ++w) {
     std::size_t index = 0;
     for (std::size_t b = 0; b < kBitsPerWord; ++b) {
       index = (index << 1) | (bit_at(bits, w * kBitsPerWord + b) ? 1u : 0u);
     }
     if (w > 0) {
-      mnemonic.push_back(' ');
+      out.push_back(' ');
     }
-    mnemonic.append(kEnglishWordlist[index]);
+    // Character by character: appending the word as a block would go through
+    // an intermediate the caller cannot wipe, which is the whole thing this
+    // signature exists to avoid.
+    for (const char c : kEnglishWordlist[index]) {
+      out.push_back(c);
+    }
   }
 
   sodium_memzero(bits, sizeof bits);
   sodium_memzero(digest, sizeof digest);
-  return mnemonic;
 }
 
 void decode(std::string_view mnemonic, Entropy& out) {

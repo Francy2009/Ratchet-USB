@@ -28,7 +28,14 @@ void generate_entropy(Entropy& out);
 
 // Encodes entropy as a 12-word mnemonic (words separated by single spaces),
 // appending the BIP-39 checksum nibble.
-std::string encode(const Entropy& entropy);
+//
+// The result goes into a SecureString rather than being returned as a
+// std::string, because the mnemonic *is* the master secret -- those twelve
+// words rebuild the seed and the identity on their own. Returning it by value
+// would put the one secret the whole project is built around into ordinary
+// heap memory that is never wiped and can be paged out to swap, which is the
+// treatment every other secret here is carefully spared.
+void encode(const Entropy& entropy, SecureString& out);
 
 // Parses a 12-word mnemonic back into entropy. Words may be separated by any
 // run of whitespace. Throws Error on an unknown word, a wrong word count, or a

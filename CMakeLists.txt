@@ -119,7 +119,10 @@ if(RATCHET_HARDENED AND NOT MSVC)
   target_compile_options(ratchet_core PRIVATE
                          -Wall -Wextra -Wpedantic -Wshadow -Wconversion
                          -fstack-protector-strong)
-  # Secrets should never reach a core dump on a machine we do not control.
+  # Bounds-checked forms of the libc calls the compiler can prove the size of.
+  # This says nothing about core dumps, whatever an earlier version of this
+  # comment claimed -- keeping secrets out of a dump is a run-time matter, and
+  # it is harden_process() in src/secure.cpp that does it.
   target_compile_definitions(ratchet_core PRIVATE _FORTIFY_SOURCE=2)
 endif()
 

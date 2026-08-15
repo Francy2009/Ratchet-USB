@@ -152,6 +152,17 @@ struct VaultStore {
 // not something an attacker arranges quietly.
 inline constexpr std::size_t kMaxAcceptedHandshakes = 512;
 
+// A deliberate, deep copy of a session, key material and all.
+//
+// Session cannot be copied implicitly, and that is on purpose: SecureBytes
+// deletes its copy constructor so that a second copy of a secret can never
+// appear by accident, with a lifetime nobody is tracking. This function is the
+// sanctioned exception, spelled out by name at the one call site that needs
+// it -- `receive` decrypts into a copy and adopts it only once the AEAD tag has
+// checked out, so a forged message cannot leave a half-ratcheted session
+// behind. The copy is wiped when it goes out of scope like any other.
+Session clone_session(const Session& session);
+
 // Serialises into a freshly allocated SecureBuffer, ready to be handed to
 // vault::seal.
 SecureBuffer serialize(const VaultStore& store);
