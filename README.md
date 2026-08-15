@@ -346,7 +346,33 @@ contents.
 Group chats, one identity across multiple devices, key transparency. All
 real work, none of it worth doing halfway, so it waits.
 
+## Disclaimer
+
+There is no server here, and that is not a slogan — nothing this tool does
+ever leaves your machine and the drive in your pocket. No account, no
+telemetry, no update check, no key directory phoning home. Which also means
+I have nothing: I cannot see your messages, cannot recover your vault, and
+cannot hand anything over to anyone, because none of it ever reaches me.
+The flip side is that the whole thing is on you. Lose the drive or forget
+the passphrase and the messages are gone, and I have no way to help.
+
+I publish this because I think people should be able to talk privately. I
+have no control over what anybody does with it once it is downloaded, and I
+take no responsibility for it. Use it lawfully. It is a privacy tool, not
+cover for hurting somebody.
+
+Encryption is regulated differently from one country to the next, and in a
+few places using or importing it is restricted outright. Checking what
+applies where you are is your job, not mine.
+
+And once more, because it is the thing most likely to matter to you: this
+has not been independently audited. If being read would put you in real
+danger, do not let this be your only layer.
+
 ## License
 
-MIT, see [LICENSE](LICENSE). The BIP-39 wordlist and libsodium are
-third-party and credited in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+MIT, see [LICENSE](LICENSE) — which, in the two paragraphs in capitals at
+the bottom, is also the legal version of everything above: the software
+comes with no warranty of any kind, and I am not liable for what it does or
+fails to do. The BIP-39 wordlist and libsodium are third-party and credited
+in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
