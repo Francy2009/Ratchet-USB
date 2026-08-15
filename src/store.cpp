@@ -14,8 +14,11 @@ constexpr std::array<uint8_t, 4> kStoreMagic = {'R', 'S', 'T', 'R'};
 // Version 1 had no `created_at` on the signed prekey; version 2 added it so
 // `unlock` can tell how old the current one is. Version 3 added the same
 // field to a skipped message key, so one that is never claimed expires
-// instead of sitting in the vault forever. All three are still readable.
-constexpr uint8_t kStoreVersion = 3;
+// instead of sitting in the vault forever. Version 4 added the list of X3DH
+// handshakes already accepted, so an initial message cannot be replayed. All
+// four are still readable: a vault written before the guard existed simply
+// starts with an empty list, which is the same state a fresh vault is in.
+constexpr uint8_t kStoreVersion = 4;
 
 void write_signed_prekey(serial::Writer<SecureBuffer>& w,
                          const prekey::SignedPrekey& spk) {
@@ -74,7 +77,7 @@ PeerCard read_peer_card(serial::Reader& r) {
   r.bytes(card.spk_pub.data(), card.spk_pub.size());
   r.bytes(card.spk_signature.data(), card.spk_signature.size());
   const uint32_t count = r.u32();
-  card.one_time_prekeys.reserve(count);
+  card.one_time_prekeys.reserve(r.bounded_count(count, 4 + 32));
   for (uint32_t i = 0; i < count; ++i) {
     PeerOtpk o;
     o.id = r.u32();
@@ -177,8 +180,9 @@ Session read_session(serial::Reader& r, uint8_t version) {
   s.nr = r.u32();
   s.pn = r.u32();
 
+  // dh_pub(32) + n(4) + message_key(32); version 3 adds created_at(8).
   const uint32_t skipped_count = r.u32();
-  s.skipped.reserve(skipped_count);
+  s.skipped.reserve(r.bounded_count(skipped_count, 32 + 4 + 32));
   for (uint32_t i = 0; i < skipped_count; ++i) {
     s.skipped.push_back(read_skipped_key(r, version));
   }
@@ -205,6 +209,35 @@ int VaultStore::find_contact_by_identity(const IdentitySigningPublicKey& id) con
   return -1;
 }
 
+bool VaultStore::handshake_already_accepted(
+    const IdentitySigningPublicKey& initiator,
+    const x25519::PublicKey& ephemeral_pub) const {
+  for (const AcceptedHandshake& h : accepted_handshakes) {
+    if (h.ephemeral_pub == ephemeral_pub && h.initiator_identity == initiator) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void VaultStore::remember_handshake(const IdentitySigningPublicKey& initiator,
+                                    const x25519::PublicKey& ephemeral_pub,
+                                    uint64_t now) {
+  if (handshake_already_accepted(initiator, ephemeral_pub)) {
+    return;
+  }
+  // Oldest first, so dropping from the front drops the one whose replay window
+  // has been open longest.
+  while (accepted_handshakes.size() >= kMaxAcceptedHandshakes) {
+    accepted_handshakes.erase(accepted_handshakes.begin());
+  }
+  AcceptedHandshake h;
+  h.initiator_identity = initiator;
+  h.ephemeral_pub = ephemeral_pub;
+  h.accepted_at = now;
+  accepted_handshakes.push_back(h);
+}
+
 int VaultStore::find_session(std::size_t contact_index) const {
   for (std::size_t i = 0; i < sessions.size(); ++i) {
     if (sessions[i].contact_index == contact_index) {
@@ -212,6 +245,41 @@ int VaultStore::find_session(std::size_t contact_index) const {
     }
   }
   return -1;
+}
+
+Session clone_session(const Session& session) {
+  Session out;
+  out.contact_index = session.contact_index;
+  out.root_key.assign(session.root_key);
+
+  out.has_dhs = session.has_dhs;
+  out.dhs_sk.assign(session.dhs_sk);
+  out.dhs_pub = session.dhs_pub;
+
+  out.has_dhr = session.has_dhr;
+  out.dhr_pub = session.dhr_pub;
+
+  out.has_cks = session.has_cks;
+  out.chain_key_send.assign(session.chain_key_send);
+
+  out.has_ckr = session.has_ckr;
+  out.chain_key_recv.assign(session.chain_key_recv);
+
+  out.ns = session.ns;
+  out.nr = session.nr;
+  out.pn = session.pn;
+
+  out.skipped.reserve(session.skipped.size());
+  for (const SkippedKey& sk : session.skipped) {
+    SkippedKey copy;
+    copy.dh_pub = sk.dh_pub;
+    copy.n = sk.n;
+    copy.message_key.assign(sk.message_key);
+    copy.created_at = sk.created_at;
+    out.skipped.push_back(std::move(copy));
+  }
+
+  return out;
 }
 
 SecureBuffer serialize(const VaultStore& store) {
@@ -245,6 +313,15 @@ SecureBuffer serialize(const VaultStore& store) {
     write_session(w, s);
   }
 
+  // Appended last, so a version 3 vault is exactly this file minus these
+  // bytes and the reader below can tell the two apart on the version alone.
+  w.u32(static_cast<uint32_t>(store.accepted_handshakes.size()));
+  for (const AcceptedHandshake& h : store.accepted_handshakes) {
+    w.bytes(h.initiator_identity.data(), h.initiator_identity.size());
+    w.bytes(h.ephemeral_pub.data(), h.ephemeral_pub.size());
+    w.u64(h.accepted_at);
+  }
+
   return out;
 }
 
@@ -265,31 +342,56 @@ VaultStore parse(const uint8_t* data, std::size_t len) {
   VaultStore store;
   r.bytes(store.seed.data(), store.seed.size());
 
+  // Each reservation below is capped by how many records the remaining bytes
+  // could actually contain. The store is authenticated by the time it gets
+  // here, so this is defence in depth rather than the front line -- but it is
+  // the same Reader the pasted formats use, and a count field is a count field.
   store.next_spk_id = r.u32();
   const uint32_t spk_count = r.u32();
-  store.signed_prekeys.reserve(spk_count);
+  // id(4) + pub(32) + sk(32) + signature(64); version 2 adds created_at(8).
+  store.signed_prekeys.reserve(r.bounded_count(spk_count, 4 + 32 + 32 + 64));
   for (uint32_t i = 0; i < spk_count; ++i) {
     store.signed_prekeys.push_back(read_signed_prekey(r, version));
   }
 
   store.next_otpk_id = r.u32();
   const uint32_t otpk_count = r.u32();
-  store.one_time_prekeys.reserve(otpk_count);
+  // id(4) + pub(32) + sk(32).
+  store.one_time_prekeys.reserve(r.bounded_count(otpk_count, 4 + 32 + 32));
   for (uint32_t i = 0; i < otpk_count; ++i) {
     store.one_time_prekeys.push_back(read_one_time_prekey(r));
   }
 
   const uint32_t contact_count = r.u32();
-  store.contacts.reserve(contact_count);
+  // An empty alias(4) + identity_pub(32) + verified(1) + has_card(1).
+  store.contacts.reserve(r.bounded_count(contact_count, 4 + 32 + 1 + 1));
   for (uint32_t i = 0; i < contact_count; ++i) {
     store.contacts.push_back(read_contact(r));
   }
 
   const uint32_t session_count = r.u32();
-  store.sessions.reserve(session_count);
+  // Fixed session fields, before the skipped-key list: 216 bytes.
+  store.sessions.reserve(r.bounded_count(session_count, 216));
   for (uint32_t i = 0; i < session_count; ++i) {
     store.sessions.push_back(read_session(r, version));
   }
+
+  if (version >= 4) {
+    const uint32_t handshake_count = r.u32();
+    // initiator_identity(32) + ephemeral_pub(32) + accepted_at(8).
+    store.accepted_handshakes.reserve(
+        r.bounded_count(handshake_count, 32 + 32 + 8));
+    for (uint32_t i = 0; i < handshake_count; ++i) {
+      AcceptedHandshake h;
+      r.bytes(h.initiator_identity.data(), h.initiator_identity.size());
+      r.bytes(h.ephemeral_pub.data(), h.ephemeral_pub.size());
+      h.accepted_at = r.u64();
+      store.accepted_handshakes.push_back(h);
+    }
+  }
+  // Older vaults leave the list empty. That is the same state a vault created
+  // today starts in, so the guard simply begins protecting from the next
+  // handshake onwards; there is no history to reconstruct.
 
   if (!r.at_end()) {
     throw Error("internal: trailing data after the vault contents");

@@ -26,6 +26,31 @@ class Error : public std::runtime_error {
 // it before touching any crypto primitive.
 void init_sodium();
 
+// Stops the process from handing its own memory to anyone, in the two ways it
+// otherwise would while a vault is open.
+//
+// The first is a core dump. sodium_mlock keeps key material out of the swap
+// file, but it does nothing about a crash: the kernel writes locked pages into
+// the dump like any other, so a segfault at the wrong moment puts the seed, the
+// identity key and every session key on the host's disk -- which is the one
+// place this whole project exists to keep them away from. RLIMIT_CORE of zero
+// is what actually prevents that.
+//
+// The second is ptrace. Without PR_SET_DUMPABLE cleared, any other process
+// running as the same user can attach and read the vault straight out of
+// memory, no crash required.
+//
+// Best-effort by design: a hardening step that cannot be applied is not a
+// reason to refuse to run, so failures are silent.
+//
+// Returns true only when *both* protections are in place. Outside Linux that
+// is false by construction: the core-dump limit still applies, but the ptrace
+// half has no portable equivalent here, so a macOS build really is the weaker
+// of the two and the return value says so rather than flattering itself.
+// Callers that only want the process hardened as far as it goes can ignore the
+// result; it is there so a test can tell the two cases apart.
+bool harden_process() noexcept;
+
 // Fixed-size buffer for key material.
 //
 // The buffer is locked into RAM when the OS allows it (so it is not written to

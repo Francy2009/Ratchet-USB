@@ -15,6 +15,13 @@ endif()
 
 option(RATCHET_BUILD_TESTS "Build the unit tests" ON)
 option(RATCHET_HARDENED "Enable hardening flags" ON)
+option(RATCHET_BUILD_FUZZERS "Build the libFuzzer targets (clang only)" OFF)
+
+# Shared by ratchet_core and the harnesses, so the library the fuzzer explores
+# and the harness driving it agree on their sanitizer runtimes -- mixing them
+# links but misreports.
+set(RATCHET_FUZZ_FLAGS
+    -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g)
 
 # --- libsodium -------------------------------------------------------------
 # The only crypto dependency. pkg-config first, then a manual search so the
@@ -112,8 +119,20 @@ if(RATCHET_HARDENED AND NOT MSVC)
   target_compile_options(ratchet_core PRIVATE
                          -Wall -Wextra -Wpedantic -Wshadow -Wconversion
                          -fstack-protector-strong)
-  # Secrets should never reach a core dump on a machine we do not control.
+  # Bounds-checked forms of the libc calls the compiler can prove the size of.
+  # This says nothing about core dumps, whatever an earlier version of this
+  # comment claimed -- keeping secrets out of a dump is a run-time matter, and
+  # it is harden_process() in src/secure.cpp that does it.
   target_compile_definitions(ratchet_core PRIVATE _FORTIFY_SOURCE=2)
+endif()
+
+# Instrument the library itself, not just the harness: libFuzzer steers by
+# coverage, and coverage it cannot see is code it will not explore.
+if(RATCHET_BUILD_FUZZERS)
+  target_compile_options(ratchet_core PUBLIC
+                         -fsanitize=fuzzer-no-link,address,undefined
+                         -fno-omit-frame-pointer -g)
+  target_link_options(ratchet_core PUBLIC -fsanitize=address,undefined)
 endif()
 
 # --- executable ------------------------------------------------------------
@@ -127,6 +146,10 @@ endif()
 if(RATCHET_BUILD_TESTS)
   enable_testing()
   add_subdirectory(test)
+endif()
+
+if(RATCHET_BUILD_FUZZERS)
+  add_subdirectory(test/fuzz)
 endif()
 
 install(TARGETS ratchet-usb RUNTIME DESTINATION bin)

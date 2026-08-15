@@ -120,9 +120,19 @@ jobs:
 
       - name: Build libsodium from source
         if: steps.sodium-cache.outputs.cache-hit != 'true'
+        env:
+          # Pinned so this job builds the tarball it was written against and
+          # nothing else. To be clear about what this does and does not buy:
+          # it detects the download changing under us -- a tampered mirror, a
+          # re-cut release, a truncated fetch -- but it is trust-on-first-use,
+          # not a signature check, because the digest was taken from a download
+          # of the same file. Verifying jedisct1's signing key would be the
+          # stronger check; this is the one that costs a single line.
+          SODIUM_SHA256: ebb65ef6ca439333c2bb41a0c1990587288da07f6c7fd07cb3a18cc18d30ce19
         run: |
           curl -sSL -o sodium.tar.gz \
             "https://github.com/jedisct1/libsodium/releases/download/${SODIUM_VERSION}-RELEASE/libsodium-${SODIUM_VERSION}.tar.gz"
+          echo "${SODIUM_SHA256}  sodium.tar.gz" | sha256sum -c -
           tar xzf sodium.tar.gz
           cd "libsodium-${SODIUM_VERSION}"
           ./configure --prefix="$HOME/sodium-prefix" --disable-dependency-tracking
@@ -230,6 +240,84 @@ jobs:
                    ./build/test/ratchet_tests
 
   # ---------------------------------------------------------------------
+  # Three of this project's parsers run on input nobody vouched for: a pasted
+  # contact card, a pasted message envelope, and a vault header that is acted
+  # on before the tag covering it has been checked. The unit tests show that
+  # well-formed input round-trips; this shows that malformed input is refused
+  # rather than mishandled.
+  #
+  # A short run per push is not a fuzzing campaign -- it is a regression net
+  # over the committed corpus, which grows every time something interesting
+  # turns up. The weekly schedule is what gets a long run.
+  # ---------------------------------------------------------------------
+  fuzz:
+    name: Fuzz the untrusted-input parsers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsodium-dev cmake clang libclang-rt-dev
+
+      - name: Configure
+        run: >
+          cmake -S . -B build-fuzz
+          -DRATCHET_BUILD_FUZZERS=ON
+          -DRATCHET_BUILD_TESTS=OFF
+          -DCMAKE_CXX_COMPILER=clang++
+          -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build-fuzz -j"$(nproc)"
+
+      # Every committed corpus entry is replayed on every run, so an input that
+      # once found a bug can never quietly stop being checked.
+      - name: Replay the committed corpora
+        run: |
+          ./build-fuzz/test/fuzz/fuzz_parsers test/fuzz/corpus -runs=0
+          ./build-fuzz/test/fuzz/fuzz_session test/fuzz/corpus_session -runs=0
+
+      - name: Fuzz the protocol state machine
+        env:
+          DURATION: ${{ github.event_name == 'schedule' && '600' || '60' }}
+        # Separate from the parser run below because it is checking something
+        # else: not that malformed input is refused, but that no interleaving
+        # of sends, deliveries, alterations and repeats ever gets a message to
+        # decrypt when it should not. A violation aborts.
+        run: |
+          mkdir -p .fuzz-out
+          ./build-fuzz/test/fuzz/fuzz_session .fuzz-out test/fuzz/corpus_session \
+            -max_total_time="$DURATION" -rss_limit_mb=2048 -print_final_stats=1
+
+      - name: Fuzz
+        env:
+          # 10 minutes on the weekly run, 60 seconds on an ordinary push.
+          DURATION: ${{ github.event_name == 'schedule' && '600' || '60' }}
+        # Two directories, and the order matters: libFuzzer writes the new
+        # inputs it discovers into the *first* one. Pointing that at a scratch
+        # directory keeps test/fuzz/corpus read-only -- otherwise a single run
+        # dumps a few hundred mutated blobs into the tree, and they get
+        # committed by whoever runs `git add` next. Growing the corpus is a
+        # deliberate act: pick the input that found something and add it.
+        run: |
+          mkdir -p .fuzz-out
+          ./build-fuzz/test/fuzz/fuzz_parsers .fuzz-out test/fuzz/corpus \
+            -max_total_time="$DURATION" -rss_limit_mb=2048 -print_final_stats=1
+
+      - name: Upload any input that failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-findings
+          path: |
+            crash-*
+            oom-*
+            timeout-*
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------
   # Static analysis.
   # ---------------------------------------------------------------------
   clang-tidy:
@@ -295,6 +383,7 @@ jobs:
       - libsodium-native-hkdf
       - sanitizers
       - valgrind
+      - fuzz
       - clang-tidy
     runs-on: ubuntu-latest
     steps:

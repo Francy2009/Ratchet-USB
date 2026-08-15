@@ -189,22 +189,28 @@ void warn_if_host_disk(const fs::path& usb_path) {
   }
 }
 
-void print_mnemonic(const std::string& mnemonic) {
+// The mnemonic arrives in a SecureString and must not leave it. The words are
+// referred to as string_views into that buffer and streamed straight out, so
+// no copy of a recovery word is made that the caller cannot wipe -- which is
+// exactly what building padded cells as std::string used to do.
+void print_mnemonic(const SecureString& mnemonic) {
   std::cout << "\nRecovery phrase (12 words, BIP-39):\n\n";
 
-  std::size_t index = 1;
+  const std::string_view all(mnemonic.data(), mnemonic.size());
+  std::vector<std::string_view> words;
   std::size_t pos = 0;
-  std::vector<std::string> words;
-  while (pos <= mnemonic.size()) {
-    const std::size_t space = mnemonic.find(' ', pos);
-    const std::size_t end = (space == std::string::npos) ? mnemonic.size() : space;
-    words.push_back(mnemonic.substr(pos, end - pos));
-    if (space == std::string::npos) {
+  while (pos <= all.size()) {
+    const std::size_t space = all.find(' ', pos);
+    const std::size_t end = (space == std::string_view::npos) ? all.size() : space;
+    words.push_back(all.substr(pos, end - pos));
+    if (space == std::string_view::npos) {
       break;
     }
     pos = space + 1;
   }
 
+  constexpr std::size_t kCellWidth = 16;
+  std::size_t index = 1;
   for (std::size_t row = 0; row < 3; ++row) {
     std::cout << "  ";
     for (std::size_t col = 0; col < 4; ++col) {
@@ -212,9 +218,13 @@ void print_mnemonic(const std::string& mnemonic) {
       if (w >= words.size()) {
         break;
       }
-      std::string cell = std::to_string(index++) + ". " + words[w];
-      cell.resize(std::max<std::size_t>(cell.size(), 16), ' ');
-      std::cout << cell;
+      const std::size_t digits = (index < 10) ? 1 : 2;
+      std::cout << index << ". " << words[w];
+      ++index;
+      // Pad to the column width without ever materialising the cell.
+      for (std::size_t pad = digits + 2 + words[w].size(); pad < kCellWidth; ++pad) {
+        std::cout << ' ';
+      }
     }
     std::cout << "\n";
   }
@@ -363,10 +373,14 @@ int cmd_init(const Options& opts) {
                  "ever lived in the old vault.bin, never in the words.\n\n";
   } else {
     bip39::generate_entropy(entropy);
-    const std::string mnemonic = bip39::encode(entropy);
+    SecureString mnemonic;
+    bip39::encode(entropy, mnemonic);
     print_mnemonic(mnemonic);
     terminal::wait_for_enter("Press ENTER once you have written them down...");
     terminal::clear_screen();
+    // The words are on paper by now; nothing is served by keeping them in
+    // memory for the rest of `init`.
+    mnemonic.clear();
   }
 
   store::VaultStore store;
@@ -664,6 +678,9 @@ int cmd_recv(const Options& opts) {
 
 int main(int argc, char** argv) {
   try {
+    // Before anything else, and before any secret exists to protect: from here
+    // on a crash cannot write a core dump and a sibling process cannot attach.
+    harden_process();
     init_sodium();
     const Options opts =
         cli::parse_args(std::vector<std::string_view>(argv + 1, argv + argc));

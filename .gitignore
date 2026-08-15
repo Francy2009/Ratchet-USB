@@ -6,6 +6,15 @@ cmake-build-*/
 compile_commands.json
 .cache/
 
+# Fuzzer output: the inputs it discovers and the ones that failed. The corpus
+# under test/fuzz/corpus is committed and curated by hand; this is the scratch
+# it writes to, and none of it belongs in the tree.
+.fuzz-out/
+crash-*
+oom-*
+timeout-*
+leak-*
+
 # Never let a real vault or a seed near the repository.
 vault.bin
 vault.bin.tmp

@@ -66,6 +66,22 @@ ReceiveResult receive(store::VaultStore& vault, const IdentitySigningSecretKey& 
     }
     const std::size_t contact_index = static_cast<std::size_t>(idx);
 
+    // Before anything is looked up, consumed or replaced. Accepting an initial
+    // message throws away whatever session already exists with this contact,
+    // so a replay that got this far would cost the conversation every message
+    // sent after the one being replayed -- see store::AcceptedHandshake.
+    //
+    // env.header.dh_pub is the initiator's X3DH ephemeral: `initiate` draws a
+    // fresh one every time, so this rejects the same handshake arriving twice
+    // without ever rejecting a genuine new one.
+    if (vault.handshake_already_accepted(f.initiator_identity_pub,
+                                         env.header.dh_pub)) {
+      throw Error(
+          "this opening message has already been received once; ignoring it "
+          "(a repeated copy cannot tell us anything new, and acting on it "
+          "would discard the conversation you have had since)");
+    }
+
     const prekey::SignedPrekey* spk = nullptr;
     for (const prekey::SignedPrekey& candidate : vault.signed_prekeys) {
       if (candidate.id == f.spk_id) {
@@ -102,6 +118,18 @@ ReceiveResult receive(store::VaultStore& vault, const IdentitySigningSecretKey& 
     fresh.contact_index = contact_index;
     ratchet::init_receiver(fresh, shared, spk->sk, spk->pub);
 
+    ReceiveResult result;
+    result.contact_index = contact_index;
+    result.alias = vault.contacts[contact_index].alias;
+
+    // Decrypt while `fresh` is still a local. Everything below this line
+    // changes the vault, and none of it should happen for a message that turns
+    // out not to be genuine: replacing the session would discard the
+    // conversation, and consuming the one-time prekey would let anyone burn
+    // through the pool by pasting nonsense. decrypt throws on a bad tag, which
+    // leaves all of it untouched.
+    result.plaintext = ratchet::decrypt(fresh, env.header, env.ciphertext);
+
     const int existing = vault.find_session(contact_index);
     if (existing >= 0) {
       vault.sessions[static_cast<std::size_t>(existing)] = std::move(fresh);
@@ -110,17 +138,12 @@ ReceiveResult receive(store::VaultStore& vault, const IdentitySigningSecretKey& 
     }
 
     if (otpk_vec_index >= 0) {
-      // Single use: drop it now so it can never be consumed again, even if
-      // this same initial message is replayed later.
+      // Single use, and now genuinely used.
       vault.one_time_prekeys.erase(vault.one_time_prekeys.begin() + otpk_vec_index);
     }
 
-    store::Session& s =
-        vault.sessions[static_cast<std::size_t>(vault.find_session(contact_index))];
-    ReceiveResult result;
-    result.contact_index = contact_index;
-    result.alias = vault.contacts[contact_index].alias;
-    result.plaintext = ratchet::decrypt(s, env.header, env.ciphertext);
+    vault.remember_handshake(f.initiator_identity_pub, env.header.dh_pub,
+                             static_cast<uint64_t>(std::time(nullptr)));
     result.session_established = true;
     return result;
   }
@@ -134,10 +157,25 @@ ReceiveResult receive(store::VaultStore& vault, const IdentitySigningSecretKey& 
             "initial message first");
       }
       store::Session& s = vault.sessions[static_cast<std::size_t>(existing)];
+
       ReceiveResult result;
       result.contact_index = i;
       result.alias = vault.contacts[i].alias;
-      result.plaintext = ratchet::decrypt(s, env.header, env.ciphertext);
+
+      // decrypt() ratchets the chains forward, caches skipped keys and, when
+      // the header carries an unfamiliar ratchet key, performs a whole DH step
+      // -- all of it before the AEAD tag has been checked, because the tag
+      // cannot be checked until the key is derived. A forged header therefore
+      // rearranges the session and only then fails.
+      //
+      // Working on a copy and adopting it on success keeps that damage local
+      // to the copy. It used to be harmless only because `recv` happens not to
+      // save the vault when a command throws, which is a real property resting
+      // on an invariant written down nowhere and enforced by nothing.
+      store::Session candidate = store::clone_session(s);
+      result.plaintext = ratchet::decrypt(candidate, env.header, env.ciphertext);
+      s = std::move(candidate);
+
       result.session_established = false;
       return result;
     }
