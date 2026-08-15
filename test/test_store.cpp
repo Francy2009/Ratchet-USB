@@ -172,3 +172,60 @@ TEST("parse rejects truncated store bytes") {
   CHECK_THROWS(store::parse(bytes.data(), bytes.size() - 1));
   CHECK_THROWS(store::parse(bytes.data(), 3));
 }
+
+// clone_session is the one place this project deliberately duplicates key
+// material, and its failure mode is silent: a field left out or assigned from
+// the wrong source produces a session that still works for a while and then
+// diverges, which would look like a corrupt vault rather than a bug here. So
+// the check is not "does it compile" but "is the copy indistinguishable from
+// the original", compared over the serialised bytes -- the same representation
+// the vault is written from, which covers every field the format carries.
+TEST("clone_session reproduces a session exactly") {
+  const auto fill = [](SecureBytes<32>& b) {
+    uint8_t tmp[32];
+    randombytes_buf(tmp, sizeof tmp);
+    b.assign(tmp, sizeof tmp);
+  };
+
+  store::Session original;
+  original.contact_index = 7;
+  fill(original.root_key);
+  // Distinct random material in every slot, so copying the right number of
+  // fields from the wrong ones does not slip through.
+  original.has_dhs = true;
+  fill(original.dhs_sk);
+  randombytes_buf(original.dhs_pub.data(), original.dhs_pub.size());
+  original.has_dhr = false;  // mixed on purpose: a hardcoded true would pass
+  randombytes_buf(original.dhr_pub.data(), original.dhr_pub.size());
+  original.has_cks = true;
+  fill(original.chain_key_send);
+  original.has_ckr = true;
+  fill(original.chain_key_recv);
+  original.ns = 11;
+  original.nr = 22;
+  original.pn = 33;
+
+  for (uint32_t i = 0; i < 3; ++i) {
+    store::SkippedKey sk;
+    randombytes_buf(sk.dh_pub.data(), sk.dh_pub.size());
+    sk.n = 100 + i;
+    fill(sk.message_key);
+    sk.created_at = 1700000000 + i;
+    original.skipped.push_back(std::move(sk));
+  }
+
+  store::Session copy = store::clone_session(original);
+
+  // Serialise each inside an otherwise identical store and compare the bytes.
+  const auto bytes_of = [](store::Session&& s) {
+    store::VaultStore v;
+    v.sessions.push_back(std::move(s));
+    const SecureBuffer buf = store::serialize(v);
+    return std::vector<uint8_t>(buf.data(), buf.data() + buf.size());
+  };
+
+  const std::vector<uint8_t> a = bytes_of(std::move(original));
+  const std::vector<uint8_t> b = bytes_of(std::move(copy));
+  CHECK(a == b);
+  CHECK(!a.empty());
+}
