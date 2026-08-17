@@ -365,9 +365,15 @@ Encryption is regulated differently from one country to the next, and in a
 few places using or importing it is restricted outright. Checking what
 applies where you are is your job, not mine.
 
+This is 0.1.0, and pre-1.0 in the way that matters: the vault and message
+formats are not frozen, so a later release may not read what this one wrote.
+Keep your recovery words, and do not treat a vault as a long-term archive.
+
 And once more, because it is the thing most likely to matter to you: this
-has not been independently audited. If being read would put you in real
-danger, do not let this be your only layer.
+has not been independently audited. It is tested hard — CI on two compilers,
+sanitizers, fuzzing, key-schedule vectors from an independent implementation
+— but tested by me is not the same as reviewed by someone who is not me. If
+being read would put you in real danger, do not let this be your only layer.
 
 ## License
 
