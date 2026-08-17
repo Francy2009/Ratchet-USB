@@ -54,6 +54,25 @@ to defend against it:
 - **Multiple devices sharing one identity**, group chats, and a key directory.
   These are not implemented; see the roadmap in the README.
 
+## No warranty, and using it lawfully
+
+This is version 0.2.0 and it is pre-1.0 in the way that matters: the vault
+and message formats are not frozen yet, so a future release may not read what
+this one wrote. Keep your BIP-39 words, and do not treat a vault as a durable
+archive.
+
+It is released under the MIT License, which disclaims warranty and liability
+in full, and I mean that literally rather than as boilerplate: the software
+comes as is, and I am not responsible for what it does or fails to do.
+Combined with the fact that nothing leaves your machine, it also means I have
+nothing to give you if something goes wrong — no copy of your vault, no way
+to reset a passphrase, no view of your messages.
+
+Encryption is regulated differently from one country to the next, and in a
+few places using or importing it is restricted outright. Checking what
+applies where you are is your job. Use it lawfully: it is a privacy tool, not
+cover for hurting somebody.
+
 ## Verifying the build yourself
 
 Every push runs, and you can run locally:

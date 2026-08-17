@@ -365,9 +365,15 @@ Encryption is regulated differently from one country to the next, and in a
 few places using or importing it is restricted outright. Checking what
 applies where you are is your job, not mine.
 
+This is 0.2.0, and pre-1.0 in the way that matters: the vault and message
+formats are not frozen, so a later release may not read what this one wrote.
+Keep your recovery words, and do not treat a vault as a long-term archive.
+
 And once more, because it is the thing most likely to matter to you: this
-has not been independently audited. If being read would put you in real
-danger, do not let this be your only layer.
+has not been independently audited. It is tested hard — CI on two compilers,
+sanitizers, fuzzing, key-schedule vectors from an independent implementation
+— but tested by me is not the same as reviewed by someone who is not me. If
+being read would put you in real danger, do not let this be your only layer.
 
 ## License
 
@@ -376,3 +382,9 @@ the bottom, is also the legal version of everything above: the software
 comes with no warranty of any kind, and I am not liable for what it does or
 fails to do. The BIP-39 wordlist and libsodium are third-party and credited
 in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+---
+
+Developed in Italy, open source, and free to read, use and modify by anyone
+— because privacy is not a feature, it's a basic right, and a tool meant to
+protect it should not ask you to trust a closed box to do so.
