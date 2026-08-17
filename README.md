@@ -1,4 +1,5 @@
 # Ratchet-USB
+<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/016d063d-52c0-4d6b-8731-fa0c4b6eb9e8" />
 
 [![CI](https://github.com/Francy2009/Ratchet-USB/actions/workflows/ci.yml/badge.svg)](https://github.com/Francy2009/Ratchet-USB/actions/workflows/ci.yml)
 
