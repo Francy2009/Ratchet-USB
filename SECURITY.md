@@ -56,7 +56,7 @@ to defend against it:
 
 ## No warranty, and using it lawfully
 
-This is version 0.1.0 and it is pre-1.0 in the way that matters: the vault
+This is version 0.2.0 and it is pre-1.0 in the way that matters: the vault
 and message formats are not frozen yet, so a future release may not read what
 this one wrote. Keep your BIP-39 words, and do not treat a vault as a durable
 archive.
