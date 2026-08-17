@@ -6,12 +6,19 @@ made by other people. Here they are, for the record.
 ## BIP-39 English wordlist
 
 `src/bip39_wordlist.cpp` contains the official English wordlist from the
-BIP-39 standard (`bips/bip-0039/english.txt`). The wordlist itself has no
-license attached in the BIP repository and is treated as public domain /
-freely reusable, same as the rest of the Bitcoin Improvement Proposals. It is
-copied here verbatim, unedited, because the mnemonic scheme is normative:
-changing a single word would break every recovery phrase this tool has ever
-produced.
+BIP-39 standard (`bips/bip-0039/english.txt`). BIP-39 is published under the
+MIT License — its preamble carries `License: MIT` and its Copyright section
+states "This BIP falls under the MIT License" — so the wordlist comes with
+the same terms this project uses, attribution included.
+
+Copyright (c) the BIP-39 authors: Marek Palatinus, Pavol Rusnak, Aaron
+Voisine, Sean Bowe. Specification:
+https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki
+
+It is copied here verbatim, unedited, because the mnemonic scheme is
+normative: changing a single word would break every recovery phrase this
+tool has ever produced. The copy is checked against the upstream file, whose
+SHA-256 is `2f5eed53a4727b4bf8880d8f3f199efc90e58503646d9ff8eff3a2ed3b24dbda`.
 
 ## libsodium
 
