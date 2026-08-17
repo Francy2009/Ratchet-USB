@@ -1,7 +1,12 @@
-# Ratchet-USB
-<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/016d063d-52c0-4d6b-8731-fa0c4b6eb9e8" />
+<p align="center">
+  <img width="600" alt="Ratchet-USB — encrypted, private, peer to peer" src="https://github.com/user-attachments/assets/016d063d-52c0-4d6b-8731-fa0c4b6eb9e8" />
+</p>
 
-[![CI](https://github.com/Francy2009/Ratchet-USB/actions/workflows/ci.yml/badge.svg)](https://github.com/Francy2009/Ratchet-USB/actions/workflows/ci.yml)
+<h1 align="center">Ratchet-USB</h1>
+
+<p align="center">
+  <a href="https://github.com/Francy2009/Ratchet-USB/actions/workflows/ci.yml"><img src="https://github.com/Francy2009/Ratchet-USB/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+</p>
 
 A small command-line tool for sending encrypted messages without a server.
 You encrypt on your machine, copy the text it prints, and paste it wherever:
