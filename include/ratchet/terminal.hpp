@@ -2,6 +2,7 @@
 #define RATCHET_TERMINAL_HPP
 
 #include <string>
+#include <string_view>
 
 #include "ratchet/secure.hpp"
 
@@ -30,6 +31,28 @@ std::string read_line(const std::string& prompt);
 void clear_screen();
 
 bool stdin_is_tty();
+bool stdout_is_tty();
+
+// Rewrites the C0 control characters and DEL as visible \xNN escapes, leaving
+// newline and tab alone.
+//
+// A decrypted message comes from a sender who is authenticated but not
+// trusted, and a terminal treats what it is handed as instructions, not text.
+// An unescaped ESC lets the sender move the cursor, erase lines that are
+// already on screen -- including the "has not been marked as trusted" warning
+// printed moments earlier -- repaint them with something else, set the window
+// title, or on terminals that allow it write the system clipboard with OSC 52.
+//
+// Bytes 0x80-0x9F are deliberately left alone. They are the C1 controls only
+// in a non-UTF-8 terminal; in UTF-8, which is what anything current uses, they
+// are continuation bytes, and escaping them would mangle every message that is
+// not pure ASCII.
+std::string escape_control_chars(std::string_view text);
+
+// escape_control_chars, but only when stdout is a terminal. A redirect to a
+// file or a pipe gets the bytes exactly as the sender wrote them, because
+// there is no terminal to drive and mangling the text would be the bug.
+std::string escape_if_tty(std::string_view text);
 
 }  // namespace ratchet::terminal
 

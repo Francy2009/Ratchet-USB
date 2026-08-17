@@ -51,6 +51,26 @@ void init_sodium();
 // result; it is there so a test can tell the two cases apart.
 bool harden_process() noexcept;
 
+// Locks the pages holding [p, p+n) into RAM, keeping a reference count per
+// page so that a page shared by several secrets stays locked until the last of
+// them is gone. Returns false if any page could not be locked, having already
+// warned on stderr once per process.
+//
+// This exists because mlock/munlock are page-granular while the secrets here
+// are 32 and 64 bytes: without the counting, destroying one secret unlocks
+// every other secret that happens to share its page. Every secret-holding type
+// below goes through this pair rather than calling sodium_mlock directly.
+bool lock_region(void* p, std::size_t n) noexcept;
+
+// Zeroes [p, p+n) and drops this region's claim on the pages behind it,
+// unlocking a page only once nothing else holds it.
+void unlock_region(void* p, std::size_t n) noexcept;
+
+// True once an exception has prevented the page accounting from completing --
+// under memory exhaustion, essentially. From that point pages may stay locked
+// longer than they need to, which is the safe direction to be wrong in.
+bool memory_locking_degraded() noexcept;
+
 // Fixed-size buffer for key material.
 //
 // The buffer is locked into RAM when the OS allows it (so it is not written to
@@ -83,10 +103,7 @@ class SecureBytes {
     return *this;
   }
 
-  ~SecureBytes() {
-    sodium_memzero(data_, N);
-    sodium_munlock(data_, N);
-  }
+  ~SecureBytes() { unlock_region(data_, N); }
 
   SecureBytes(const SecureBytes&) = delete;
   SecureBytes& operator=(const SecureBytes&) = delete;
@@ -116,13 +133,19 @@ class SecureBytes {
   }
 
  private:
-  void lock() { sodium_mlock(data_, N); }
+  void lock() { lock_region(data_, N); }
 
   uint8_t data_[N]{};
 };
 
-// Variable-length secret, used for the passphrase, whose length is not known
-// at compile time. Same guarantees as SecureBytes: locked, wiped, non-copyable.
+// Variable-length secret, used for the passphrase and the BIP-39 mnemonic,
+// whose length is not known at compile time. Same guarantees as SecureBytes:
+// locked, wiped, non-copyable.
+//
+// The lock has to follow the buffer. std::vector's storage moves when it
+// grows, so growing means locking the new block before anything is copied into
+// it and releasing the old one on the way out -- which is why growth is done
+// by hand here rather than left to push_back.
 class SecureString {
  public:
   SecureString() = default;
@@ -143,13 +166,14 @@ class SecureString {
 
   void push_back(char c) {
     // Growing the vector may reallocate, leaving the old bytes on the heap.
-    // Reserving in chunks and wiping the previous block keeps that from
-    // scattering copies of the passphrase around.
+    // Reserving in chunks, locking the new block and wiping the previous one
+    // keeps that from scattering copies of the passphrase around.
     if (buf_.size() == buf_.capacity()) {
       std::vector<char> bigger;
       bigger.reserve(buf_.capacity() == 0 ? 64 : buf_.capacity() * 2);
+      lock_region(bigger.data(), bigger.capacity());
       bigger.insert(bigger.end(), buf_.begin(), buf_.end());
-      wipe_vector(buf_);
+      unlock_region(buf_.data(), buf_.capacity());
       buf_.swap(bigger);
     }
     buf_.push_back(c);
@@ -170,24 +194,27 @@ class SecureString {
   }
 
   void clear() noexcept {
-    wipe_vector(buf_);
-    buf_.clear();
+    unlock_region(buf_.data(), buf_.capacity());
+    // The storage is released rather than merely emptied. std::vector::clear
+    // keeps the capacity, and that block is now unlocked -- the next
+    // push_back would write a secret into it without ever taking the lock
+    // again, because the growth path only runs when size reaches capacity.
+    std::vector<char>().swap(buf_);
   }
 
  private:
-  static void wipe_vector(std::vector<char>& v) noexcept {
-    if (!v.empty()) {
-      sodium_memzero(v.data(), v.size());
-    }
-  }
-
   std::vector<char> buf_;
 };
 
 // Growable byte buffer for secrets whose total length is not known up front:
 // the serialised vault store (seed, prekeys, sessions), which is decrypted
-// into one of these before being parsed. Same wipe-on-grow, wipe-on-destroy
-// behaviour as SecureString; move-only for the same reason as SecureBytes.
+// into one of these before being parsed, and the X3DH input keying material.
+// Same lock-on-grow, wipe-on-destroy behaviour as SecureString; move-only for
+// the same reason as SecureBytes.
+//
+// This is the single most sensitive buffer in the program -- everything the
+// vault holds passes through it in the clear -- so it going unlocked was the
+// worst of the three.
 class SecureBuffer {
  public:
   SecureBuffer() = default;
@@ -219,8 +246,9 @@ class SecureBuffer {
     if (old_size + n > buf_.capacity()) {
       std::vector<uint8_t> bigger;
       bigger.reserve(std::max(old_size + n, buf_.capacity() * 2));
+      lock_region(bigger.data(), bigger.capacity());
       bigger.insert(bigger.end(), buf_.begin(), buf_.end());
-      wipe_vector(buf_);
+      unlock_region(buf_.data(), buf_.capacity());
       buf_.swap(bigger);
     }
     buf_.resize(old_size + n);
@@ -228,17 +256,12 @@ class SecureBuffer {
   }
 
   void clear() noexcept {
-    wipe_vector(buf_);
-    buf_.clear();
+    unlock_region(buf_.data(), buf_.capacity());
+    // Released rather than emptied, for the reason given in SecureString.
+    std::vector<uint8_t>().swap(buf_);
   }
 
  private:
-  static void wipe_vector(std::vector<uint8_t>& v) noexcept {
-    if (!v.empty()) {
-      sodium_memzero(v.data(), v.size());
-    }
-  }
-
   std::vector<uint8_t> buf_;
 };
 

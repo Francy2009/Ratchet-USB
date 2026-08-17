@@ -72,7 +72,8 @@ Party make_party(std::size_t otpk_count) {
 
 void introduce(const Party& from, Party& into) {
   const std::string card = x3dh::export_card(
-      from.pk, from.vault.signed_prekeys.back(), from.vault.one_time_prekeys);
+      from.sk, from.pk, from.vault.signed_prekeys.back(),
+      from.vault.one_time_prekeys);
   const x3dh::ImportedCard imported = x3dh::import_card(card);
   store::Contact c;
   c.alias = "peer";

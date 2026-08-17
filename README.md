@@ -211,7 +211,27 @@ from being guaranteed. One departure from the spec worth flagging: instead
 of authenticating just the opening message with the identity keys, both
 identities get folded into the very first encryption key, so everything the
 ratchet produces afterward stays tied to both of them, not only to how the
-conversation opened.
+conversation opened. Concretely, the two Ed25519 identity keys and the
+number of Diffie-Hellman outputs become the HKDF salt of the combine step,
+in a fixed initiator-then-responder order so both sides build the same
+thing without having to negotiate who came first.
+
+The identity keys go in as their *Ed25519* encodings, not as the X25519
+keys they convert to, and that detail is doing real work. The conversion to
+Montgomery form is `u = (1 + y) / (1 - y)`, which never looks at x — so a
+key and its negation, which differ only in the sign bit of x, convert to the
+same X25519 key and produce identical Diffie-Hellman output at every step.
+Two different fingerprints, one shared secret. Feeding the full 32-byte
+Ed25519 encoding into the derivation is what stops that, and it's what makes
+the fingerprint you read out over the phone the same thing the protocol is
+actually authenticating.
+
+The card that carries all this is signed as a whole, not just at the prekey.
+X3DH only signs the signed prekey because there the bundle arrives from a
+server over an authenticated channel; here it's pasted over the same
+untrusted channel as everything else, so the prekey id and every one-time
+prekey would otherwise be rewritable in transit by anyone relaying it. The
+signature covers the lot, and it's checked before the body is parsed.
 
 After that it's a Double Ratchet for every message, close to how Signal
 does it — a symmetric chain within each direction of the conversation, a
@@ -288,6 +308,15 @@ sender's identity (so `recv` knows which conversation without being told),
 the ratchet header, and, only on the message that opens a conversation, the
 X3DH handshake data.
 
+Cards are on version 2 and version 1 is refused outright rather than
+accepted with a warning. A v1 card signed only its prekey, leaving the
+prekey id and the one-time prekeys unauthenticated, and nothing can retrofit
+a signature onto one after the fact — only the identity that issued it
+could. So a card from an older build has to be re-exported. The X3DH
+derivation changed in the same release for the identity-binding reason
+above, which means an old build and a new one won't agree on a shared secret
+either; both sides need to be on the same version.
+
 ## Layout
 
 `include/ratchet/` for public headers, `src/` for the implementation and
@@ -319,6 +348,23 @@ departures noted above make sure of that: direct message key as the AEAD
 key, a random nonce in the envelope, a root-key info string that's this
 project's own).
 
+The X3DH combine step is pinned the same way, and that one was added after
+it turned out to be the place a real bug had been hiding: the identity keys
+were meant to be in that derivation, the README said they were, and they
+weren't. Every round-trip test passed anyway, because both sides derived the
+same wrong thing. There are now vectors for a 3-DH and a 4-DH combine, for
+the two identities swapped, and for an identity key with one flipped sign
+bit — the case that used to produce a byte-identical secret.
+
+The ratchet's atomicity has its own tests. Advancing the receiving chain,
+stepping the root key, and caching skipped keys all have to happen before
+the AEAD tag can be checked, because the tag can't be checked until the key
+exists — so a forged or repeated message rearranges the session on its way
+to being rejected unless the whole operation commits or rolls back as one.
+The tests assert the session is byte-for-byte unchanged after a bad tag, a
+forged ratchet key, a duplicate delivery and an over-wide gap, and that the
+genuine message still decrypts afterwards in each case.
+
 `test/smoke.sh` separately drives the actual binary through a full
 conversation — two vaults, a card exchange, handshake, reply, messages
 arriving out of order, a tampered one, a wrong passphrase — since none of
@@ -346,6 +392,17 @@ your 12 words or grabbing `vault.bin` outright. Trusting a contact without
 actually checking their fingerprint. And whatever channel you're pasting
 through still sees ciphertext go by, plus timing — it just can't read the
 contents.
+
+Two more worth stating plainly, because the name suggests otherwise. The
+vault isn't cryptographically tied to the USB stick: the key comes from the
+passphrase and nothing else, so copying `vault.bin` off the drive gives an
+attacker a complete offline target and the whole thing rests on how good
+that passphrase is. And saving the vault writes a new file and renames it
+over the old one, which on flash with wear levelling leaves the previous
+image sitting in blocks nothing points at any more — old chain keys
+included. That's the practical limit on the forward-secrecy claim above:
+the ratchet deletes keys from memory and from the new vault, not from
+wherever the drive's controller decided to leave the last copy.
 
 ## Not there yet
 

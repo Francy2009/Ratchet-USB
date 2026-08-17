@@ -44,7 +44,8 @@ Party make_party(std::size_t otpk_count) {
 // `card` piped into `add` does.
 void introduce(const Party& from, Party& into, const std::string& alias) {
   const std::string card_text = x3dh::export_card(
-      from.pk, from.vault.signed_prekeys.back(), from.vault.one_time_prekeys);
+      from.sk, from.pk, from.vault.signed_prekeys.back(),
+      from.vault.one_time_prekeys);
   const x3dh::ImportedCard imported = x3dh::import_card(card_text);
 
   store::Contact contact;

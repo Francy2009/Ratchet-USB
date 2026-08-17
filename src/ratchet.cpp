@@ -212,8 +212,14 @@ std::size_t expire_skipped_keys(store::Session& s, uint64_t now) {
   return dropped;
 }
 
-std::string decrypt(store::Session& s, const message::RatchetHeader& header,
-                    const std::vector<uint8_t>& ciphertext) {
+namespace {
+
+// The decryption proper, which advances `s` as it goes and leaves it partly
+// advanced if it throws. Never called on a session anyone still wants: the
+// public `decrypt` below runs it against a copy.
+std::string decrypt_in_place(store::Session& s,
+                             const message::RatchetHeader& header,
+                             const std::vector<uint8_t>& ciphertext) {
   // Before anything else, so an expired key can neither decrypt a message nor
   // keep occupying a slot in the kMaxSkip budget.
   expire_skipped_keys(s, static_cast<uint64_t>(std::time(nullptr)));
@@ -223,10 +229,17 @@ std::string decrypt(store::Session& s, const message::RatchetHeader& header,
   // Try a cached key from an earlier out-of-order gap first.
   for (auto it = s.skipped.begin(); it != s.skipped.end(); ++it) {
     if (it->dh_pub == header.dh_pub && it->n == header.n) {
-      SecureBytes<32> mk;
-      mk.assign(it->message_key.data(), it->message_key.size());
+      // Decrypt first, erase second. A message key is the one piece of state
+      // here that cannot be rebuilt: the chain keys either side of it have
+      // already ratcheted past. Erasing before the tag was checked meant one
+      // flipped ciphertext byte destroyed it for good -- and (dh_pub, n)
+      // travel in the clear, so anyone who saw the block could build the
+      // message that did it. Passing the cached key straight to the AEAD
+      // rather than copying it out also keeps one fewer copy of key material
+      // alive.
+      std::string plaintext = aead_decrypt(it->message_key, ciphertext, aad);
       s.skipped.erase(it);
-      return aead_decrypt(mk, ciphertext, aad);
+      return plaintext;
     }
   }
 
@@ -244,6 +257,28 @@ std::string decrypt(store::Session& s, const message::RatchetHeader& header,
   s.nr += 1;
 
   return aead_decrypt(mk, ciphertext, aad);
+}
+
+}  // namespace
+
+std::string decrypt(store::Session& s, const message::RatchetHeader& header,
+                    const std::vector<uint8_t>& ciphertext) {
+  // Everything decrypt_in_place touches -- the receiving chain, the root key
+  // on a DH step, the skipped-key cache -- has to move before the tag is
+  // checkable, because the tag cannot be checked until the key exists. So a
+  // message that turns out to be forged, or simply delivered twice, rearranges
+  // the session on its way to being rejected.
+  //
+  // Working on a copy and adopting it only on success makes the whole thing
+  // atomic. This lives here rather than in the caller on purpose: it is a
+  // property of the ratchet, and leaving it to whoever calls in means the
+  // guarantee holds only for as long as every caller remembers -- which is not
+  // a thing a type or an assertion can enforce, and not a thing a fuzz harness
+  // does by default.
+  store::Session candidate = store::clone_session(s);
+  std::string plaintext = decrypt_in_place(candidate, header, ciphertext);
+  s = std::move(candidate);
+  return plaintext;
 }
 
 }  // namespace ratchet::ratchet

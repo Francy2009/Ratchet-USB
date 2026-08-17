@@ -294,17 +294,48 @@ std::string read_file_text(const std::string& path) {
   return ss.str();
 }
 
+// Seconds elapsed since `stamped_at`, saturating at zero.
+//
+// Both operands are unsigned, so a timestamp in the future -- a clock that
+// went backwards, a drive carried to a machine whose clock is wrong -- makes
+// the plain subtraction wrap to something enormous. Where that fed a
+// "is this too old?" test the answer came back yes, every time.
+uint64_t age_seconds(uint64_t now, uint64_t stamped_at) {
+  return now > stamped_at ? now - stamped_at : 0;
+}
+
+// Re-signs any stored prekey whose signature does not verify under the current
+// scheme. A vault written before the signature covered a context string and
+// the prekey id has perfectly good key pairs and stale signatures; rotating
+// them instead would invalidate every card already handed out, for no reason.
+bool resign_stale_prekeys(store::VaultStore& store,
+                          const IdentitySigningPublicKey& identity_pk,
+                          const IdentitySigningSecretKey& identity_sk) {
+  bool changed = false;
+  for (prekey::SignedPrekey& spk : store.signed_prekeys) {
+    if (!prekey::verify_signed_prekey_signature(identity_pk, spk.id, spk.pub,
+                                                spk.signature)) {
+      prekey::resign_signed_prekey(identity_sk, spk);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 // Rotates the signed prekey if it has aged past kSpkMaxAgeDays, and tops the
 // one-time prekey pool back up once it drops below kReplenishThreshold. Runs
 // on every `unlock` so both stay fresh without a manual `card` command.
 // Returns whether the store was actually changed (and so needs saving).
 bool maintain_prekeys(store::VaultStore& store,
+                      const IdentitySigningPublicKey& identity_pk,
                       const IdentitySigningSecretKey& identity_sk) {
-  bool changed = false;
+  bool changed = resign_stale_prekeys(store, identity_pk, identity_sk);
   const uint64_t now = static_cast<uint64_t>(std::time(nullptr));
 
-  const bool spk_stale = store.signed_prekeys.empty() ||
-      now - store.signed_prekeys.back().created_at > kSpkMaxAgeSeconds;
+  const bool spk_stale =
+      store.signed_prekeys.empty() ||
+      age_seconds(now, store.signed_prekeys.back().created_at) >
+          kSpkMaxAgeSeconds;
   if (spk_stale) {
     store.signed_prekeys.push_back(
         prekey::generate_signed_prekey(identity_sk, store.next_spk_id));
@@ -431,7 +462,7 @@ int cmd_unlock(const Options& opts) {
   IdentitySigningPublicKey identity_pk;
   derive_identity(store.seed, identity_sk, identity_pk);
 
-  bool changed = maintain_prekeys(store, identity_sk);
+  bool changed = maintain_prekeys(store, identity_pk, identity_sk);
   identity_sk.wipe();
   changed = expire_skipped_keys(store) || changed;
 
@@ -494,14 +525,20 @@ int cmd_card(const Options& opts) {
     changed = true;
   }
 
-  identity_sk.wipe();
+  // A card is only worth handing out if its signatures verify, and `card` can
+  // be the first command run against a vault written before the signature
+  // scheme changed -- so this cannot wait for the next `unlock`.
+  changed = resign_stale_prekeys(store, identity_pk, identity_sk) || changed;
 
   if (store.signed_prekeys.empty()) {
     throw Error("internal: vault has no signed prekey");
   }
   const prekey::SignedPrekey& spk = store.signed_prekeys.back();
 
-  std::cout << x3dh::export_card(identity_pk, spk, store.one_time_prekeys);
+  // The identity key signs the card as a whole, so it has to still be here.
+  std::cout << x3dh::export_card(identity_sk, identity_pk, spk,
+                                 store.one_time_prekeys);
+  identity_sk.wipe();
 
   if (store.one_time_prekeys.size() < kReplenishThreshold) {
     std::cerr << "warning: only " << store.one_time_prekeys.size()
@@ -571,7 +608,10 @@ int cmd_contacts(const Options& opts) {
   for (std::size_t i = 0; i < store.contacts.size(); ++i) {
     const store::Contact& c = store.contacts[i];
     const int session_idx = store.find_session(i);
-    std::cout << c.alias << (c.verified ? " [verified]" : " [unverified]")
+    // Read back out of the vault and printed long after it was typed, so it
+    // goes through the same escaping as anything else headed for a terminal.
+    std::cout << terminal::escape_control_chars(c.alias)
+              << (c.verified ? " [verified]" : " [unverified]")
               << (session_idx >= 0 ? " [session established]" : " [no session yet]")
               << "\n"
               << fingerprint(c.identity_pub) << "\n\n";
@@ -663,14 +703,18 @@ int cmd_recv(const Options& opts) {
 
   save_vault(path, store, opened.params, opened.passphrase);
 
+  const std::string alias = terminal::escape_control_chars(result.alias);
   if (result.session_established) {
-    std::cerr << "(new session established with '" << result.alias << "')\n";
+    std::cerr << "(new session established with '" << alias << "')\n";
   }
   if (!store.contacts[result.contact_index].verified) {
-    std::cerr << "warning: '" << result.alias
+    std::cerr << "warning: '" << alias
               << "' has not been marked as trusted.\n";
   }
-  std::cout << result.alias << ": " << result.plaintext << "\n";
+  // The message body is whatever the sender chose to put in it. Escaped when
+  // it is going to a terminal, verbatim when it is going to a file or a pipe.
+  std::cout << alias << ": " << terminal::escape_if_tty(result.plaintext)
+            << "\n";
   return 0;
 }
 

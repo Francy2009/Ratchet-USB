@@ -243,6 +243,160 @@ TEST("decrypt expires stale keys on its own, freeing the kMaxSkip budget") {
   CHECK_EQ(pair.bob.skipped.size(), std::size_t{10});
 }
 
+// --- Atomicity: a rejected message must leave no trace -----------------------
+
+namespace {
+
+// Everything about a session an incoming message could disturb.
+struct StateSnapshot {
+  SecureBytes<32> root_key;
+  SecureBytes<32> chain_key_recv;
+  uint32_t ns = 0;
+  uint32_t nr = 0;
+  uint32_t pn = 0;
+  bool has_ckr = false;
+  x25519::PublicKey dhr_pub{};
+  std::size_t skipped = 0;
+
+  explicit StateSnapshot(const store::Session& s)
+      : ns(s.ns), nr(s.nr), pn(s.pn), has_ckr(s.has_ckr), dhr_pub(s.dhr_pub),
+        skipped(s.skipped.size()) {
+    root_key.assign(s.root_key);
+    chain_key_recv.assign(s.chain_key_recv);
+  }
+
+  bool matches(const store::Session& s) const {
+    return root_key.equals(s.root_key) &&
+           chain_key_recv.equals(s.chain_key_recv) && ns == s.ns &&
+           nr == s.nr && pn == s.pn && has_ckr == s.has_ckr &&
+           dhr_pub == s.dhr_pub && skipped == s.skipped.size();
+  }
+};
+
+}  // namespace
+
+TEST("a message with a bad tag leaves the session completely untouched") {
+  Pair pair = make_established_pair();
+
+  message::RatchetHeader h;
+  std::vector<uint8_t> ct;
+  rr::encrypt(pair.alice, "genuine", h, ct);
+
+  const StateSnapshot before(pair.bob);
+
+  std::vector<uint8_t> tampered = ct;
+  tampered.back() ^= 0x01;
+  CHECK_THROWS(rr::decrypt(pair.bob, h, tampered));
+  CHECK(before.matches(pair.bob));
+
+  // ...and the genuine message still decrypts afterwards.
+  CHECK_EQ(rr::decrypt(pair.bob, h, ct), std::string("genuine"));
+}
+
+TEST("a forged ratchet key does not advance the root key before the tag fails") {
+  // decrypt() has to perform a whole DH ratchet step -- new root key, new
+  // chain keys -- before it can derive the message key the tag is checked
+  // with. A header carrying an attacker's ratchet public key therefore
+  // rearranges the session on its way to being rejected, unless the whole
+  // operation is atomic.
+  Pair pair = make_established_pair();
+
+  message::RatchetHeader h;
+  std::vector<uint8_t> ct;
+  rr::encrypt(pair.alice, "genuine", h, ct);
+
+  const StateSnapshot before(pair.bob);
+
+  x25519::SecretKey forged_sk;
+  x25519::PublicKey forged_pk{};
+  x25519::generate_keypair(forged_sk, forged_pk);
+  message::RatchetHeader forged;
+  forged.dh_pub = forged_pk;
+  forged.pn = 500;  // and a gap wide enough to fill the skipped-key cache
+  forged.n = 0;
+  const std::vector<uint8_t> junk(64, 0xAA);
+
+  CHECK_THROWS(rr::decrypt(pair.bob, forged, junk));
+  CHECK(before.matches(pair.bob));
+  CHECK_EQ(rr::decrypt(pair.bob, h, ct), std::string("genuine"));
+}
+
+TEST("delivering the same message twice does not consume the next key") {
+  // The replay is rejected either way -- its key is gone. What must not happen
+  // is the rejection reaching for the *current* chain key to derive a message
+  // key, discarding it, and taking the receiving chain one step forward: the
+  // message that legitimately carries that number would then never decrypt.
+  Pair pair = make_established_pair();
+
+  struct Sent {
+    message::RatchetHeader header;
+    std::vector<uint8_t> ciphertext;
+    std::string plaintext;
+  };
+  std::vector<Sent> sent;
+  for (int i = 0; i < 3; ++i) {
+    Sent s;
+    s.plaintext = "message " + std::to_string(i);
+    rr::encrypt(pair.alice, s.plaintext, s.header, s.ciphertext);
+    sent.push_back(std::move(s));
+  }
+
+  CHECK_EQ(rr::decrypt(pair.bob, sent[0].header, sent[0].ciphertext),
+           sent[0].plaintext);
+  CHECK_EQ(rr::decrypt(pair.bob, sent[1].header, sent[1].ciphertext),
+           sent[1].plaintext);
+
+  const StateSnapshot before(pair.bob);
+  CHECK_THROWS(rr::decrypt(pair.bob, sent[1].header, sent[1].ciphertext));
+  CHECK(before.matches(pair.bob));
+
+  CHECK_EQ(rr::decrypt(pair.bob, sent[2].header, sent[2].ciphertext),
+           sent[2].plaintext);
+}
+
+TEST("a cached skipped key survives a forged copy of the message it belongs to") {
+  // (dh_pub, n) travel in the clear, so anyone who has seen a block can build
+  // a message that looks like it and fails to authenticate. If that deletes
+  // the cached key, the genuine message is lost for good.
+  Pair pair = make_established_pair();
+
+  message::RatchetHeader h0;
+  std::vector<uint8_t> ct0;
+  rr::encrypt(pair.alice, "first", h0, ct0);
+  message::RatchetHeader h1;
+  std::vector<uint8_t> ct1;
+  rr::encrypt(pair.alice, "second", h1, ct1);
+
+  // Deliver the second first, caching the key for the first.
+  CHECK_EQ(rr::decrypt(pair.bob, h1, ct1), std::string("second"));
+  CHECK_EQ(pair.bob.skipped.size(), std::size_t{1});
+
+  std::vector<uint8_t> tampered = ct0;
+  tampered.back() ^= 0x01;
+  CHECK_THROWS(rr::decrypt(pair.bob, h0, tampered));
+  CHECK_EQ(pair.bob.skipped.size(), std::size_t{1});
+
+  CHECK_EQ(rr::decrypt(pair.bob, h0, ct0), std::string("first"));
+  CHECK(pair.bob.skipped.empty());
+}
+
+TEST("an over-wide gap is refused without disturbing the session") {
+  Pair pair = make_established_pair();
+
+  message::RatchetHeader h;
+  std::vector<uint8_t> ct;
+  rr::encrypt(pair.alice, "in reach", h, ct);
+
+  const StateSnapshot before(pair.bob);
+
+  message::RatchetHeader far = h;
+  far.n = static_cast<uint32_t>(rr::kMaxSkip) + 10;
+  CHECK_THROWS(rr::decrypt(pair.bob, far, ct));
+  CHECK(before.matches(pair.bob));
+
+  CHECK_EQ(rr::decrypt(pair.bob, h, ct), std::string("in reach"));
+}
+
 TEST("a key stamped in the future is not expired by a clock that slipped") {
   Pair pair = make_established_pair();
 

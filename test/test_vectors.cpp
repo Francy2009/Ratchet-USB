@@ -22,6 +22,7 @@
 #include "ratchet/ratchet.hpp"
 #include "ratchet/store.hpp"
 #include "ratchet/x25519.hpp"
+#include "ratchet/x3dh.hpp"
 #include "test_support.hpp"
 #include "vectors/vectors.hpp"
 
@@ -284,4 +285,107 @@ TEST("vectors: both HKDF paths produce the same bytes") {
   expect_key(new_rk, vec::kRkOut,
              kdf::using_libsodium_hkdf() ? "root key (libsodium HKDF)"
                                          : "root key (fallback HKDF)");
+}
+
+// --- The X3DH combine step --------------------------------------------------
+//
+// The step that turns three or four Diffie-Hellman outputs into the session's
+// first key had no known-answer coverage at all, which is how the identity
+// keys came to be missing from it while every round-trip test passed: both
+// sides derived the same wrong thing.
+
+namespace {
+
+IdentitySigningPublicKey identity_from(std::string_view hex) {
+  const std::vector<uint8_t> bytes = unhex(hex);
+  if (bytes.size() != kEdPublicBytes) {
+    throw test::Failure("expected a 32-byte identity key vector");
+  }
+  IdentitySigningPublicKey pk{};
+  std::copy(bytes.begin(), bytes.end(), pk.begin());
+  return pk;
+}
+
+}  // namespace
+
+TEST("vectors: the X3DH combine info string matches the wire contract") {
+  CHECK_EQ(std::string(x3dh::detail::kCombineInfo),
+           std::string(vec::kCombineInfo));
+}
+
+TEST("vectors: a 3-DH combine matches the independent reference") {
+  const SecureBytes<32> dh1 = key_from(vec::kX3dhDh1);
+  const SecureBytes<32> dh2 = key_from(vec::kX3dhDh2);
+  const SecureBytes<32> dh3 = key_from(vec::kX3dhDh3);
+  const std::vector<const SecureBytes<32>*> dhs = {&dh1, &dh2, &dh3};
+
+  SecureBytes<32> sk;
+  x3dh::detail::derive_shared_secret(identity_from(vec::kX3dhIkInitiator),
+                                     identity_from(vec::kX3dhIkResponder), dhs,
+                                     sk);
+  expect_key(sk, vec::kX3dhSk3Dh, "X3DH shared secret (3-DH)");
+}
+
+TEST("vectors: a 4-DH combine matches the independent reference") {
+  const SecureBytes<32> dh1 = key_from(vec::kX3dhDh1);
+  const SecureBytes<32> dh2 = key_from(vec::kX3dhDh2);
+  const SecureBytes<32> dh3 = key_from(vec::kX3dhDh3);
+  const SecureBytes<32> dh4 = key_from(vec::kX3dhDh4);
+  const std::vector<const SecureBytes<32>*> dhs = {&dh1, &dh2, &dh3, &dh4};
+
+  SecureBytes<32> sk;
+  x3dh::detail::derive_shared_secret(identity_from(vec::kX3dhIkInitiator),
+                                     identity_from(vec::kX3dhIkResponder), dhs,
+                                     sk);
+  expect_key(sk, vec::kX3dhSk4Dh, "X3DH shared secret (4-DH)");
+}
+
+TEST("vectors: the two identities are not interchangeable in the combine") {
+  // Same DH outputs, the identities the other way round. A derivation that
+  // dropped the salt -- or that sorted the two keys instead of ordering them
+  // by role -- would land back on kX3dhSk3Dh here.
+  const SecureBytes<32> dh1 = key_from(vec::kX3dhDh1);
+  const SecureBytes<32> dh2 = key_from(vec::kX3dhDh2);
+  const SecureBytes<32> dh3 = key_from(vec::kX3dhDh3);
+  const std::vector<const SecureBytes<32>*> dhs = {&dh1, &dh2, &dh3};
+
+  SecureBytes<32> sk;
+  x3dh::detail::derive_shared_secret(identity_from(vec::kX3dhIkResponder),
+                                     identity_from(vec::kX3dhIkInitiator), dhs,
+                                     sk);
+  expect_key(sk, vec::kX3dhSkSwapped, "X3DH shared secret (roles swapped)");
+  CHECK(std::string(vec::kX3dhSkSwapped) != std::string(vec::kX3dhSk3Dh));
+}
+
+TEST("vectors: one flipped sign bit in an identity changes the secret") {
+  // kX3dhIkNegated differs from kX3dhIkInitiator in exactly one bit: the top
+  // bit of byte 31, which carries the sign of x in an Ed25519 encoding and is
+  // the bit the conversion to X25519 throws away. Two such keys therefore
+  // produce identical Diffie-Hellman output everywhere, and the combine step
+  // is the only place left that can tell them apart.
+  const SecureBytes<32> dh1 = key_from(vec::kX3dhDh1);
+  const SecureBytes<32> dh2 = key_from(vec::kX3dhDh2);
+  const SecureBytes<32> dh3 = key_from(vec::kX3dhDh3);
+  const std::vector<const SecureBytes<32>*> dhs = {&dh1, &dh2, &dh3};
+
+  const IdentitySigningPublicKey plain = identity_from(vec::kX3dhIkInitiator);
+  const IdentitySigningPublicKey negated = identity_from(vec::kX3dhIkNegated);
+
+  // The premise the vector rests on: one bit, and it is that one.
+  int differing_bytes = 0;
+  for (std::size_t i = 0; i < plain.size(); ++i) {
+    if (plain[i] != negated[i]) {
+      ++differing_bytes;
+      CHECK_EQ(static_cast<int>(plain[i] ^ negated[i]), 0x80);
+      CHECK_EQ(i, plain.size() - 1);
+    }
+  }
+  CHECK_EQ(differing_bytes, 1);
+
+  SecureBytes<32> sk;
+  x3dh::detail::derive_shared_secret(negated,
+                                     identity_from(vec::kX3dhIkResponder), dhs,
+                                     sk);
+  expect_key(sk, vec::kX3dhSkNegated, "X3DH shared secret (negated identity)");
+  CHECK(std::string(vec::kX3dhSkNegated) != std::string(vec::kX3dhSk3Dh));
 }
