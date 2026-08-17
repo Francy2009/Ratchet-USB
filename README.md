@@ -382,3 +382,9 @@ the bottom, is also the legal version of everything above: the software
 comes with no warranty of any kind, and I am not liable for what it does or
 fails to do. The BIP-39 wordlist and libsodium are third-party and credited
 in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+---
+
+Developed in Italy, open source, and free to read, use and modify by anyone
+— because privacy is not a feature, it's a basic right, and a tool meant to
+protect it should not ask you to trust a closed box to do so.
