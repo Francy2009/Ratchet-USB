@@ -162,19 +162,11 @@ ReceiveResult receive(store::VaultStore& vault, const IdentitySigningSecretKey& 
       result.contact_index = i;
       result.alias = vault.contacts[i].alias;
 
-      // decrypt() ratchets the chains forward, caches skipped keys and, when
-      // the header carries an unfamiliar ratchet key, performs a whole DH step
-      // -- all of it before the AEAD tag has been checked, because the tag
-      // cannot be checked until the key is derived. A forged header therefore
-      // rearranges the session and only then fails.
-      //
-      // Working on a copy and adopting it on success keeps that damage local
-      // to the copy. It used to be harmless only because `recv` happens not to
-      // save the vault when a command throws, which is a real property resting
-      // on an invariant written down nowhere and enforced by nothing.
-      store::Session candidate = store::clone_session(s);
-      result.plaintext = ratchet::decrypt(candidate, env.header, env.ciphertext);
-      s = std::move(candidate);
+      // ratchet::decrypt is atomic: it advances `s` only once the AEAD tag has
+      // checked out, so a forged or repeated message leaves the session
+      // untouched. That guarantee used to live here, as a clone this function
+      // remembered to make; it belongs to the ratchet, so it moved there.
+      result.plaintext = ratchet::decrypt(s, env.header, env.ciphertext);
 
       result.session_established = false;
       return result;

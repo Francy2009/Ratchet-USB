@@ -51,6 +51,30 @@ inline constexpr std::string_view kRkAliasOut =
 inline constexpr std::string_view kRkAliasCk =
     "4e0f5eace22c32f916f0d0278986733383041fe7d0cb1ea78b259649c4eab95e";
 
+// --- X3DH combine: identities + DH outputs -> shared secret ---
+inline constexpr std::string_view kX3dhIkInitiator =
+    "8f47ff875ea9ca83c3fc80246de3fcc5697d02b179e8f6d668f371d5bc835e5f";
+inline constexpr std::string_view kX3dhIkResponder =
+    "3b34cd5b0cb249e5d2a56a7317a56ca60d9ea9c649d67a22ec419c56c05819a8";
+inline constexpr std::string_view kX3dhIkNegated =
+    "8f47ff875ea9ca83c3fc80246de3fcc5697d02b179e8f6d668f371d5bc835edf";
+inline constexpr std::string_view kX3dhDh1 =
+    "05fc6ab7c9400e898431e143e871982ad171a909d3efd6db3a81ef2c29313690";
+inline constexpr std::string_view kX3dhDh2 =
+    "b3d089c77105a94d8548173da1e19d7990eb50d1aaefbaac9648d32d857d4073";
+inline constexpr std::string_view kX3dhDh3 =
+    "9bd77c4a35e52e7d5fe23cda1b5122f0b76758def410321a2d6fa0dc2a8ac655";
+inline constexpr std::string_view kX3dhDh4 =
+    "107cf75d03912a1567f12e265e73a739b2f0a8295ddef39a3db337711a442e72";
+inline constexpr std::string_view kX3dhSk3Dh =
+    "0ec4b964f2c8b2b8bd1c5ff7599abd85954930d632bdf2a8887c863cb784a0e2";
+inline constexpr std::string_view kX3dhSk4Dh =
+    "9885e3ff0b3d61c3fa8b33aafd32999c304f56a3546e812de4ee564c444a5a14";
+inline constexpr std::string_view kX3dhSkSwapped =
+    "7ec11e098d5d19c1d6a8bee8824867ccace40fd211031bf98cf497cd53b83bf3";
+inline constexpr std::string_view kX3dhSkNegated =
+    "a24a1321cf331be31f664cf1b83fc614cde6b9b3b6e5c39caf2078584e76b8c7";
+
 // --- Session setup, Alice's side ---
 inline constexpr std::string_view kSharedSecret =
     "840c8443f057ede71e75eecc33c14db691620642febe3941116ccc4464ac672f";
@@ -98,8 +122,9 @@ inline constexpr uint32_t kAadN = 84281096u;
 inline constexpr std::string_view kAad =
     "773a99121cce0ee0209c683f52fb6d968cf5609a7b2de1a6fb67a89bccd237280403020108070605";
 
-// --- The wire-contract info string ---
+// --- The wire-contract info strings ---
 inline constexpr std::string_view kRootInfo = "Ratchet-USB/v1/ratchet-root";
+inline constexpr std::string_view kCombineInfo = "Ratchet-USB/v2/x3dh";
 
 }  // namespace ratchet::test::vectors
 

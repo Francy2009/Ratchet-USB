@@ -139,6 +139,35 @@ def hkdf_expand(prk, info, length):
 # --------------------------------------------------------------------------
 
 ROOT_INFO = b"Ratchet-USB/v1/ratchet-root"
+COMBINE_INFO = b"Ratchet-USB/v2/x3dh"
+
+
+def x3dh_combine(ik_initiator, ik_responder, dhs):
+    """The X3DH combine step: DH outputs -> the session's initial shared secret.
+
+        salt = AD  = count || Encode(IK_initiator) || Encode(IK_responder)
+        ikm        = 0xFF * 32 || DH1 || DH2 || DH3 || [DH4]
+
+    Two things here are worth stating plainly, because a round-trip test cannot
+    see either of them.
+
+    The 0xFF prefix is the X3DH specification's own guard against a class of
+    implementation mix-up: it makes the IKM impossible to confuse with a bare
+    Curve25519 point.
+
+    The salt is where this project departs from the specification, which puts
+    the two identity keys in the associated data of the first message's AEAD
+    instead. Folding them into the extract step binds *every* key the ratchet
+    goes on to derive to both identities, rather than only the opening
+    message's tag. It is also what stops two Ed25519 keys that differ only in
+    the sign of x -- which convert to the same X25519 key, and so produce
+    identical DH output at every step -- from yielding the same secret. The
+    count leads the salt so a 3-DH transcript cannot collide with a 4-DH one.
+    """
+    ikm = b"\xff" * 32 + b"".join(dhs)
+    ad = bytes([len(dhs)]) + ik_initiator + ik_responder
+    prk = hkdf_extract(ad, ikm)
+    return hkdf_expand(prk, COMBINE_INFO, 32)
 
 
 def kdf_rk(rk, dh_out):
@@ -304,6 +333,34 @@ def build_vectors():
     # src/ratchet.cpp relies on this being safe; the vector pins the result.
     v["rk_alias_out"], v["rk_alias_ck"] = kdf_rk(rk_in, dh_in)
 
+    # -- X3DH combine: DH outputs and identities -> the shared secret ------
+    # The identity keys are opaque 32-byte strings here on purpose. The
+    # combine step never interprets them -- it only commits to their exact
+    # encoding -- so pinning it does not require a second Ed25519
+    # implementation, and the vector stays about the key schedule.
+    ik_initiator = _seed(b"x3dh-identity-initiator")
+    ik_responder = _seed(b"x3dh-identity-responder")
+    x3dh_dhs = [_seed(b"x3dh-dh%d" % i) for i in (1, 2, 3, 4)]
+
+    v["x3dh_ik_initiator"] = ik_initiator
+    v["x3dh_ik_responder"] = ik_responder
+    for i, dh in enumerate(x3dh_dhs, start=1):
+        v[f"x3dh_dh{i}"] = dh
+
+    v["x3dh_sk_3dh"] = x3dh_combine(ik_initiator, ik_responder, x3dh_dhs[:3])
+    v["x3dh_sk_4dh"] = x3dh_combine(ik_initiator, ik_responder, x3dh_dhs)
+    # Same DH values, the two identities the other way round. A derivation
+    # that ignored the salt would produce the same bytes as x3dh_sk_3dh.
+    v["x3dh_sk_swapped"] = x3dh_combine(ik_responder, ik_initiator, x3dh_dhs[:3])
+    # Same DH values again, and an initiator key differing in one bit -- the
+    # sign bit of x, the one the Ed25519-to-X25519 conversion discards.
+    ik_negated = bytearray(ik_initiator)
+    ik_negated[31] ^= 0x80
+    v["x3dh_ik_negated"] = bytes(ik_negated)
+    v["x3dh_sk_negated"] = x3dh_combine(
+        bytes(ik_negated), ik_responder, x3dh_dhs[:3]
+    )
+
     # -- Session setup, Alice's side (fully deterministic) -----------------
     shared_secret = _seed(b"x3dh-shared-secret")
     alice_eph_sk = _clamp(_seed(b"alice-ephemeral"))
@@ -401,6 +458,22 @@ def emit(v, out):
     ]:
         out.write(_cpp_bytes(name, v[key]))
 
+    out.write("\n// --- X3DH combine: identities + DH outputs -> shared secret ---\n")
+    for name, key in [
+        ("kX3dhIkInitiator", "x3dh_ik_initiator"),
+        ("kX3dhIkResponder", "x3dh_ik_responder"),
+        ("kX3dhIkNegated", "x3dh_ik_negated"),
+        ("kX3dhDh1", "x3dh_dh1"),
+        ("kX3dhDh2", "x3dh_dh2"),
+        ("kX3dhDh3", "x3dh_dh3"),
+        ("kX3dhDh4", "x3dh_dh4"),
+        ("kX3dhSk3Dh", "x3dh_sk_3dh"),
+        ("kX3dhSk4Dh", "x3dh_sk_4dh"),
+        ("kX3dhSkSwapped", "x3dh_sk_swapped"),
+        ("kX3dhSkNegated", "x3dh_sk_negated"),
+    ]:
+        out.write(_cpp_bytes(name, v[key]))
+
     out.write("\n// --- Session setup, Alice's side ---\n")
     for name, key in [
         ("kSharedSecret", "shared_secret"),
@@ -435,8 +508,11 @@ def emit(v, out):
     out.write(f'inline constexpr uint32_t kAadN = {v["aad_n"]}u;\n')
     out.write(_cpp_bytes("kAad", v["aad"]))
 
-    out.write("\n// --- The wire-contract info string ---\n")
+    out.write("\n// --- The wire-contract info strings ---\n")
     out.write(f'inline constexpr std::string_view kRootInfo = "{ROOT_INFO.decode()}";\n')
+    out.write(
+        f'inline constexpr std::string_view kCombineInfo = "{COMBINE_INFO.decode()}";\n'
+    )
 
     out.write("\n}  // namespace ratchet::test::vectors\n\n")
     out.write("#endif  // RATCHET_TEST_VECTORS_HPP\n")

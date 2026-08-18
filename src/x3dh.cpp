@@ -14,15 +14,20 @@ namespace ratchet::x3dh {
 namespace {
 
 constexpr std::array<uint8_t, 4> kCardMagic = {'R', 'C', 'R', 'C'};
-constexpr uint8_t kCardVersion = 1;
-constexpr std::string_view kCombineInfo = "Ratchet-USB/v1/x3dh";
+// v1 signed only the prekey and left the prekey id and every one-time prekey
+// unauthenticated. There is no way to retrofit a signature onto a v1 card --
+// only the identity that issued it could -- so v1 is refused rather than
+// accepted with a warning, and the fix for a stale card is to ask for a new one.
+constexpr uint8_t kCardVersion = 2;
+constexpr std::string_view kCardContext = "Ratchet-USB/v2/contact-card";
 
-// SK = HKDF(salt=0, ikm = 0xFF*32 || DH1 || DH2 || DH3 || [DH4], info=...).
-// The 0xFF prefix is the X3DH spec's guard against a specific class of
-// implementation mix-ups (it makes the input distinguishable from a bare
-// Curve25519 point); the low-order-point rejection that DH1..DH4 already
-// went through is the actual security-relevant check.
-void derive_shared_secret(const std::vector<const SecureBytes<32>*>& dhs,
+}  // namespace
+
+namespace detail {
+
+void derive_shared_secret(const IdentitySigningPublicKey& ik_initiator,
+                          const IdentitySigningPublicKey& ik_responder,
+                          const std::vector<const SecureBytes<32>*>& dhs,
                           SecureBytes<32>& out) {
   init_sodium();
   SecureBuffer ikm;
@@ -34,21 +39,35 @@ void derive_shared_secret(const std::vector<const SecureBytes<32>*>& dhs,
     ikm.append(dh->data(), dh->size());
   }
 
+  // See the header for why this is the Ed25519 encoding and not its X25519
+  // conversion, and why the order is fixed rather than negotiated.
+  std::vector<uint8_t> ad;
+  ad.reserve(1 + ik_initiator.size() + ik_responder.size());
+  ad.push_back(static_cast<uint8_t>(dhs.size()));
+  ad.insert(ad.end(), ik_initiator.begin(), ik_initiator.end());
+  ad.insert(ad.end(), ik_responder.begin(), ik_responder.end());
+
   kdf::Prk prk;
-  kdf::extract(prk, nullptr, 0, ikm.data(), ikm.size());
+  kdf::extract(prk, ad.data(), ad.size(), ikm.data(), ikm.size());
   kdf::expand(out.data(), out.size(), kCombineInfo, prk);
 }
 
-}  // namespace
+}  // namespace detail
 
-std::string export_card(const IdentitySigningPublicKey& identity_pk,
-                        const prekey::SignedPrekey& spk,
-                        const std::vector<prekey::OneTimePrekey>& otpks) {
+namespace {
+
+using detail::derive_shared_secret;
+
+// Everything a card commits to, in one buffer: the identity, the signed
+// prekey with its id, and every one-time prekey. This is what the card-wide
+// signature covers, and it is deliberately built by one function so the writer
+// and the reader cannot drift.
+std::vector<uint8_t> build_signed_body(
+    const IdentitySigningPublicKey& identity_pk, const prekey::SignedPrekey& spk,
+    const std::vector<prekey::OneTimePrekey>& otpks) {
   std::vector<uint8_t> body;
   serial::Writer<std::vector<uint8_t>> w(body);
-
-  w.bytes(kCardMagic.data(), kCardMagic.size());
-  w.u8(kCardVersion);
+  w.str(kCardContext);
   w.bytes(identity_pk.data(), identity_pk.size());
   w.u32(spk.id);
   w.bytes(spk.pub.data(), spk.pub.size());
@@ -58,6 +77,27 @@ std::string export_card(const IdentitySigningPublicKey& identity_pk,
     w.u32(o.id);
     w.bytes(o.pub.data(), o.pub.size());
   }
+  return body;
+}
+
+}  // namespace
+
+std::string export_card(const IdentitySigningSecretKey& identity_sk,
+                        const IdentitySigningPublicKey& identity_pk,
+                        const prekey::SignedPrekey& spk,
+                        const std::vector<prekey::OneTimePrekey>& otpks) {
+  const std::vector<uint8_t> signed_body =
+      build_signed_body(identity_pk, spk, otpks);
+
+  Signature card_sig{};
+  sign(identity_sk, signed_body.data(), signed_body.size(), card_sig);
+
+  std::vector<uint8_t> body;
+  serial::Writer<std::vector<uint8_t>> w(body);
+  w.bytes(kCardMagic.data(), kCardMagic.size());
+  w.u8(kCardVersion);
+  w.blob(signed_body.data(), signed_body.size());
+  w.bytes(card_sig.data(), card_sig.size());
 
   return wire::encode_block("CARD", body.data(), body.size());
 }
@@ -73,31 +113,58 @@ ImportedCard import_card(std::string_view base64_card) {
   }
   const uint8_t version = r.u8();
   if (version != kCardVersion) {
-    throw Error("unsupported contact card version " + std::to_string(version));
+    throw Error(
+        "unsupported contact card version " + std::to_string(version) +
+        " (this build issues and accepts version " +
+        std::to_string(kCardVersion) +
+        "; ask them for a freshly exported card)");
   }
 
-  ImportedCard out;
-  r.bytes(out.identity_pub.data(), out.identity_pub.size());
-  out.card.spk_id = r.u32();
-  r.bytes(out.card.spk_pub.data(), out.card.spk_pub.size());
-  r.bytes(out.card.spk_signature.data(), out.card.spk_signature.size());
-
-  const uint32_t otpk_count = r.u32();
-  // A one-time prekey is a u32 id plus a 32-byte public key on the wire; the
-  // count is capped by how many of those the rest of the card could hold.
-  out.card.one_time_prekeys.reserve(r.bounded_count(otpk_count, 4 + 32));
-  for (uint32_t i = 0; i < otpk_count; ++i) {
-    store::PeerOtpk o;
-    o.id = r.u32();
-    r.bytes(o.pub.data(), o.pub.size());
-    out.card.one_time_prekeys.push_back(o);
-  }
-
+  const std::vector<uint8_t> signed_body = r.blob();
+  Signature card_sig{};
+  r.bytes(card_sig.data(), card_sig.size());
   if (!r.at_end()) {
     throw Error("contact card has trailing data");
   }
 
-  if (!prekey::verify_signed_prekey_signature(out.identity_pub, out.card.spk_pub,
+  // The identity is the first field inside the body, so it is read out and
+  // then used to check the body that carries it. Everything after this point
+  // is walking bytes that key has signed.
+  serial::Reader br(signed_body.data(), signed_body.size());
+  if (br.str() != kCardContext) {
+    throw Error("not a Ratchet-USB contact card");
+  }
+
+  ImportedCard out;
+  br.bytes(out.identity_pub.data(), out.identity_pub.size());
+  if (!verify(out.identity_pub, signed_body.data(), signed_body.size(),
+              card_sig)) {
+    throw Error(
+        "the card's signature does not match its identity key (the card may "
+        "be corrupted or forged)");
+  }
+
+  out.card.spk_id = br.u32();
+  br.bytes(out.card.spk_pub.data(), out.card.spk_pub.size());
+  br.bytes(out.card.spk_signature.data(), out.card.spk_signature.size());
+
+  const uint32_t otpk_count = br.u32();
+  // A one-time prekey is a u32 id plus a 32-byte public key on the wire; the
+  // count is capped by how many of those the rest of the card could hold.
+  out.card.one_time_prekeys.reserve(br.bounded_count(otpk_count, 4 + 32));
+  for (uint32_t i = 0; i < otpk_count; ++i) {
+    store::PeerOtpk o;
+    o.id = br.u32();
+    br.bytes(o.pub.data(), o.pub.size());
+    out.card.one_time_prekeys.push_back(o);
+  }
+
+  if (!br.at_end()) {
+    throw Error("contact card has trailing data inside its signed body");
+  }
+
+  if (!prekey::verify_signed_prekey_signature(out.identity_pub, out.card.spk_id,
+                                              out.card.spk_pub,
                                               out.card.spk_signature)) {
     throw Error(
         "the card's signed prekey signature does not match its identity key "
@@ -117,9 +184,13 @@ InitiatorResult initiate(const IdentitySigningSecretKey& my_identity_sk,
   }
   store::PeerCard& card = *contact.card;
 
-  if (!prekey::verify_signed_prekey_signature(contact.identity_pub, card.spk_pub,
+  if (!prekey::verify_signed_prekey_signature(contact.identity_pub, card.spk_id,
+                                              card.spk_pub,
                                               card.spk_signature)) {
-    throw Error("stored signed prekey signature is no longer valid");
+    throw Error(
+        "the stored card for this contact does not verify against their "
+        "identity key; ask them for a freshly exported card and import it "
+        "again (`add-contact`)");
   }
 
   IdentityDHSecretKey my_dh_sk;
@@ -164,7 +235,9 @@ InitiatorResult initiate(const IdentitySigningSecretKey& my_identity_sk,
     parts.push_back(&dh4);
   }
 
-  derive_shared_secret(parts, result.shared_secret);
+  // We are the initiator; the contact is the responder.
+  derive_shared_secret(my_identity_pk, contact.identity_pub, parts,
+                       result.shared_secret);
   result.ephemeral_sk = std::move(eph_sk);
   return result;
 }
@@ -195,8 +268,10 @@ SecureBytes<32> respond(const IdentitySigningSecretKey& my_identity_sk,
     parts.push_back(&dh4);
   }
 
+  // Mirror of `initiate`: the peer holding the ephemeral is the initiator, so
+  // their identity leads the salt on this side too.
   SecureBytes<32> secret;
-  derive_shared_secret(parts, secret);
+  derive_shared_secret(their_identity_pk, my_identity_pk, parts, secret);
   return secret;
 }
 

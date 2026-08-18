@@ -5,6 +5,7 @@
 
 #include <cstdio>
 #include <iostream>
+#include <string>
 
 namespace ratchet::terminal {
 namespace {
@@ -57,6 +58,32 @@ void clear_stale_eof() {
 }  // namespace
 
 bool stdin_is_tty() { return isatty(STDIN_FILENO) != 0; }
+
+bool stdout_is_tty() { return isatty(STDOUT_FILENO) != 0; }
+
+std::string escape_control_chars(std::string_view text) {
+  static constexpr char kHex[] = "0123456789abcdef";
+  std::string out;
+  out.reserve(text.size());
+  for (const char ch : text) {
+    const auto c = static_cast<unsigned char>(ch);
+    // Newline and tab are the two controls a message legitimately contains.
+    const bool is_control =
+        (c < 0x20 || c == 0x7F) && c != '\n' && c != '\t';
+    if (is_control) {
+      out += "\\x";
+      out.push_back(kHex[c >> 4]);
+      out.push_back(kHex[c & 0x0F]);
+    } else {
+      out.push_back(ch);
+    }
+  }
+  return out;
+}
+
+std::string escape_if_tty(std::string_view text) {
+  return stdout_is_tty() ? escape_control_chars(text) : std::string(text);
+}
 
 SecureString read_passphrase(const std::string& prompt) {
   clear_stale_eof();

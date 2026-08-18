@@ -158,9 +158,9 @@ inline constexpr std::size_t kMaxAcceptedHandshakes = 512;
 // deletes its copy constructor so that a second copy of a secret can never
 // appear by accident, with a lifetime nobody is tracking. This function is the
 // sanctioned exception, spelled out by name at the one call site that needs
-// it -- `receive` decrypts into a copy and adopts it only once the AEAD tag has
-// checked out, so a forged message cannot leave a half-ratcheted session
-// behind. The copy is wiped when it goes out of scope like any other.
+// it -- `ratchet::decrypt` advances a copy and adopts it only once the AEAD
+// tag has checked out, so a forged message cannot leave a half-ratcheted
+// session behind. The copy is wiped when it goes out of scope like any other.
 Session clone_session(const Session& session);
 
 // Serialises into a freshly allocated SecureBuffer, ready to be handed to

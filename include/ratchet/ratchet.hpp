@@ -99,6 +99,11 @@ std::size_t expire_skipped_keys(store::Session& session, uint64_t now);
 // skipped along the way so a message that arrives out of order can still be
 // decrypted later. Throws Error on a bad authentication tag, or if the
 // message is further ahead than kMaxSkip lets it catch up to.
+//
+// Atomic: `session` is advanced only if the AEAD tag checks out. On any
+// failure it is left exactly as it was, down to the skipped-key cache, so a
+// forged header cannot leave a half-ratcheted session behind and a message
+// delivered twice cannot burn the key belonging to the next one.
 std::string decrypt(store::Session& session, const message::RatchetHeader& header,
                     const std::vector<uint8_t>& ciphertext);
 
