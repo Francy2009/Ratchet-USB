@@ -18,6 +18,11 @@ removable drive, never on the computer itself. The tool finds the drive on
 its own most of the time; `--usb-path` is there for when you'd rather not
 leave it to guessing.
 
+There are two ways to drive it. `ratchet-usb` on its own opens a small
+full-screen interface in the terminal you are already in -- arrow keys, one
+letter per action, no flags to remember. Every command it wraps is still there
+to be typed or scripted, exactly as before.
+
 Phase 2 right now: you can make an identity, add contacts, send and receive
 with forward-secret encryption. No group chats yet, no using one identity
 from two machines, no public key directory. More on all of that at the
@@ -68,8 +73,12 @@ anything.
 Plug in a drive, then:
 
 ```sh
-ratchet-usb init
+ratchet-usb
 ```
+
+That opens the interface, finds the drive and walks you through setting it up.
+If you would rather type commands, `ratchet-usb init` does the same thing and
+asks the same question:
 
 ```
 Found a removable drive to set up:
@@ -77,7 +86,7 @@ Found a removable drive to set up:
 Use it? [Y/n]
 ```
 
-That's it. Every command after this finds the same drive on its own:
+Either way, every command after this finds the same drive on its own:
 
 ```sh
 ratchet-usb contacts
@@ -116,6 +125,50 @@ ratchet-usb send alice "hi" > msg.txt
 # Alice reads it
 ratchet-usb recv "$(cat msg.txt)"
 ```
+
+## The interface
+
+```sh
+ratchet-usb
+```
+
+That is the whole thing. It finds the drive, asks for the passphrase once, and
+puts your fingerprint and your contacts on screen; from there `a` adds someone
+from their card, `c` shows your own card to hand out, `r` reads a message you
+paste in, `w` writes one, `t` marks a contact verified, `l` locks, `q` quits.
+`--lang en` or `--lang it` picks the language; without it, an Italian locale
+gets Italian and everything else gets English.
+
+Unlocking once instead of once per command is most of the point: Argon2id at
+256 MiB takes a moment, and the command line pays it eight times over a
+conversation. The vault closes again on its own after three minutes with no key
+pressed, and immediately if the process is suspended -- `--idle-lock <seconds>`
+changes that, `--idle-lock 0` turns it off.
+
+It runs in the terminal you already have rather than in a window of its own,
+and that is a decision rather than an economy:
+
+- Nothing appears in an application menu, there is no icon, and the window
+  title is never touched -- a title saying what you are running shows up in the
+  taskbar, in the window switcher, and in any screenshot or screen share.
+- It draws on the alternate screen, so quitting leaves the terminal showing
+  exactly what it showed before. No contact list and no message stays in the
+  scrollback to be scrolled back to.
+- Nothing new is written to the host: no config file, no history, no cache.
+  The only thing that persists is still `vault.bin` on the drive.
+- It reaches for nothing outside the process. No clipboard, no `$EDITOR`, no
+  helper program, no library beyond libsodium -- a graphical toolkit would have
+  brought an X11 or Wayland socket, D-Bus, and an accessibility bus that can
+  read the text of every widget on screen.
+
+One thing it is better at than the command line, rather than merely equal:
+`ratchet-usb send alice "the message"` leaves that message in `~/.bash_history`
+in the clear, on the host disk. Typed into the interface it never passes
+through `argv` or the shell at all.
+
+With the input or the output redirected -- a pipe, a script, `ratchet-usb <
+file` -- none of this happens and a command is still required, down to the same
+error message as before. Nothing that was scriptable stopped being scriptable.
 
 ## Which drive it uses
 
@@ -162,6 +215,9 @@ whatever alias you give it, checking the signature along the way.
 fingerprint some other way. `send <alias> [message]` encrypts for someone,
 setting up the session first if there isn't one yet. `recv [message]` does
 the same on the receiving end.
+
+`ui` opens the interface described above, and is what a bare `ratchet-usb`
+runs on a terminal.
 
 Those 12 words from `init` are shown once and saved nowhere — they're the
 backup, and whoever has them can rebuild your identity. Not everything,
@@ -364,6 +420,14 @@ to being rejected unless the whole operation commits or rolls back as one.
 The tests assert the session is byte-for-byte unchanged after a bad tag, a
 forged ratchet key, a duplicate delivery and an over-wide gap, and that the
 genuine message still decrypts afterwards in each case.
+
+`test/smoke_ui.py` does the same for the interface, through a real pty: two
+vaults, a card pasted in with the terminal's bracketed-paste markers, a contact
+verified, a message written on one side and read on the other. It also asserts
+what must never reach the terminal -- no window-title sequence, no mouse
+reporting, and the alternate screen actually entered. It earned that last check
+by finding three things the unit tests could not see, none of which were about
+the state machine at all.
 
 `test/smoke.sh` separately drives the actual binary through a full
 conversation — two vaults, a card exchange, handshake, reply, messages

@@ -96,6 +96,13 @@ jobs:
       - name: End-to-end smoke test
         run: ./test/smoke.sh build/ratchet-usb
 
+      # The interface cannot be tested by the unit tests past its state
+      # machine: raw mode, the passphrase prompts that step outside the frame,
+      # and bracketed paste only exist in front of a real terminal. This drives
+      # a whole conversation through a pty.
+      - name: The interface, driven through a real terminal
+        run: python3 test/smoke_ui.py build/ratchet-usb
+
   # ---------------------------------------------------------------------
   # There are two HKDF implementations in this tree: libsodium's, and the
   # project's own RFC 5869 fallback for releases older than 1.0.19. Ubuntu
@@ -211,6 +218,12 @@ jobs:
           ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1:detect_stack_use_after_return=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
         run: ./test/smoke.sh build/ratchet-usb
+
+      - name: The interface, driven through a real terminal
+        env:
+          ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1:detect_stack_use_after_return=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: python3 test/smoke_ui.py build/ratchet-usb
 
   # ---------------------------------------------------------------------
   # Valgrind catches reads of uninitialised memory that ASan does not, which
@@ -384,6 +397,9 @@ jobs:
 
       - name: End-to-end smoke test
         run: ./test/smoke.sh build/ratchet-usb
+
+      - name: The interface, driven through a real terminal
+        run: python3 test/smoke_ui.py build/ratchet-usb
 
   # ---------------------------------------------------------------------
   # A single gate for branch protection to point at, so adding a job above

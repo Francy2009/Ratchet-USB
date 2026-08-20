@@ -540,6 +540,10 @@ void Driver::loop() {
       // the vault is closed. Whatever happened while this process was stopped,
       // it did not happen in front of the person who unlocked it.
       raw_.emplace();
+      // The suspend handler put SIGTSTP back to its default to let the stop
+      // actually happen, so it has to be put back now or a second suspend
+      // would leave the terminal in raw mode.
+      install_signal_handlers();
       screen::write_all("\033[?1049h\033[?25l");
       screen::set_bracketed_paste(true);
       if (vault_) {
