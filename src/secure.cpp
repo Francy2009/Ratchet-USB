@@ -155,6 +155,13 @@ bool memory_locking_degraded() noexcept {
   return g_accounting_degraded;
 }
 
+void wipe_string(std::string& text) {
+  if (!text.empty()) {
+    sodium_memzero(text.data(), text.size());
+  }
+  text.clear();
+}
+
 bool harden_process() noexcept {
   bool all_applied = true;
 

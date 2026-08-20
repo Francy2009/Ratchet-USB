@@ -124,14 +124,6 @@ std::size_t expire_skipped_keys(store::VaultStore& store);
 // vector<string> would be that copy.
 void print_mnemonic(const SecureString& mnemonic, std::ostream& os);
 
-// Zeroes a std::string's buffer before clearing it.
-//
-// Plaintext that has been decrypted for display cannot live in SecureString --
-// it arrives from session::receive as an ordinary string -- so this is the
-// next best thing: the bytes are gone from the heap as soon as the caller is
-// done showing them, instead of lingering until the allocator reuses them.
-void wipe(std::string& text);
-
 }  // namespace ratchet::app
 
 #endif  // RATCHET_APP_HPP

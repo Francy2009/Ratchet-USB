@@ -71,6 +71,17 @@ void unlock_region(void* p, std::size_t n) noexcept;
 // longer than they need to, which is the safe direction to be wrong in.
 bool memory_locking_degraded() noexcept;
 
+// Zeroes a std::string's buffer, then empties it.
+//
+// For plaintext that cannot live in SecureString because it did not start
+// there: a decrypted message arrives from session::receive as an ordinary
+// string, and a message being typed has to be edited before it is a secret
+// worth sealing. Neither is protected the way a key is -- the pages are not
+// locked, so they can reach swap -- but wiping them the moment the screen
+// stops showing them is a great deal better than leaving them on the heap
+// until the allocator happens to reuse the block.
+void wipe_string(std::string& text);
+
 // Fixed-size buffer for key material.
 //
 // The buffer is locked into RAM when the OS allows it (so it is not written to

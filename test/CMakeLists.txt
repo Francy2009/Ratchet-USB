@@ -13,6 +13,7 @@ add_executable(ratchet_tests
                test_secure.cpp
                test_terminal.cpp
                test_screen.cpp
+               test_ui.cpp
                test_vectors.cpp)
 
 target_link_libraries(ratchet_tests PRIVATE ratchet_core)

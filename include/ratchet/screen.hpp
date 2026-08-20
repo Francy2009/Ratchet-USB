@@ -65,6 +65,14 @@ std::string truncate_to_width(std::string_view text, std::size_t max_width);
 // everywhere it mattered" is a claim that decays with every new call site.
 std::string sanitize_line(std::string_view text);
 
+// Splits `text` into lines of at most `width` code points.
+//
+// Existing newlines are honoured, and a break falls on the last space of the
+// line when there is one, so a message reads as prose rather than as a block
+// cut every N characters. A run with no space in it -- a base64 block, a URL
+// -- is cut where the width runs out, always on a UTF-8 boundary.
+std::vector<std::string> wrap_text(std::string_view text, std::size_t width);
+
 // --- keys -------------------------------------------------------------------
 
 enum class KeyCode : uint8_t {

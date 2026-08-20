@@ -180,6 +180,65 @@ std::string truncate_to_width(std::string_view text, std::size_t max_width) {
   return out;
 }
 
+std::vector<std::string> wrap_text(std::string_view text, std::size_t width) {
+  std::vector<std::string> out;
+  if (width == 0) {
+    return out;
+  }
+
+  std::string line;
+  std::size_t line_width = 0;
+  std::size_t last_space = std::string::npos;  // byte offset within `line`
+
+  auto flush_line = [&](std::size_t keep_bytes) {
+    out.push_back(line.substr(0, keep_bytes));
+    std::string rest = line.substr(keep_bytes);
+    // The space the break happened at is not carried onto the next line.
+    while (!rest.empty() && rest.front() == ' ') {
+      rest.erase(rest.begin());
+    }
+    line = std::move(rest);
+    line_width = display_width(line);
+    last_space = std::string::npos;
+  };
+
+  std::size_t i = 0;
+  while (i < text.size()) {
+    const auto lead = static_cast<unsigned char>(text[i]);
+    if (lead == '\n') {
+      out.push_back(line);
+      line.clear();
+      line_width = 0;
+      last_space = std::string::npos;
+      ++i;
+      continue;
+    }
+
+    std::size_t step = sequence_length(lead);
+    if (step == 0 || i + step > text.size()) {
+      step = 1;  // malformed; take the byte and carry on
+    }
+    if (lead == ' ') {
+      last_space = line.size();
+    }
+    line.append(text, i, step);
+    ++line_width;
+    i += step;
+
+    if (line_width > width) {
+      if (last_space != std::string::npos && last_space > 0) {
+        flush_line(last_space);
+      } else {
+        // No space to break at: drop the character that overflowed onto the
+        // next line, which keeps the cut on a UTF-8 boundary.
+        flush_line(line.size() - step);
+      }
+    }
+  }
+  out.push_back(line);
+  return out;
+}
+
 std::size_t decode_key(std::string_view in, bool flush, Key& out) {
   out.code = KeyCode::None;
   out.text.clear();

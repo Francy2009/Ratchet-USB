@@ -180,11 +180,4 @@ void print_mnemonic(const SecureString& mnemonic, std::ostream& os) {
         "contacts and no sessions -- those live only in vault.bin.\n\n";
 }
 
-void wipe(std::string& text) {
-  if (!text.empty()) {
-    sodium_memzero(text.data(), text.size());
-  }
-  text.clear();
-}
-
 }  // namespace ratchet::app
