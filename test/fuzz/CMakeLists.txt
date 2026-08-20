@@ -18,6 +18,14 @@ target_link_libraries(fuzz_session PRIVATE ratchet_core)
 target_compile_options(fuzz_session PRIVATE ${RATCHET_FUZZ_FLAGS})
 target_link_options(fuzz_session PRIVATE -fsanitize=fuzzer,address,undefined)
 
+# The interface's input path. Same reasoning as fuzz_parsers: what a terminal
+# hands over includes whatever was pasted into the window, and a pasted block
+# is exactly as untrusted as one read from a file.
+add_executable(fuzz_ui_keys fuzz_ui_keys.cpp)
+target_link_libraries(fuzz_ui_keys PRIVATE ratchet_core)
+target_compile_options(fuzz_ui_keys PRIVATE ${RATCHET_FUZZ_FLAGS})
+target_link_options(fuzz_ui_keys PRIVATE -fsanitize=fuzzer,address,undefined)
+
 # The harness gets the full -fsanitize=fuzzer (it supplies main); ratchet_core
 # is instrumented by the top-level CMakeLists with fuzzer-no-link, so the
 # coverage feedback the fuzzer steers by actually comes from the parsers rather

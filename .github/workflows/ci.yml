@@ -96,6 +96,13 @@ jobs:
       - name: End-to-end smoke test
         run: ./test/smoke.sh build/ratchet-usb
 
+      # The interface cannot be tested by the unit tests past its state
+      # machine: raw mode, the passphrase prompts that step outside the frame,
+      # and bracketed paste only exist in front of a real terminal. This drives
+      # a whole conversation through a pty.
+      - name: The interface, driven through a real terminal
+        run: python3 test/smoke_ui.py build/ratchet-usb
+
   # ---------------------------------------------------------------------
   # There are two HKDF implementations in this tree: libsodium's, and the
   # project's own RFC 5869 fallback for releases older than 1.0.19. Ubuntu
@@ -212,6 +219,12 @@ jobs:
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
         run: ./test/smoke.sh build/ratchet-usb
 
+      - name: The interface, driven through a real terminal
+        env:
+          ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1:detect_stack_use_after_return=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: python3 test/smoke_ui.py build/ratchet-usb
+
   # ---------------------------------------------------------------------
   # Valgrind catches reads of uninitialised memory that ASan does not, which
   # for key material is exactly the class of bug worth catching.
@@ -278,6 +291,7 @@ jobs:
         run: |
           ./build-fuzz/test/fuzz/fuzz_parsers test/fuzz/corpus -runs=0
           ./build-fuzz/test/fuzz/fuzz_session test/fuzz/corpus_session -runs=0
+          ./build-fuzz/test/fuzz/fuzz_ui_keys test/fuzz/corpus_ui -runs=0
 
       - name: Fuzz the protocol state machine
         env:
@@ -304,6 +318,20 @@ jobs:
         run: |
           mkdir -p .fuzz-out
           ./build-fuzz/test/fuzz/fuzz_parsers .fuzz-out test/fuzz/corpus \
+            -max_total_time="$DURATION" -rss_limit_mb=2048 -print_final_stats=1
+
+      - name: Fuzz the interface's key handling
+        env:
+          DURATION: ${{ github.event_name == 'schedule' && '600' || '60' }}
+        # What a terminal hands over includes whatever was pasted into the
+        # window, so these bytes are as untrusted as the ones above. The
+        # harness asserts the two properties the read loop depends on: that
+        # decoding always makes progress, and that no sequence of keys can
+        # produce a frame bigger than the screen or one carrying an escape
+        # byte.
+        run: |
+          mkdir -p .fuzz-out
+          ./build-fuzz/test/fuzz/fuzz_ui_keys .fuzz-out test/fuzz/corpus_ui \
             -max_total_time="$DURATION" -rss_limit_mb=2048 -print_final_stats=1
 
       - name: Upload any input that failed
@@ -369,6 +397,9 @@ jobs:
 
       - name: End-to-end smoke test
         run: ./test/smoke.sh build/ratchet-usb
+
+      - name: The interface, driven through a real terminal
+        run: python3 test/smoke_ui.py build/ratchet-usb
 
   # ---------------------------------------------------------------------
   # A single gate for branch protection to point at, so adding a job above

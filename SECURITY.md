@@ -34,6 +34,61 @@ What the design does aim at:
 - The vault is sealed with Argon2id and ChaCha20-Poly1305, so a stolen drive is
   worth nothing without the passphrase.
 
+## The terminal interface
+
+Running `ratchet-usb` with no arguments opens a full-screen interface in the
+terminal. It is worth being precise about what that did and did not change,
+since the whole design here is about not having much surface to attack.
+
+What it does not add:
+
+- **No new dependency.** libsodium is still the only one. The terminal handling
+  is a few hundred lines in this tree rather than ncurses, which would also
+  have meant this process reading and interpreting terminfo files.
+- **No graphical toolkit**, and so no X11 or Wayland socket (on X11, any client
+  can read another's keystrokes), no D-Bus, and no accessibility bus — which
+  exists to read the text of every widget on screen and would have been reading
+  the messages.
+- **No state on the host.** No config file, no history, no cache, no theme, no
+  layout. `vault.bin` on the removable drive is still the only thing written.
+- **Nothing outside the process.** No clipboard in either direction and no
+  OSC 52, no `$EDITOR`, no helper program, no `fork` or `exec` at all.
+- **No window title**, ever. A title naming the tool would appear in the
+  taskbar, the window switcher, and any screenshot or screen share.
+- **No mouse reporting**, which keeps the escape sequences it has to decode
+  down to a handful and leaves the terminal's own selection working.
+- **Nothing on the existing code paths.** With stdin or stdout redirected, none
+  of this code runs: a bare `ratchet-usb` produces the same error it always
+  did, and every command behaves exactly as before. `test/smoke.sh` checks it.
+
+What it genuinely improves: `ratchet-usb send alice "the message"` puts that
+message into the shell's history file, in the clear, on the host disk. Typed
+into the interface it never reaches `argv` or the shell.
+
+What it costs, stated plainly: **the vault stays open longer.** The command
+line opens and closes it once per command; the interface opens it once and
+keeps the seed, the session keys and the passphrase in memory across a whole
+session. Against the threat model this changes little — a compromised host is
+already out of scope, and the pages are locked so they never reach swap — but
+the window is wider, so it is narrowed deliberately:
+
+- The vault closes on its own after three minutes with no key pressed
+  (`--idle-lock <seconds>`, `0` to switch it off), and immediately if the
+  process is suspended and resumed.
+- Locking, quitting and Ctrl-C all run the same path, which wipes the seed, the
+  keys and the passphrase and clears what they produced off the screen.
+- Ctrl-C is read as a keystroke rather than a signal precisely so that it takes
+  that path: a signal handler cannot safely wipe memory.
+- The interface draws on the alternate screen, so nothing from the session is
+  left in the scrollback when it exits.
+
+And one thing it does not change: everything a contact sends is still treated
+as hostile text. An alias or a message body is escaped before it is drawn, and
+lines are truncated rather than wrapped, so neither an escape sequence nor a
+five-thousand-character alias can repaint the screen or push a "not verified"
+warning out of sight. There are tests for both, and a fuzzer over the key
+decoder and the state machine.
+
 What is explicitly **out of scope**, in the sense that the design does not try
 to defend against it:
 
@@ -78,6 +133,11 @@ cover for hurting somebody.
 Every push runs, and you can run locally:
 
 ```sh
+# The interface, driven through a real pty: a whole conversation, plus the
+# assertion that no window title, no mouse reporting and no escape byte from
+# somebody else's text ever reaches the terminal.
+python3 test/smoke_ui.py build/ratchet-usb
+
 # Warnings are fatal; both compilers, both build types.
 cmake -S . -B build -DCMAKE_CXX_FLAGS="-Wall -Wextra -Wpedantic -Werror"
 cmake --build build && ctest --test-dir build --output-on-failure
@@ -97,6 +157,9 @@ cmake -S . -B build-fuzz -DRATCHET_BUILD_FUZZERS=ON -DRATCHET_BUILD_TESTS=OFF \
 cmake --build build-fuzz
 mkdir -p .fuzz-out   # libFuzzer writes what it finds into the first directory
 ./build-fuzz/test/fuzz/fuzz_parsers .fuzz-out test/fuzz/corpus -max_total_time=60
+
+# What a terminal hands over, which includes whatever was pasted into it.
+./build-fuzz/test/fuzz/fuzz_ui_keys .fuzz-out test/fuzz/corpus_ui -max_total_time=60
 ```
 
 If you find an input that makes `fuzz_parsers` do anything other than return or

@@ -3,13 +3,9 @@
 // Everything sensitive lives on the removable drive passed as --usb-path;
 // nothing is ever written to the host's filesystem.
 
-#include <sys/stat.h>
-#include <unistd.h>
-
 #include <algorithm>
 #include <charconv>
 #include <cstdlib>
-#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -20,15 +16,19 @@
 #include <string_view>
 #include <vector>
 
+#include "ratchet/app.hpp"
 #include "ratchet/bip39.hpp"
 #include "ratchet/cli.hpp"
+#include "ratchet/i18n.hpp"
 #include "ratchet/identity.hpp"
 #include "ratchet/media.hpp"
 #include "ratchet/ratchet.hpp"
 #include "ratchet/secure.hpp"
 #include "ratchet/session.hpp"
+#include "ratchet/screen.hpp"
 #include "ratchet/store.hpp"
 #include "ratchet/terminal.hpp"
+#include "ratchet/ui.hpp"
 #include "ratchet/vault.hpp"
 #include "ratchet/x3dh.hpp"
 
@@ -41,10 +41,8 @@ using cli::kDefaultOtpkCount;
 using cli::kProgram;
 using cli::Options;
 
-constexpr std::size_t kReplenishThreshold = 5;
-// How long a signed prekey is trusted before `unlock` rotates it on its own.
-constexpr uint64_t kSpkMaxAgeDays = 30;
-constexpr uint64_t kSpkMaxAgeSeconds = kSpkMaxAgeDays * 24 * 60 * 60;
+using app::kReplenishThreshold;
+using app::kSpkMaxAgeDays;
 // Only for the message `unlock` prints; the expiry rule itself lives in
 // ratchet::kSkippedKeyMaxAgeSeconds.
 constexpr uint64_t kSkippedKeyMaxAgeDays =
@@ -137,16 +135,7 @@ fs::path require_usb_path(const Options& opts, bool for_init = false) {
     }
   }
 
-  const fs::path resolved = fs::canonical(usb_path, ec);
-  if (ec) {
-    throw Error("--usb-path does not exist: " + usb_path.string());
-  }
-  if (!fs::is_directory(resolved, ec)) {
-    throw Error("--usb-path is not a directory: " + resolved.string());
-  }
-  if (::access(resolved.c_str(), W_OK | X_OK) != 0) {
-    throw Error("--usb-path is not writable: " + resolved.string());
-  }
+  const fs::path resolved = app::validate_usb_path(usb_path);
   if (auto_detected) {
     std::cerr << "Using " << resolved.string() << "\n";
   }
@@ -173,98 +162,25 @@ std::string require_value(const std::string& value, const std::string& prompt,
 // removable drive. It stays a warning: a mount layout cannot be told apart
 // from a removable one with certainty.
 void warn_if_host_disk(const fs::path& usb_path) {
-  const char* home = std::getenv("HOME");
-  if (home == nullptr) {
-    return;
-  }
-  struct stat usb_st {};
-  struct stat home_st {};
-  if (::stat(usb_path.c_str(), &usb_st) != 0 || ::stat(home, &home_st) != 0) {
-    return;
-  }
-  if (usb_st.st_dev == home_st.st_dev) {
+  if (app::is_on_host_filesystem(usb_path)) {
     std::cerr << "warning: " << usb_path.string()
               << " is on the same filesystem as your home directory.\n"
               << "warning: the vault is meant to live on a removable drive.\n";
   }
 }
 
-// The mnemonic arrives in a SecureString and must not leave it. The words are
-// referred to as string_views into that buffer and streamed straight out, so
-// no copy of a recovery word is made that the caller cannot wipe -- which is
-// exactly what building padded cells as std::string used to do.
-void print_mnemonic(const SecureString& mnemonic) {
-  std::cout << "\nRecovery phrase (12 words, BIP-39):\n\n";
-
-  const std::string_view all(mnemonic.data(), mnemonic.size());
-  std::vector<std::string_view> words;
-  std::size_t pos = 0;
-  while (pos <= all.size()) {
-    const std::size_t space = all.find(' ', pos);
-    const std::size_t end = (space == std::string_view::npos) ? all.size() : space;
-    words.push_back(all.substr(pos, end - pos));
-    if (space == std::string_view::npos) {
-      break;
-    }
-    pos = space + 1;
-  }
-
-  constexpr std::size_t kCellWidth = 16;
-  std::size_t index = 1;
-  for (std::size_t row = 0; row < 3; ++row) {
-    std::cout << "  ";
-    for (std::size_t col = 0; col < 4; ++col) {
-      const std::size_t w = row * 4 + col;
-      if (w >= words.size()) {
-        break;
-      }
-      const std::size_t digits = (index < 10) ? 1 : 2;
-      std::cout << index << ". " << words[w];
-      ++index;
-      // Pad to the column width without ever materialising the cell.
-      for (std::size_t pad = digits + 2 + words[w].size(); pad < kCellWidth; ++pad) {
-        std::cout << ' ';
-      }
-    }
-    std::cout << "\n";
-  }
-
-  std::cout << "\nWrite these words down on paper, in order. They are the only\n"
-               "way to recover the seed and identity if the drive is lost; a\n"
-               "vault restored from them alone starts with no prekeys, no\n"
-               "contacts and no sessions -- those live only in vault.bin.\n\n";
-}
-
 // --- vault open/save helpers ------------------------------------------------
 
-struct OpenedVault {
-  store::VaultStore store;
-  vault::Params params;    // reused on save, so a re-seal keeps the original cost
-  SecureString passphrase; // held for the lifetime of the command, so a
-                           // mutating command only has to ask once
-};
+using app::OpenedVault;
 
-OpenedVault unlock_vault(const fs::path& path, const char* prompt = "Vault passphrase: ") {
-  const std::vector<uint8_t> file = vault::read_file(path);
-  const vault::VaultHeader header = vault::parse_header(file.data(), file.size());
-
-  OpenedVault result;
-  result.passphrase = terminal::read_passphrase(prompt);
+OpenedVault unlock_vault(const fs::path& path,
+                         const char* prompt = "Vault passphrase: ") {
+  // The container is read and validated before the prompt, so a path that
+  // holds no vault says so instead of asking for a passphrase first.
+  const app::VaultFile file = app::read_vault(path);
+  SecureString passphrase = terminal::read_passphrase(prompt);
   std::cerr << "Deriving the vault key with Argon2id...\n";
-
-  SecureBuffer plaintext;
-  vault::unseal(file.data(), file.size(), result.passphrase, plaintext);
-
-  result.store = store::parse(plaintext.data(), plaintext.size());
-  result.params = vault::Params{header.argon2_time_cost, header.argon2_mem_cost_kb};
-  return result;
-}
-
-void save_vault(const fs::path& path, const store::VaultStore& store,
-                const vault::Params& params, const SecureString& passphrase) {
-  const SecureBuffer plaintext = store::serialize(store);
-  const std::vector<uint8_t> file = vault::seal(plaintext, passphrase, params);
-  vault::write_file(path, file, /*overwrite=*/true);
+  return app::open_vault(file, std::move(passphrase));
 }
 
 std::string read_all_stdin() {
@@ -294,77 +210,24 @@ std::string read_file_text(const std::string& path) {
   return ss.str();
 }
 
-// Seconds elapsed since `stamped_at`, saturating at zero.
-//
-// Both operands are unsigned, so a timestamp in the future -- a clock that
-// went backwards, a drive carried to a machine whose clock is wrong -- makes
-// the plain subtraction wrap to something enormous. Where that fed a
-// "is this too old?" test the answer came back yes, every time.
-uint64_t age_seconds(uint64_t now, uint64_t stamped_at) {
-  return now > stamped_at ? now - stamped_at : 0;
-}
-
-// Re-signs any stored prekey whose signature does not verify under the current
-// scheme. A vault written before the signature covered a context string and
-// the prekey id has perfectly good key pairs and stale signatures; rotating
-// them instead would invalidate every card already handed out, for no reason.
-bool resign_stale_prekeys(store::VaultStore& store,
-                          const IdentitySigningPublicKey& identity_pk,
-                          const IdentitySigningSecretKey& identity_sk) {
-  bool changed = false;
-  for (prekey::SignedPrekey& spk : store.signed_prekeys) {
-    if (!prekey::verify_signed_prekey_signature(identity_pk, spk.id, spk.pub,
-                                                spk.signature)) {
-      prekey::resign_signed_prekey(identity_sk, spk);
-      changed = true;
-    }
-  }
-  return changed;
-}
-
-// Rotates the signed prekey if it has aged past kSpkMaxAgeDays, and tops the
-// one-time prekey pool back up once it drops below kReplenishThreshold. Runs
-// on every `unlock` so both stay fresh without a manual `card` command.
-// Returns whether the store was actually changed (and so needs saving).
+// Runs the automatic maintenance and prints what it did, in the wording
+// `unlock` has always used. The decisions themselves live in app.cpp, so the
+// terminal interface applies exactly the same rules.
 bool maintain_prekeys(store::VaultStore& store,
                       const IdentitySigningPublicKey& identity_pk,
                       const IdentitySigningSecretKey& identity_sk) {
-  bool changed = resign_stale_prekeys(store, identity_pk, identity_sk);
-  const uint64_t now = static_cast<uint64_t>(std::time(nullptr));
-
-  const bool spk_stale =
-      store.signed_prekeys.empty() ||
-      age_seconds(now, store.signed_prekeys.back().created_at) >
-          kSpkMaxAgeSeconds;
-  if (spk_stale) {
-    store.signed_prekeys.push_back(
-        prekey::generate_signed_prekey(identity_sk, store.next_spk_id));
-    store.next_spk_id += 1;
-    // Keep only the newest two, same rule as the manual `--rotate-spk`: a
-    // peer who grabbed the card just before rotation may still use the old one.
-    while (store.signed_prekeys.size() > 2) {
-      store.signed_prekeys.erase(store.signed_prekeys.begin());
-    }
+  const app::MaintenanceReport report =
+      app::maintain_prekeys(store, identity_pk, identity_sk);
+  if (report.spk_rotated) {
     std::cout << "Signed prekey was older than " << kSpkMaxAgeDays
               << " days; rotated it automatically.\n";
-    changed = true;
   }
-
-  if (store.one_time_prekeys.size() < kReplenishThreshold) {
-    const std::size_t had = store.one_time_prekeys.size();
-    std::vector<prekey::OneTimePrekey> fresh =
-        prekey::generate_one_time_prekeys(store.next_otpk_id, kDefaultOtpkCount);
-    store.next_otpk_id += static_cast<uint32_t>(kDefaultOtpkCount);
-    for (auto& otpk : fresh) {
-      store.one_time_prekeys.push_back(std::move(otpk));
-    }
-    std::cout << "Only " << had
+  if (report.otpk_added > 0) {
+    std::cout << "Only " << report.otpk_had
               << " one-time prekey(s) were left; replenished "
-              << kDefaultOtpkCount << " automatically.\n";
-    changed = true;
+              << report.otpk_added << " automatically.\n";
   }
-
-  return changed;
+  return report.changed();
 }
 
 // Throws away skipped message keys nobody claimed in time. `recv` already
@@ -372,7 +235,7 @@ bool maintain_prekeys(store::VaultStore& store,
 // would keep them indefinitely, so `unlock` sweeps all of them. Returns
 // whether anything was dropped (and so whether the store needs saving).
 bool expire_skipped_keys(store::VaultStore& store) {
-  const std::size_t dropped = session::expire_skipped_keys(store);
+  const std::size_t dropped = app::expire_skipped_keys(store);
   if (dropped > 0) {
     std::cout << "Dropped " << dropped << " skipped message key(s) unclaimed for\n"
               << "more than " << kSkippedKeyMaxAgeDays
@@ -406,7 +269,11 @@ int cmd_init(const Options& opts) {
     bip39::generate_entropy(entropy);
     SecureString mnemonic;
     bip39::encode(entropy, mnemonic);
-    print_mnemonic(mnemonic);
+    // English on the command line whatever the locale says: the CLI's output
+    // is part of the project's public face, and scripts read it.
+    app::print_mnemonic(mnemonic, std::cout,
+                        i18n::t(i18n::Lang::En, i18n::Str::RecoveryHeading),
+                        i18n::t(i18n::Lang::En, i18n::Str::RecoveryNote));
     terminal::wait_for_enter("Press ENTER once you have written them down...");
     terminal::clear_screen();
     // The words are on paper by now; nothing is served by keeping them in
@@ -467,7 +334,7 @@ int cmd_unlock(const Options& opts) {
   changed = expire_skipped_keys(store) || changed;
 
   if (changed) {
-    save_vault(path, store, opened.params, opened.passphrase);
+    app::save_vault(path, store, opened.params, opened.passphrase);
   }
 
   std::cout << "Vault unlocked (" << store.contacts.size() << " contact(s), "
@@ -504,31 +371,19 @@ int cmd_card(const Options& opts) {
   bool changed = false;
 
   if (opts.rotate_spk) {
-    store.signed_prekeys.push_back(
-        prekey::generate_signed_prekey(identity_sk, store.next_spk_id));
-    store.next_spk_id += 1;
-    // Keep only the newest two: a peer whose card we handed out just before
-    // rotating might still send an initial message against the old one.
-    while (store.signed_prekeys.size() > 2) {
-      store.signed_prekeys.erase(store.signed_prekeys.begin());
-    }
+    app::rotate_signed_prekey(store, identity_sk);
     changed = true;
   }
 
   if (opts.replenish_otpk > 0) {
-    std::vector<prekey::OneTimePrekey> fresh =
-        prekey::generate_one_time_prekeys(store.next_otpk_id, opts.replenish_otpk);
-    store.next_otpk_id += static_cast<uint32_t>(opts.replenish_otpk);
-    for (auto& otpk : fresh) {
-      store.one_time_prekeys.push_back(std::move(otpk));
-    }
+    app::replenish_one_time_prekeys(store, opts.replenish_otpk);
     changed = true;
   }
 
   // A card is only worth handing out if its signatures verify, and `card` can
   // be the first command run against a vault written before the signature
   // scheme changed -- so this cannot wait for the next `unlock`.
-  changed = resign_stale_prekeys(store, identity_pk, identity_sk) || changed;
+  changed = app::resign_stale_prekeys(store, identity_pk, identity_sk) || changed;
 
   if (store.signed_prekeys.empty()) {
     throw Error("internal: vault has no signed prekey");
@@ -547,7 +402,7 @@ int cmd_card(const Options& opts) {
   }
 
   if (changed) {
-    save_vault(path, store, opened.params, opened.passphrase);
+    app::save_vault(path, store, opened.params, opened.passphrase);
   }
   return 0;
 }
@@ -582,7 +437,7 @@ int cmd_add_contact(const Options& opts) {
   contact.card = imported.card;
   store.contacts.push_back(std::move(contact));
 
-  save_vault(path, store, opened.params, opened.passphrase);
+  app::save_vault(path, store, opened.params, opened.passphrase);
 
   std::cout << "Added '" << name << "'. Verify this fingerprint with them\n"
             << "over a separate channel (in person, a phone call) before "
@@ -634,7 +489,7 @@ int cmd_trust(const Options& opts) {
   }
   store.contacts[static_cast<std::size_t>(idx)].verified = true;
 
-  save_vault(path, store, opened.params, opened.passphrase);
+  app::save_vault(path, store, opened.params, opened.passphrase);
   std::cout << "'" << name << "' marked as verified.\n";
   return 0;
 }
@@ -674,7 +529,7 @@ int cmd_send(const Options& opts) {
       session::send(store, identity_sk, identity_pk, contact_index, plaintext);
   identity_sk.wipe();
 
-  save_vault(path, store, opened.params, opened.passphrase);
+  app::save_vault(path, store, opened.params, opened.passphrase);
 
   // stdout is only the block, so `send alice "hi" > msg.txt` yields a file that
   // can be pasted as-is; the blank separator is part of the terminal display.
@@ -701,7 +556,7 @@ int cmd_recv(const Options& opts) {
       session::receive(store, identity_sk, identity_pk, block);
   identity_sk.wipe();
 
-  save_vault(path, store, opened.params, opened.passphrase);
+  app::save_vault(path, store, opened.params, opened.passphrase);
 
   const std::string alias = terminal::escape_control_chars(result.alias);
   if (result.session_established) {
@@ -716,6 +571,30 @@ int cmd_recv(const Options& opts) {
   std::cout << alias << ": " << terminal::escape_if_tty(result.plaintext)
             << "\n";
   return 0;
+}
+
+// The terminal interface, and the one gate in front of it.
+//
+// It runs only when stdin and stdout are both a terminal. That is what keeps
+// every script, pipe and test that has ever driven this program on exactly the
+// path it was on before the interface existed: with the input or the output
+// redirected, a bare `ratchet-usb` produces the error it always produced, down
+// to the wording.
+int cmd_ui(const Options& opts) {
+  if (!screen::usable()) {
+    if (opts.no_arguments) {
+      throw Error("no command given (try `" + std::string(kProgram) +
+                  " --help`)");
+    }
+    throw Error("`ui` needs a terminal: run it without redirecting the input "
+                "or the output");
+  }
+
+  ui::Config config;
+  config.usb_path = opts.usb_path.string();
+  config.lang = i18n::detect(opts.lang);
+  config.idle_lock_seconds = opts.idle_lock_seconds;
+  return ui::run(config);
 }
 
 }  // namespace
@@ -760,6 +639,9 @@ int main(int argc, char** argv) {
     }
     if (opts.command == "recv") {
       return cmd_recv(opts);
+    }
+    if (opts.command == "ui") {
+      return cmd_ui(opts);
     }
     throw Error("unknown command: " + opts.command);
   } catch (const std::exception& e) {

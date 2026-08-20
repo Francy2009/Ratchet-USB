@@ -16,8 +16,45 @@ Options parse(std::vector<std::string_view> args) {
 
 }  // namespace
 
-TEST("cli: no arguments is an error") {
-  CHECK_THROWS(parse({}));
+TEST("cli: no arguments asks for the interface, and says so") {
+  // Whether the interface can actually run is a question about the terminal,
+  // which this parser deliberately knows nothing about. It reports that there
+  // were no arguments; main turns that back into the error it has always been
+  // when the input or the output is redirected.
+  const Options opts = parse({});
+  CHECK_EQ(opts.command, std::string("ui"));
+  CHECK(opts.no_arguments);
+}
+
+TEST("cli: an explicit ui is not the same as no arguments") {
+  const Options opts = parse({"ui"});
+  CHECK_EQ(opts.command, std::string("ui"));
+  CHECK(!opts.no_arguments);
+}
+
+TEST("cli: ui takes a language and an idle timeout") {
+  const Options opts = parse({"ui", "--lang", "it", "--idle-lock", "60"});
+  CHECK_EQ(opts.lang, std::string("it"));
+  CHECK_EQ(opts.idle_lock_seconds, 60);
+  // Zero is a real answer: it turns the idle lock off.
+  CHECK_EQ(parse({"ui", "--idle-lock", "0"}).idle_lock_seconds, 0);
+  CHECK_EQ(parse({"ui"}).idle_lock_seconds, cli::kDefaultIdleLockSeconds);
+}
+
+TEST("cli: a language that is not one of the two is refused") {
+  CHECK_THROWS(parse({"ui", "--lang", "fr"}));
+  CHECK_THROWS(parse({"ui", "--lang"}));
+  // An idle timeout longer than a day is a typo, not a preference.
+  CHECK_THROWS(parse({"ui", "--idle-lock", "999999"}));
+  CHECK_THROWS(parse({"ui", "--idle-lock", "-1"}));
+}
+
+TEST("cli: the interface flags belong to the interface alone") {
+  CHECK_THROWS(parse({"send", "alice", "--lang", "it"}));
+  CHECK_THROWS(parse({"recv", "--idle-lock", "10"}));
+  // And ui takes none of the vault-shaping flags.
+  CHECK_THROWS(parse({"ui", "--force"}));
+  CHECK_THROWS(parse({"ui", "--argon2-time", "4"}));
 }
 
 TEST("cli: help and version short-circuit before command checks") {

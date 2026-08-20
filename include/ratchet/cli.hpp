@@ -19,6 +19,9 @@ namespace ratchet::cli {
 inline constexpr const char* kProgram = "ratchet-usb";
 inline constexpr const char* kVersion = "0.2.0";
 inline constexpr std::size_t kDefaultOtpkCount = 10;
+// How long the terminal interface waits before closing the vault on its own.
+inline constexpr int kDefaultIdleLockSeconds = 180;
+inline constexpr int kMaxIdleLockSeconds = 24 * 60 * 60;
 
 struct Options {
   std::string command;
@@ -34,11 +37,24 @@ struct Options {
   std::string to;
   std::string card_file;
   std::optional<std::string> message;
+  // Terminal interface only.
+  std::string lang;  // empty means "work it out from the locale"
+  int idle_lock_seconds = kDefaultIdleLockSeconds;
+  // True when the program was run with nothing after its name. The interface
+  // is what that means on a terminal; off a terminal it has to stay the error
+  // it has always been, and only the caller can tell the difference.
+  bool no_arguments = false;
 };
 
 // Parses the command line with argv[0] already stripped. Throws Error on an
 // unknown command, an option the named command does not take, a missing option
 // value, or a surplus positional argument.
+//
+// An empty command line is the one case that does not throw: it yields the
+// `ui` command with no_arguments set. Whether that can actually run is a
+// question about the terminal, and this parser deliberately knows nothing
+// about terminals -- it stays a pure function of its arguments, which is what
+// makes the grammar testable.
 Options parse_args(const std::vector<std::string_view>& args);
 
 void print_usage(std::ostream& os);

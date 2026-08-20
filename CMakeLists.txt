@@ -101,7 +101,12 @@ add_library(ratchet_core
             src/vault.cpp
             src/terminal.cpp
             src/media.cpp
-            src/cli.cpp)
+            src/cli.cpp
+            src/app.cpp
+            src/screen.cpp
+            src/i18n.cpp
+            src/ui_model.cpp
+            src/ui.cpp)
 
 target_include_directories(ratchet_core PUBLIC
                            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
