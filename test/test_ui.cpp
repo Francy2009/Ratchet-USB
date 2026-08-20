@@ -211,6 +211,23 @@ TEST("locking clears everything the vault put on screen") {
   CHECK(model.text().empty());
 }
 
+TEST("after locking there is still a way out") {
+  // Locking goes back to the drive screen, and with no drive detected that
+  // screen used to be a path field -- where `q` typed a `q` and the only exit
+  // was Ctrl-C.
+  Model model = unlocked_model({contact("alice")});
+  model.forget();
+  CHECK(model.handle_key(ch("q")) == ActionKind::Quit);
+}
+
+TEST("a pager closes on q as well as Escape") {
+  Model model = unlocked_model({contact("alice")});
+  model.show_block("card", "-----BEGIN-----\nAAAA\n-----END-----");
+  CHECK(model.screen() == Screen::Block);
+  model.handle_key(ch("q"));
+  CHECK(model.screen() == Screen::Home);
+}
+
 TEST("locking is reachable from the contact list") {
   Model model = unlocked_model({contact("alice")});
   CHECK(model.handle_key(ch("l")) == ActionKind::Lock);
@@ -264,10 +281,16 @@ TEST("a drive with a vault on it is marked as such") {
   CHECK_EQ(model.selected_drive()->path, std::string("/media/one"));
 }
 
-TEST("with no drive detected the interface asks for a path") {
+TEST("with no drive detected the interface offers to take a path") {
   Model model(i18n::Lang::En);
   model.show_drives({});
-  CHECK(model.screen() == Screen::Drive || model.screen() == Screen::DrivePath);
+  // It rests on the drive screen even with nothing on it, so `q` is still
+  // there. A text field where every key is a character has no way out.
+  CHECK(model.screen() == Screen::Drive);
+  CHECK(draw(model).find("No removable drive") != std::string::npos);
+  CHECK(model.handle_key(ch("q")) == ActionKind::Quit);
+  model.handle_key(ch("p"));
+  CHECK(model.screen() == Screen::DrivePath);
   model.handle_key(ch("/"));
   model.handle_key(ch("m"));
   CHECK(model.handle_key(code(screen::KeyCode::Enter)) == ActionKind::UseTypedPath);

@@ -434,6 +434,10 @@ RawMode::~RawMode() {
   }
 }
 
+void set_bracketed_paste(bool on) {
+  write_all(on ? kBracketedPasteOn : kBracketedPasteOff);
+}
+
 AltScreen::AltScreen() {
   write_all(kAltScreenOn);
   write_all(kCursorHide);

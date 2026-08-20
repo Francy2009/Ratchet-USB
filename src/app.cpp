@@ -138,8 +138,9 @@ std::size_t expire_skipped_keys(store::VaultStore& store) {
   return session::expire_skipped_keys(store);
 }
 
-void print_mnemonic(const SecureString& mnemonic, std::ostream& os) {
-  os << "\nRecovery phrase (12 words, BIP-39):\n\n";
+void print_mnemonic(const SecureString& mnemonic, std::ostream& os,
+                    std::string_view heading, std::string_view note) {
+  os << "\n" << heading << "\n\n";
 
   const std::string_view all(mnemonic.data(), mnemonic.size());
   std::vector<std::string_view> words;
@@ -174,10 +175,7 @@ void print_mnemonic(const SecureString& mnemonic, std::ostream& os) {
     os << "\n";
   }
 
-  os << "\nWrite these words down on paper, in order. They are the only\n"
-        "way to recover the seed and identity if the drive is lost; a\n"
-        "vault restored from them alone starts with no prekeys, no\n"
-        "contacts and no sessions -- those live only in vault.bin.\n\n";
+  os << "\n" << note << "\n\n";
 }
 
 }  // namespace ratchet::app

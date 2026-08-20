@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <ostream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "ratchet/identity.hpp"
@@ -114,7 +115,11 @@ void rotate_signed_prekey(store::VaultStore& store,
 // touches; this is the sweep a vault that is only ever opened still needs.
 std::size_t expire_skipped_keys(store::VaultStore& store);
 
-// Writes the 12 words as a numbered grid.
+// Writes the 12 words as a numbered grid, under `heading` and above `note`.
+//
+// The wording is a parameter because the command line and the interface say it
+// in different languages, and the grid itself -- which is the part that must
+// not put a word in an ordinary std::string -- should exist once.
 //
 // The mnemonic arrives in a SecureString and must not leave it. The words are
 // referred to as string_views into that buffer and streamed straight out, so
@@ -122,7 +127,8 @@ std::size_t expire_skipped_keys(store::VaultStore& store);
 // exactly what building padded cells as std::string used to do. It is also why
 // this writes to a stream rather than returning lines: a returned
 // vector<string> would be that copy.
-void print_mnemonic(const SecureString& mnemonic, std::ostream& os);
+void print_mnemonic(const SecureString& mnemonic, std::ostream& os,
+                    std::string_view heading, std::string_view note);
 
 }  // namespace ratchet::app
 

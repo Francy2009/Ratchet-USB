@@ -227,6 +227,13 @@ class AltScreen {
   AltScreen& operator=(const AltScreen&) = delete;
 };
 
+// Turns the terminal's bracketed paste on or off.
+//
+// AltScreen switches it on, and anything that reads a line the ordinary way --
+// a passphrase prompt, the recovery words -- has to switch it off first, or
+// the markers the terminal wraps a paste in end up inside what was typed.
+void set_bracketed_paste(bool on);
+
 // Writes every byte of `text` to stdout, retrying on a short write and on
 // EINTR. Returns false if the terminal went away.
 bool write_all(std::string_view text);

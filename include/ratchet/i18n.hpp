@@ -2,6 +2,7 @@
 #define RATCHET_I18N_HPP
 
 #include <cstddef>
+#include <cstdint>
 #include <string_view>
 
 // The text the terminal interface shows, in English and Italian.
@@ -31,6 +32,8 @@ namespace ratchet::i18n {
   X(DriveHasVault, "vault", "vault")                                           \
   X(DriveEmpty, "empty", "vuota")                                              \
   X(TypePath, "Path of the drive:", "Percorso dell'unita':")                    \
+  X(PressPForPath, "Press p to type in the path of one.",                      \
+    "Premi p per scrivere il percorso di una.")                    \
   X(KeysDrive, "up/down choose   Enter use   p type a path   q quit",          \
     "su/giu' scegli   Invio usa   p scrivi un percorso   q esci")               \
   /* a drive with no vault on it */                                            \
@@ -65,13 +68,15 @@ namespace ratchet::i18n {
   X(WritingTo, "Writing to", "Stai scrivendo a")                               \
   X(ComposeHint, "Type your message. Enter starts a new line.",                \
     "Scrivi il messaggio. Invio va a capo.")                                    \
-  X(KeysCompose, "Ctrl-D send   Esc cancel", "Ctrl-D invia   Esc annulla")      \
+  X(KeysCompose, "Ctrl-D send   Esc cancel   Ctrl-C quit",                      \
+    "Ctrl-D invia   Esc annulla   Ctrl-C esci")      \
   /* showing a block to copy */                                                \
   X(CopyBlock, "Select all of this and send it however you like:",             \
     "Seleziona tutto questo e mandalo come preferisci:")                        \
   X(YourCard, "Your contact card", "La tua card")                              \
   X(MessageBlock, "Your encrypted message", "Il tuo messaggio cifrato")         \
-  X(KeysBlock, "up/down scroll   Esc back", "su/giu' scorri   Esc indietro")    \
+  X(KeysBlock, "up/down scroll   Esc or q  back",                             \
+    "su/giu' scorri   Esc o q  indietro")    \
   /* pasting something in */                                                    \
   X(PasteBlock, "Paste the block here, then press Ctrl-D.",                    \
     "Incolla qui il blocco, poi premi Ctrl-D.")                                 \
@@ -79,11 +84,13 @@ namespace ratchet::i18n {
     "Incolla qui la sua card, poi premi Ctrl-D.")                               \
   X(CharsReceived, "characters received", "caratteri ricevuti")                \
   X(NothingPasted, "nothing pasted yet", "non hai ancora incollato niente")     \
-  X(KeysPaste, "Ctrl-D confirm   Esc cancel", "Ctrl-D conferma   Esc annulla")  \
+  X(KeysPaste, "Ctrl-D confirm   Esc cancel   Ctrl-C quit",                     \
+    "Ctrl-D conferma   Esc annulla   Ctrl-C esci")  \
   /* naming a new contact */                                                   \
   X(AliasPrompt, "What do you want to call this contact?",                     \
     "Come vuoi chiamare questo contatto?")                                      \
-  X(KeysText, "Enter confirm   Esc cancel", "Invio conferma   Esc annulla")     \
+  X(KeysText, "Enter confirm   Esc back   Ctrl-C quit",                        \
+    "Invio conferma   Esc indietro   Ctrl-C esci")     \
   /* a message that came in */                                                 \
   X(MessageFrom, "Message from", "Messaggio da")                               \
   X(SessionOpened, "This message opened a new session.",                       \
@@ -111,16 +118,54 @@ namespace ratchet::i18n {
   X(HostDiskWarning,                                                           \
     "warning: this looks like the computer's own disk, not a removable drive.",\
     "attenzione: sembra il disco del computer, non un'unita' rimovibile.")      \
-  X(PressEnter, "Press ENTER to carry on.", "Premi INVIO per andare avanti.")
+  X(PressEnter, "Press ENTER to carry on.", "Premi INVIO per andare avanti.")   \
+  /* the prompts that run outside the frame */                                 \
+  X(PassphrasePrompt, "Vault passphrase: ", "Passphrase del vault: ")          \
+  X(PassphraseNew, "Choose a passphrase for the vault: ",                      \
+    "Scegli una passphrase per il vault: ")                                     \
+  X(PassphraseAgain, "Type it again: ", "Riscrivila: ")                        \
+  X(RecoveryWordsPrompt, "The 12 recovery words, separated by spaces: ",       \
+    "Le 12 parole di recupero, separate da spazi: ")                            \
+  X(WroteDownWords, "Press ENTER once you have written them down... ",         \
+    "Premi INVIO quando le hai scritte... ")                                    \
+  X(SettingUp, "Setting up a new identity on", "Sto creando una nuova identita' su") \
+  X(RestoringIdentity, "Restoring an identity from its recovery words on",     \
+    "Sto ripristinando un'identita' dalle sue parole su")                       \
+  X(RestoreNote,                                                               \
+    "The words rebuild the identity only: this vault starts with no contacts " \
+    "and no chat history, because those only ever lived in the old vault.bin.",\
+    "Le parole ricostruiscono solo l'identita': questo vault parte senza "      \
+    "contatti e senza cronologia, perche' quelli stavano solo nel vecchio "     \
+    "vault.bin.")                                                               \
+  /* The mnemonic screen. The English column is the exact text `init` has     \
+     always printed, so the command line keeps producing the same bytes while \
+     the interface can say it in the reader's language -- and this is the one \
+     screen where being understood matters most: it is the only time the      \
+     words are ever shown. */                                                 \
+  X(RecoveryHeading, "Recovery phrase (12 words, BIP-39):",                   \
+    "Frase di recupero (12 parole, BIP-39):")                                  \
+  X(RecoveryNote,                                                              \
+    "Write these words down on paper, in order. They are the only\n"           \
+    "way to recover the seed and identity if the drive is lost; a\n"           \
+    "vault restored from them alone starts with no prekeys, no\n"              \
+    "contacts and no sessions -- those live only in vault.bin.",               \
+    "Scrivi queste parole su un foglio, in ordine. Sono l'unico modo\n"        \
+    "per recuperare il seme e l'identita' se perdi l'unita'; un vault\n"       \
+    "ricostruito solo da queste parte senza prekey, senza contatti e\n"        \
+    "senza sessioni -- quelli stanno solo dentro vault.bin.")                  \
+  X(VaultCreated, "Vault created. Unlocking it now.",                          \
+    "Vault creato. Ora lo apro.")                                               \
+  X(DerivingKey, "Deriving the vault key with Argon2id...",                    \
+    "Sto derivando la chiave del vault con Argon2id...")
 
-enum class Str : std::size_t {
+enum class Str : std::uint8_t {
 #define RATCHET_I18N_ENUM(id, en, it) id,
   RATCHET_I18N_STRINGS(RATCHET_I18N_ENUM)
 #undef RATCHET_I18N_ENUM
       Count
 };
 
-enum class Lang { En, It };
+enum class Lang : std::uint8_t { En, It };
 
 // The string for `id` in `lang`.
 std::string_view t(Lang lang, Str id);

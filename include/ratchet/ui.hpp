@@ -76,7 +76,7 @@ class Model {
                  std::vector<ContactRow> contacts);
   void show_contacts(std::vector<ContactRow> contacts);
   void show_block(std::string_view heading, std::string block);
-  void show_message(std::string from, std::string body, bool session_opened,
+  void show_message(const std::string& from, std::string body, bool session_opened,
                     bool unverified);
   void set_status(std::string text);
   void set_status(i18n::Str id);
@@ -114,6 +114,7 @@ class Model {
   ActionKind key_in_list(const screen::Key& key);
   ActionKind key_in_text(const screen::Key& key);
   ActionKind key_in_pager(const screen::Key& key);
+  void close_pager();
   void render_header(screen::Frame& frame) const;
   void render_body(screen::Frame& frame, std::size_t rows) const;
   void render_footer(screen::Frame& frame) const;

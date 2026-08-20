@@ -188,5 +188,25 @@ fi
 step "the vault must not have been written outside the given directory"
 [[ ! -e "$HOME/vault.bin" ]] || fail "a vault appeared in the home directory"
 
+# The terminal interface exists, but nothing about a redirected run may reach
+# it. This is the check that keeps every scripted use of the program -- this
+# script included -- on exactly the path it was on before the interface was
+# written.
+step "with the input redirected, no arguments is still an error"
+out="$("$BIN" </dev/null 2>&1 || true)"
+[[ "$out" == *"no command given"* ]] ||
+  fail "a bare run off a terminal should still ask for a command, got: $out"
+if "$BIN" </dev/null >/dev/null 2>&1; then
+  fail "a bare run off a terminal should exit non-zero"
+fi
+
+step "the interface refuses to start without a terminal"
+out="$("$BIN" ui </dev/null 2>&1 || true)"
+[[ "$out" == *"needs a terminal"* ]] ||
+  fail "\`ui\` off a terminal should say it needs one, got: $out"
+if "$BIN" ui </dev/null >/dev/null 2>&1; then
+  fail "\`ui\` off a terminal should exit non-zero"
+fi
+
 echo
 echo "smoke: all end-to-end checks passed"

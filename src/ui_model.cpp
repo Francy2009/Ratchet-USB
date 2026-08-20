@@ -33,7 +33,11 @@ std::string rule(std::size_t width) { return std::string(width, '-'); }
 void Model::show_drives(std::vector<DriveEntry> drives) {
   drives_ = std::move(drives);
   selected_ = 0;
-  go(drives_.empty() ? Screen::DrivePath : Screen::Drive);
+  // Even with nothing detected this stays the drive screen rather than
+  // dropping into the path field. It is the screen the interface comes to rest
+  // on, and a resting screen has to have `q` on it: a text field where every
+  // key is a character has no way out but Ctrl-C.
+  go(Screen::Drive);
 }
 
 void Model::show_drive_path() { go(Screen::DrivePath); }
@@ -71,7 +75,7 @@ void Model::show_block(std::string_view heading, std::string block) {
   go(Screen::Block);
 }
 
-void Model::show_message(std::string from, std::string body, bool session_opened,
+void Model::show_message(const std::string& from, std::string body, bool session_opened,
                          bool unverified) {
   pager_heading_ = std::string(i18n::t(lang_, Str::MessageFrom)) + " " + from;
   pager_notes_.clear();
@@ -113,7 +117,7 @@ void Model::forget() {
   in_paste_ = false;
   pasting_card_ = false;
   unlocked_ = false;
-  go(drives_.empty() ? Screen::DrivePath : Screen::Drive);
+  go(Screen::Drive);
 }
 
 void Model::clear_text() { wipe_string(text_); }
@@ -310,16 +314,30 @@ ActionKind Model::key_in_pager(const screen::Key& key) {
       return ActionKind::None;
     case screen::KeyCode::Escape:
     case screen::KeyCode::Enter:
-      for (std::string& line : pager_) {
-        wipe_string(line);
+      close_pager();
+      return ActionKind::None;
+    case screen::KeyCode::Char:
+      // `q` closes a pager here as it does in every pager. Without it the
+      // only way off this screen is Escape, and a block long enough to scroll
+      // is exactly where somebody reaches for `q`.
+      if (key.text == "q") {
+        close_pager();
       }
-      pager_.clear();
-      pager_notes_.clear();
-      go(Screen::Home);
       return ActionKind::None;
     default:
       return ActionKind::None;
   }
+}
+
+void Model::close_pager() {
+  for (std::string& line : pager_) {
+    wipe_string(line);
+  }
+  pager_.clear();
+  pager_notes_.clear();
+  pager_heading_.clear();
+  pager_top_ = 0;
+  go(Screen::Home);
 }
 
 ActionKind Model::handle_key(const screen::Key& key) {
@@ -434,6 +452,12 @@ void Model::render_body(screen::Frame& frame, std::size_t rows) const {
 
   switch (screen_) {
     case Screen::Drive: {
+      if (drives_.empty()) {
+        frame.line(indent(i18n::t(lang_, Str::NoDrivesFound)));
+        frame.blank();
+        frame.line(indent(i18n::t(lang_, Str::PressPForPath)));
+        break;
+      }
       frame.line(indent(i18n::t(lang_, Str::ChooseDrive)));
       frame.blank();
       // The window slides with the selection, so a machine with more drives
@@ -457,9 +481,8 @@ void Model::render_body(screen::Frame& frame, std::size_t rows) const {
     }
 
     case Screen::DrivePath:
-      frame.line(indent(i18n::t(lang_, Str::NoDrivesFound)));
-      frame.blank();
       frame.line(indent(i18n::t(lang_, Str::TypePath)));
+      frame.blank();
       frame.line(indent("> " + text_));
       break;
 

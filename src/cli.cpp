@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <charconv>
 
+#include "ratchet/i18n.hpp"
 #include "ratchet/secure.hpp"
 
 namespace ratchet::cli {
@@ -34,6 +35,7 @@ const std::vector<CommandSpec>& specs() {
       {"trust", {"--usb-path"}, 1},
       {"send", {"--usb-path"}, 2},
       {"recv", {"--usb-path"}, 1},
+      {"ui", {"--usb-path", "--lang", "--idle-lock"}, 0},
   };
   return table;
 }
@@ -103,6 +105,8 @@ void print_usage(std::ostream& os) {
      << "  " << kProgram
      << " send     --usb-path <dir> <alias> [message]\n"
      << "  " << kProgram << " recv     --usb-path <dir> [message]\n"
+     << "  " << kProgram
+     << " ui       [--usb-path <dir>] [--lang en|it] [--idle-lock <s>]\n"
      << "\n"
      << "Commands:\n"
      << "  init      Generate a 128-bit seed, show its 12-word BIP-39 backup,\n"
@@ -127,6 +131,11 @@ void print_usage(std::ostream& os) {
      << "  recv      Decrypt a pasted message block (establishing the\n"
      << "            session automatically if it is the first one). [message]\n"
      << "            falls back to standard input, or a prompt, when omitted.\n"
+     << "  ui        Open the full-screen terminal interface, which does all\n"
+     << "            of the above without flags. This is what running the\n"
+     << "            program with no arguments does, on a terminal; with the\n"
+     << "            input or the output redirected, nothing changes and a\n"
+     << "            command is still required.\n"
      << "\n"
      << "Options:\n"
      << "  --usb-path <dir>     Directory on the removable drive. Falls back to\n"
@@ -143,6 +152,12 @@ void print_usage(std::ostream& os) {
      << "                       of generating a new one (init only).\n"
      << "  --fingerprint        Print only the identity fingerprint (card only).\n"
      << "  --card <file>        Read a contact card from a file (add only).\n"
+     << "  --lang en|it         Language of the interface (ui only). Without\n"
+     << "                       it, an Italian locale gets Italian and\n"
+     << "                       anything else gets English.\n"
+     << "  --idle-lock <s>      Close the vault after <s> seconds with no key\n"
+     << "                       pressed (ui only, default "
+     << kDefaultIdleLockSeconds << ", 0 to disable).\n"
      << "  -h, --help           Show this help.\n"
      << "  -V, --version        Show the version.\n";
 }
@@ -153,7 +168,12 @@ Options parse_args(const std::vector<std::string_view>& args) {
   std::vector<std::string_view> seen_options;
 
   if (args.empty()) {
-    throw Error("no command given (try `" + std::string(kProgram) + " --help`)");
+    // Nothing on the command line means the interface, on a terminal. Off one
+    // it is still the error it always was, reported by the caller, which is
+    // the only place that can tell.
+    opts.command = "ui";
+    opts.no_arguments = true;
+    return opts;
   }
 
   std::size_t i = 0;
@@ -227,6 +247,20 @@ Options parse_args(const std::vector<std::string_view>& args) {
     } else if (arg == "--from-mnemonic") {
       opts.from_mnemonic = true;
       note("--from-mnemonic");
+    } else if (arg == "--lang") {
+      opts.lang = std::string(next("--lang"));
+      if (!i18n::is_valid_choice(opts.lang)) {
+        throw Error("--lang takes en or it");
+      }
+      note("--lang");
+    } else if (arg == "--idle-lock") {
+      const uint32_t seconds = parse_u32(next("--idle-lock"), "--idle-lock");
+      if (seconds > static_cast<uint32_t>(kMaxIdleLockSeconds)) {
+        throw Error("--idle-lock is at most " +
+                    std::to_string(kMaxIdleLockSeconds) + " seconds");
+      }
+      opts.idle_lock_seconds = static_cast<int>(seconds);
+      note("--idle-lock");
     } else if (arg == "--card") {
       opts.card_file = std::string(next("--card"));
       note("--card");

@@ -278,6 +278,7 @@ jobs:
         run: |
           ./build-fuzz/test/fuzz/fuzz_parsers test/fuzz/corpus -runs=0
           ./build-fuzz/test/fuzz/fuzz_session test/fuzz/corpus_session -runs=0
+          ./build-fuzz/test/fuzz/fuzz_ui_keys test/fuzz/corpus_ui -runs=0
 
       - name: Fuzz the protocol state machine
         env:
@@ -304,6 +305,20 @@ jobs:
         run: |
           mkdir -p .fuzz-out
           ./build-fuzz/test/fuzz/fuzz_parsers .fuzz-out test/fuzz/corpus \
+            -max_total_time="$DURATION" -rss_limit_mb=2048 -print_final_stats=1
+
+      - name: Fuzz the interface's key handling
+        env:
+          DURATION: ${{ github.event_name == 'schedule' && '600' || '60' }}
+        # What a terminal hands over includes whatever was pasted into the
+        # window, so these bytes are as untrusted as the ones above. The
+        # harness asserts the two properties the read loop depends on: that
+        # decoding always makes progress, and that no sequence of keys can
+        # produce a frame bigger than the screen or one carrying an escape
+        # byte.
+        run: |
+          mkdir -p .fuzz-out
+          ./build-fuzz/test/fuzz/fuzz_ui_keys .fuzz-out test/fuzz/corpus_ui \
             -max_total_time="$DURATION" -rss_limit_mb=2048 -print_final_stats=1
 
       - name: Upload any input that failed

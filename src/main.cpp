@@ -19,13 +19,16 @@
 #include "ratchet/app.hpp"
 #include "ratchet/bip39.hpp"
 #include "ratchet/cli.hpp"
+#include "ratchet/i18n.hpp"
 #include "ratchet/identity.hpp"
 #include "ratchet/media.hpp"
 #include "ratchet/ratchet.hpp"
 #include "ratchet/secure.hpp"
 #include "ratchet/session.hpp"
+#include "ratchet/screen.hpp"
 #include "ratchet/store.hpp"
 #include "ratchet/terminal.hpp"
+#include "ratchet/ui.hpp"
 #include "ratchet/vault.hpp"
 #include "ratchet/x3dh.hpp"
 
@@ -266,7 +269,11 @@ int cmd_init(const Options& opts) {
     bip39::generate_entropy(entropy);
     SecureString mnemonic;
     bip39::encode(entropy, mnemonic);
-    app::print_mnemonic(mnemonic, std::cout);
+    // English on the command line whatever the locale says: the CLI's output
+    // is part of the project's public face, and scripts read it.
+    app::print_mnemonic(mnemonic, std::cout,
+                        i18n::t(i18n::Lang::En, i18n::Str::RecoveryHeading),
+                        i18n::t(i18n::Lang::En, i18n::Str::RecoveryNote));
     terminal::wait_for_enter("Press ENTER once you have written them down...");
     terminal::clear_screen();
     // The words are on paper by now; nothing is served by keeping them in
@@ -566,6 +573,30 @@ int cmd_recv(const Options& opts) {
   return 0;
 }
 
+// The terminal interface, and the one gate in front of it.
+//
+// It runs only when stdin and stdout are both a terminal. That is what keeps
+// every script, pipe and test that has ever driven this program on exactly the
+// path it was on before the interface existed: with the input or the output
+// redirected, a bare `ratchet-usb` produces the error it always produced, down
+// to the wording.
+int cmd_ui(const Options& opts) {
+  if (!screen::usable()) {
+    if (opts.no_arguments) {
+      throw Error("no command given (try `" + std::string(kProgram) +
+                  " --help`)");
+    }
+    throw Error("`ui` needs a terminal: run it without redirecting the input "
+                "or the output");
+  }
+
+  ui::Config config;
+  config.usb_path = opts.usb_path.string();
+  config.lang = i18n::detect(opts.lang);
+  config.idle_lock_seconds = opts.idle_lock_seconds;
+  return ui::run(config);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -608,6 +639,9 @@ int main(int argc, char** argv) {
     }
     if (opts.command == "recv") {
       return cmd_recv(opts);
+    }
+    if (opts.command == "ui") {
+      return cmd_ui(opts);
     }
     throw Error("unknown command: " + opts.command);
   } catch (const std::exception& e) {
