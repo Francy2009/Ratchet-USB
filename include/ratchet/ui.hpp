@@ -57,6 +57,22 @@ struct DriveEntry {
   bool has_vault = false;
 };
 
+// Which half of the screen the arrow keys are steering: the list of things, or
+// the row of actions under it.
+enum class Focus : uint8_t { Body, Menu };
+
+// One entry of the action menu.
+//
+// An entry carries the key it stands for rather than an action of its own, and
+// choosing it presses that key. That is what keeps the menu honest: it is a
+// visible spelling of the shortcuts, not a second way in that could come to
+// mean something different from the first.
+struct MenuEntry {
+  i18n::Str label;
+  screen::KeyCode code = screen::KeyCode::Char;
+  char shortcut = 0;  // only when code is Char
+};
+
 struct ContactRow {
   std::string alias;
   std::string fingerprint;
@@ -78,8 +94,8 @@ class Model {
   void show_block(std::string_view heading, std::string block);
   void show_message(const std::string& from, std::string body, bool session_opened,
                     bool unverified);
-  void set_status(std::string text);
-  void set_status(i18n::Str id);
+  void set_status(std::string text, screen::Style style = screen::Style::Normal);
+  void set_status(i18n::Str id, screen::Style style = screen::Style::Normal);
 
   // Drops everything the vault put on screen and goes back to picking a
   // drive. Called when the vault is locked, by hand or by the idle timer: the
@@ -99,6 +115,12 @@ class Model {
   const DriveEntry* selected_drive() const;
   const ContactRow* selected_contact() const;
   bool unlocked() const { return unlocked_; }
+  Focus focus() const { return focus_; }
+
+  // The actions on offer on the current screen, in the order they are drawn.
+  // Empty on the screens where every key is text and a menu would be in the
+  // way.
+  std::vector<MenuEntry> menu() const;
   i18n::Lang lang() const { return lang_; }
 
   // Wipes the editable buffer. The driver calls this once it has taken the
@@ -115,8 +137,14 @@ class Model {
   ActionKind key_in_text(const screen::Key& key);
   ActionKind key_in_pager(const screen::Key& key);
   void close_pager();
+  ActionKind dispatch(const screen::Key& key);
+  std::size_t menu_selection(std::size_t count) const;
+  std::vector<std::vector<screen::Span>> menu_rows(std::size_t width) const;
+  bool show_banner(const screen::Frame& frame) const;
+  std::size_t header_rows(const screen::Frame& frame) const;
   void render_header(screen::Frame& frame) const;
   void render_body(screen::Frame& frame, std::size_t rows) const;
+  void render_menu(screen::Frame& frame) const;
   void render_footer(screen::Frame& frame) const;
   std::string_view footer_keys() const;
   std::string_view heading() const;
@@ -133,9 +161,13 @@ class Model {
   std::size_t selected_ = 0;       // index into drives_ or contacts_
   std::size_t contact_index_ = 0;  // the contact Contact/Compose are about
 
+  Focus focus_ = Focus::Body;
+  std::size_t menu_index_ = 0;
+
   std::string text_;   // the editable buffer: an alias, a message, a paste
   std::string alias_;  // the alias of a contact being added
   std::string status_;
+  screen::Style status_style_ = screen::Style::Normal;
 
   // What Paste is collecting, which decides where Ctrl-D goes.
   bool pasting_card_ = false;

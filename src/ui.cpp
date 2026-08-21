@@ -151,6 +151,10 @@ class Driver {
 
   Config config_;
   Model model_;
+  // Decided once, at startup: whether the terminal wants colour does not
+  // change while the program is running, and asking on every frame would mean
+  // reading the environment sixty times a minute for no reason.
+  bool colors_ = screen::colors_enabled();
   std::optional<screen::RawMode> raw_;
   std::optional<app::OpenedVault> vault_;
   fs::path drive_;
@@ -160,12 +164,13 @@ class Driver {
 };
 
 void Driver::report(const std::exception& error) {
-  model_.set_status(std::string(t(Str::ErrorPrefix)) + ": " + error.what());
+  model_.set_status(std::string(t(Str::ErrorPrefix)) + ": " + error.what(),
+                    screen::Style::Bad);
 }
 
 void Driver::redraw() {
   const screen::Size size = screen::size();
-  screen::Frame frame(size.width, size.height);
+  screen::Frame frame(size.width, size.height, colors_);
   model_.render(frame);
   screen::write_all(frame.render());
 }
@@ -244,7 +249,7 @@ void Driver::use_path(const fs::path& path) {
     model_.show_setup(drive_.string());
   }
   if (app::is_on_host_filesystem(drive_)) {
-    model_.set_status(std::string(t(Str::HostDiskWarning)));
+    model_.set_status(std::string(t(Str::HostDiskWarning)), screen::Style::Warn);
   }
 }
 
@@ -265,7 +270,7 @@ void Driver::unlock() {
     // tampered file are indistinguishable by design, and saying which is
     // which here would undo that.
     vault_.reset();
-    model_.set_status(std::string(t(Str::WrongPassphrase)));
+    model_.set_status(std::string(t(Str::WrongPassphrase)), screen::Style::Bad);
     return;
   }
   after_unlock();
@@ -302,7 +307,9 @@ void Driver::lock(Str reason) {
   fingerprint_.clear();
   model_.forget();
   refresh_drives();
-  model_.set_status(std::string(t(reason)));
+  model_.set_status(std::string(t(reason)),
+                    reason == Str::IdleLocked ? screen::Style::Warn
+                                              : screen::Style::Dim);
 }
 
 // --- setting up a vault -------------------------------------------------------
@@ -371,7 +378,7 @@ void Driver::create_identity(bool from_mnemonic) {
   }
 
   after_unlock();
-  model_.set_status(std::string(t(Str::VaultCreated)));
+  model_.set_status(std::string(t(Str::VaultCreated)), screen::Style::Good);
 }
 
 // --- the everyday operations ---------------------------------------------------
@@ -426,7 +433,8 @@ void Driver::import_card() {
     save();
 
     go_home();
-    model_.set_status(alias + " " + std::string(t(Str::ContactAdded)));
+    model_.set_status(alias + " " + std::string(t(Str::ContactAdded)),
+                      screen::Style::Good);
   } catch (const std::exception& e) {
     wipe_string(text);
     go_home();
@@ -448,7 +456,8 @@ void Driver::trust_selected() {
     vault().store.contacts[static_cast<std::size_t>(index)].verified = true;
     save();
     model_.show_contacts(contact_rows());
-    model_.set_status(alias + " " + std::string(t(Str::MarkedVerified)));
+    model_.set_status(alias + " " + std::string(t(Str::MarkedVerified)),
+                      screen::Style::Good);
   } catch (const std::exception& e) {
     report(e);
   }
@@ -460,7 +469,7 @@ void Driver::send_message() {
   model_.clear_text();
   if (row == nullptr || body.empty()) {
     wipe_string(body);
-    model_.set_status(std::string(t(Str::EmptyMessage)));
+    model_.set_status(std::string(t(Str::EmptyMessage)), screen::Style::Warn);
     return;
   }
 
@@ -482,7 +491,7 @@ void Driver::send_message() {
     save();
     model_.show_contacts(contact_rows());
     model_.show_block(t(Str::MessageBlock), std::move(block));
-    model_.set_status(std::string(t(Str::MessageReady)));
+    model_.set_status(std::string(t(Str::MessageReady)), screen::Style::Good);
   } catch (const std::exception& e) {
     wipe_string(body);
     report(e);
@@ -493,7 +502,7 @@ void Driver::receive_message() {
   std::string block = model_.text();
   model_.clear_text();
   if (block.empty()) {
-    model_.set_status(std::string(t(Str::NothingToRead)));
+    model_.set_status(std::string(t(Str::NothingToRead)), screen::Style::Warn);
     return;
   }
 

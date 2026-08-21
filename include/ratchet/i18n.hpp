@@ -34,8 +34,8 @@ namespace ratchet::i18n {
   X(TypePath, "Path of the drive:", "Percorso dell'unita':")                    \
   X(PressPForPath, "Press p to type in the path of one.",                      \
     "Premi p per scrivere il percorso di una.")                    \
-  X(KeysDrive, "up/down choose   Enter use   p type a path   q quit",          \
-    "su/giu' scegli   Invio usa   p scrivi un percorso   q esci")               \
+  X(KeysDrive, "up/down list   left/right menu   Enter choose",                \
+    "su/giu' elenco   sinistra/destra menu   Invio scegli")                      \
   /* a drive with no vault on it */                                            \
   X(NoVaultHere, "There is no vault on this drive.",                           \
     "Su questa unita' non c'e' nessun vault.")                                  \
@@ -43,7 +43,8 @@ namespace ratchet::i18n {
     "n   crea qui una nuova identita'")                                         \
   X(SetupRestore, "r   restore an identity from its 12 recovery words",        \
     "r   ripristina un'identita' dalle sue 12 parole")                          \
-  X(KeysSetup, "n new   r restore   Esc back", "n nuova   r ripristina   Esc indietro") \
+  X(KeysSetup, "left/right menu   Enter choose   Esc back",                     \
+    "sinistra/destra menu   Invio scegli   Esc indietro")                        \
   /* the contact list */                                                       \
   X(YourFingerprint, "Your fingerprint:", "La tua impronta:")                  \
   X(Contacts, "Contacts:", "Contatti:")                                        \
@@ -54,16 +55,15 @@ namespace ratchet::i18n {
   X(Unverified, "NOT verified", "NON verificato")                              \
   X(HasSession, "session open", "sessione aperta")                             \
   X(NoSession, "no session yet", "nessuna sessione")                           \
-  X(KeysHome,                                                                  \
-    "up/down  Enter open  a add  c card  r read  l lock  q quit",              \
-    "su/giu'  Invio apri  a aggiungi  c card  r leggi  l blocca  q esci")      \
+  X(KeysHome, "up/down contacts   left/right menu   Enter choose",             \
+    "su/giu' contatti   sinistra/destra menu   Invio scegli")                    \
   /* one contact */                                                            \
   X(Fingerprint, "Fingerprint:", "Impronta:")                                  \
   X(VerifyHint,                                                                \
     "Read this out to them in person or by phone. If it matches, press t.",    \
     "Leggigliela di persona o al telefono. Se combacia, premi t.")              \
-  X(KeysContact, "w write   t mark as verified   Esc back",                    \
-    "w scrivi   t segna come verificato   Esc indietro")                        \
+  X(KeysContact, "left/right menu   Enter choose   Esc back",                   \
+    "sinistra/destra menu   Invio scegli   Esc indietro")                        \
   /* writing a message */                                                      \
   X(WritingTo, "Writing to", "Stai scrivendo a")                               \
   X(ComposeHint, "Type your message. Enter starts a new line.",                \
@@ -75,8 +75,8 @@ namespace ratchet::i18n {
     "Seleziona tutto questo e mandalo come preferisci:")                        \
   X(YourCard, "Your contact card", "La tua card")                              \
   X(MessageBlock, "Your encrypted message", "Il tuo messaggio cifrato")         \
-  X(KeysBlock, "up/down scroll   Esc or q  back",                             \
-    "su/giu' scorri   Esc o q  indietro")    \
+  X(KeysBlock, "up/down scroll   Esc or q back",                               \
+    "su/giu' scorri   Esc o q indietro")    \
   /* pasting something in */                                                    \
   X(PasteBlock, "Paste the block here, then press Ctrl-D.",                    \
     "Incolla qui il blocco, poi premi Ctrl-D.")                                 \
@@ -119,6 +119,22 @@ namespace ratchet::i18n {
     "warning: this looks like the computer's own disk, not a removable drive.",\
     "attenzione: sembra il disco del computer, non un'unita' rimovibile.")      \
   X(PressEnter, "Press ENTER to carry on.", "Premi INVIO per andare avanti.")   \
+  /* The menu. Every entry stands for a key that already worked on its own, so \
+     the two can never mean different things: choosing an entry presses the    \
+     key. The letters keep working for anyone who has learnt them. */          \
+  X(MenuOpen, "Open", "Apri")                                                  \
+  X(MenuAdd, "Add contact", "Aggiungi")                          \
+  X(MenuCard, "My card", "La mia card")                                        \
+  X(MenuRead, "Read message", "Leggi")                          \
+  X(MenuWrite, "Write", "Scrivi")                                              \
+  X(MenuVerify, "Mark as verified", "Segna verificato")                        \
+  X(MenuLock, "Lock", "Blocca")                                                \
+  X(MenuQuit, "Quit", "Esci")                                                  \
+  X(MenuUseDrive, "Use this drive", "Usa questa unita'")                        \
+  X(MenuTypePath, "Type a path", "Scrivi un percorso")                         \
+  X(MenuNewIdentity, "Set up a new identity", "Crea una nuova identita'")       \
+  X(MenuRestore, "Restore from words", "Ripristina dalle parole")              \
+  X(MenuBack, "Back", "Indietro")   \
   /* the prompts that run outside the frame */                                 \
   X(PassphrasePrompt, "Vault passphrase: ", "Passphrase del vault: ")          \
   X(PassphraseNew, "Choose a passphrase for the vault: ",                      \

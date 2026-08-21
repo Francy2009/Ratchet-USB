@@ -56,11 +56,12 @@ def cli(args, stdin=""):
 class Ui:
     """The interface running on a pty, with a way to read the screen back."""
 
-    def __init__(self, drive, extra=None):
+    def __init__(self, drive, extra=None, env_extra=None):
         self.buffer = bytearray()
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             env = dict(os.environ, TERM="xterm-256color")
+            env.update(env_extra or {})
             os.execve(BIN, [BIN, "ui", "--usb-path", drive] + (extra or []), env)
         # A window big enough that a message block is not scrolled: this test
         # reads blocks off the screen, the way a person copies one out.
@@ -235,6 +236,10 @@ def main():
         ui.expect("ciao bob", "the plaintext came back")
         ui.expect("opened a new session", "and it opened the session")
 
+        step("the drawing itself")
+        if "\x1b[36m" not in ui.raw() and "\x1b[1;36m" not in ui.raw():
+            fail("no colour reached the terminal, though it is a tty")
+
         step("locking clears what was on screen")
         before = len(ui.text())
         ui.send("\x1b", 0.5)  # back to the contact list
@@ -248,6 +253,10 @@ def main():
         ui.quit()
 
         # --- what the interface must never emit -------------------------------
+        step("the banner comes back once the vault is closed")
+        if "|_| \\_\\" not in ui.text():
+            fail("the banner was not drawn on the way back out")
+
         step("checking what was written to the terminal")
         if "\x1b]" in raw:
             fail("an OSC sequence was emitted -- a window title would show up "
@@ -257,6 +266,17 @@ def main():
         if "\x1b[?1049h" not in raw:
             fail("the alternate screen was never entered, so the session would "
                  "be left in the scrollback")
+
+        # --- NO_COLOR is honoured ---------------------------------------------
+        step("NO_COLOR turns the colour off")
+        plain = Ui(bob, env_extra={"NO_COLOR": "1"})
+        plain.pump(0.6)
+        if "\x1b[36m" in plain.raw() or "\x1b[1;36m" in plain.raw():
+            fail("colour was emitted even though NO_COLOR was set")
+        else:
+            step("nothing was painted")
+        os.kill(plain.pid, 15)
+        plain.reap()
 
     finally:
         shutil.rmtree(work, ignore_errors=True)

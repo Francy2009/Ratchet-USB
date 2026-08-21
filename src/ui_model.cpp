@@ -13,8 +13,11 @@ using i18n::Str;
 
 // How much of the frame the header and the footer take, leaving the rest for
 // whatever the current screen is showing.
-constexpr std::size_t kHeaderRows = 2;
-constexpr std::size_t kFooterRows = 3;
+constexpr std::size_t kPlainHeaderRows = 2;   // title, rule
+constexpr std::size_t kBannerExtraRows = 2;   // subtitle, blank
+constexpr std::size_t kFooterRows = 3;        // rule, status, key hints
+// Below this many rows the banner is eating space the contact list needs.
+constexpr std::size_t kBannerMinHeight = 20;
 
 // Two spaces of margin down the left, so nothing is drawn hard against the
 // edge of the window.
@@ -93,9 +96,15 @@ void Model::show_message(const std::string& from, std::string body, bool session
   go(Screen::Message);
 }
 
-void Model::set_status(std::string text) { status_ = std::move(text); }
+void Model::set_status(std::string text, screen::Style style) {
+  status_ = std::move(text);
+  status_style_ = style;
+}
 
-void Model::set_status(Str id) { status_ = std::string(i18n::t(lang_, id)); }
+void Model::set_status(Str id, screen::Style style) {
+  status_ = std::string(i18n::t(lang_, id));
+  status_style_ = style;
+}
 
 void Model::forget() {
   // Everything the vault produced goes, not just the screen it was on: a
@@ -117,6 +126,7 @@ void Model::forget() {
   in_paste_ = false;
   pasting_card_ = false;
   unlocked_ = false;
+  status_style_ = screen::Style::Normal;
   go(Screen::Drive);
 }
 
@@ -142,6 +152,10 @@ const ContactRow* Model::selected_contact() const {
 
 void Model::go(Screen next) {
   screen_ = next;
+  // A new screen has a new set of actions, so the cursor starts on the list
+  // rather than on whatever position the last menu happened to be at.
+  focus_ = Focus::Body;
+  menu_index_ = 0;
   if (next == Screen::Alias || next == Screen::Compose ||
       next == Screen::Paste || next == Screen::DrivePath) {
     wipe_string(text_);
@@ -340,6 +354,78 @@ void Model::close_pager() {
   go(Screen::Home);
 }
 
+std::vector<MenuEntry> Model::menu() const {
+  const auto ch = [](Str label, char shortcut) {
+    return MenuEntry{label, screen::KeyCode::Char, shortcut};
+  };
+  const auto code = [](Str label, screen::KeyCode c) {
+    return MenuEntry{label, c, 0};
+  };
+
+  switch (screen_) {
+    case Screen::Drive: {
+      std::vector<MenuEntry> items;
+      if (!drives_.empty()) {
+        items.push_back(code(Str::MenuUseDrive, screen::KeyCode::Enter));
+      }
+      items.push_back(ch(Str::MenuTypePath, 'p'));
+      items.push_back(ch(Str::MenuQuit, 'q'));
+      return items;
+    }
+
+    case Screen::Setup:
+      return {ch(Str::MenuNewIdentity, 'n'), ch(Str::MenuRestore, 'r'),
+              code(Str::MenuBack, screen::KeyCode::Escape)};
+
+    case Screen::Home: {
+      std::vector<MenuEntry> items;
+      if (!contacts_.empty()) {
+        items.push_back(code(Str::MenuOpen, screen::KeyCode::Enter));
+      }
+      items.push_back(ch(Str::MenuAdd, 'a'));
+      items.push_back(ch(Str::MenuCard, 'c'));
+      items.push_back(ch(Str::MenuRead, 'r'));
+      items.push_back(ch(Str::MenuLock, 'l'));
+      items.push_back(ch(Str::MenuQuit, 'q'));
+      return items;
+    }
+
+    case Screen::Contact: {
+      std::vector<MenuEntry> items{ch(Str::MenuWrite, 'w')};
+      const ContactRow* contact = selected_contact();
+      if (contact != nullptr && !contact->verified) {
+        items.push_back(ch(Str::MenuVerify, 't'));
+      }
+      items.push_back(code(Str::MenuBack, screen::KeyCode::Escape));
+      return items;
+    }
+
+    case Screen::Block:
+    case Screen::Message:
+      return {code(Str::MenuBack, screen::KeyCode::Escape)};
+
+    // The text screens get no menu: every key there is a character, so a row
+    // of actions would be something the arrow keys fight over while somebody
+    // is trying to type.
+    case Screen::DrivePath:
+    case Screen::Alias:
+    case Screen::Compose:
+    case Screen::Paste:
+      return {};
+  }
+  return {};
+}
+
+std::size_t Model::menu_selection(std::size_t count) const {
+  if (count == 0) {
+    return 0;
+  }
+  // Clamped on read rather than kept correct on write: the menu changes under
+  // the cursor -- verifying a contact removes "Mark as verified" -- and a
+  // stale index must not be able to point past the end.
+  return menu_index_ < count ? menu_index_ : count - 1;
+}
+
 ActionKind Model::handle_key(const screen::Key& key) {
   // Ctrl-C means the same thing everywhere and cannot be shadowed by a screen.
   // It arrives as a keystroke rather than a signal precisely so that the exit
@@ -355,7 +441,63 @@ ActionKind Model::handle_key(const screen::Key& key) {
   }
 
   status_.clear();
+  status_style_ = screen::Style::Normal;
 
+  const std::vector<MenuEntry> items = menu();
+  if (!items.empty()) {
+    switch (key.code) {
+      case screen::KeyCode::Tab:
+        focus_ = (focus_ == Focus::Menu) ? Focus::Body : Focus::Menu;
+        return ActionKind::None;
+      case screen::KeyCode::Left:
+        // The first press moves the cursor into the menu rather than through
+        // it: arriving at the second entry when you asked to arrive at the
+        // menu is the kind of small wrongness that makes an interface feel
+        // like it is fighting you.
+        if (focus_ != Focus::Menu) {
+          focus_ = Focus::Menu;
+          menu_index_ = items.size() - 1;
+        } else {
+          const std::size_t at = menu_selection(items.size());
+          menu_index_ = (at == 0) ? items.size() - 1 : at - 1;
+        }
+        return ActionKind::None;
+      case screen::KeyCode::Right:
+        if (focus_ != Focus::Menu) {
+          focus_ = Focus::Menu;
+          menu_index_ = 0;
+        } else {
+          menu_index_ = (menu_selection(items.size()) + 1) % items.size();
+        }
+        return ActionKind::None;
+      case screen::KeyCode::Up:
+      case screen::KeyCode::Down:
+        // Up and down always mean the list, left and right always mean the
+        // menu. Nobody has to remember which half the cursor is in.
+        focus_ = Focus::Body;
+        break;
+      case screen::KeyCode::Enter:
+        if (focus_ == Focus::Menu) {
+          const MenuEntry& item = items[menu_selection(items.size())];
+          screen::Key synthetic;
+          synthetic.code = item.code;
+          if (item.code == screen::KeyCode::Char) {
+            synthetic.text = std::string(1, item.shortcut);
+          }
+          // Straight to dispatch, not back through here: the entry stands for
+          // a key, and pressing that key is all choosing it does.
+          return dispatch(synthetic);
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  return dispatch(key);
+}
+
+ActionKind Model::dispatch(const screen::Key& key) {
   switch (screen_) {
     case Screen::Drive:
     case Screen::Home:
@@ -427,7 +569,35 @@ std::string_view Model::footer_keys() const {
   return {};
 }
 
+bool Model::show_banner(const screen::Frame& frame) const {
+  // On the way in, where there is nothing more useful to put at the top of the
+  // screen. Once a vault is open the space belongs to the contact list, and the
+  // drive path is what the header should be saying.
+  if (unlocked_) {
+    return false;
+  }
+  return frame.width() >= screen::banner_width() + kIndent.size() * 2 &&
+         frame.height() >= kBannerMinHeight;
+}
+
+std::size_t Model::header_rows(const screen::Frame& frame) const {
+  if (show_banner(frame)) {
+    return screen::banner().size() + kBannerExtraRows + 1;  // art, subtitle, blank, rule
+  }
+  return kPlainHeaderRows;
+}
+
 void Model::render_header(screen::Frame& frame) const {
+  if (show_banner(frame)) {
+    for (const std::string& art : screen::banner()) {
+      frame.line(indent(art), screen::Style::Title);
+    }
+    frame.line(indent(i18n::t(lang_, Str::Subtitle)), screen::Style::Dim);
+    frame.blank();
+    frame.line(rule(frame.width()), screen::Style::Dim);
+    return;
+  }
+
   std::string title = std::string(cli::kProgram) + " " + cli::kVersion;
   if (!drive_path_.empty() && unlocked_) {
     const std::size_t room = frame.width() > title.size() + 4
@@ -435,14 +605,16 @@ void Model::render_header(screen::Frame& frame) const {
                                  : 0;
     const std::string path = screen::truncate_to_width(drive_path_, room);
     const std::size_t used = title.size() + screen::display_width(path) + 4;
-    title += std::string(frame.width() > used ? frame.width() - used : 1, ' ');
-    title += path;
+    frame.spans({{indent(title), screen::Style::Title},
+                 {std::string(frame.width() > used ? frame.width() - used : 1, ' '),
+                  screen::Style::Normal},
+                 {path, screen::Style::Dim}});
   } else {
-    title += "  -  ";
-    title += i18n::t(lang_, Str::Subtitle);
+    frame.spans({{indent(title), screen::Style::Title},
+                 {"  -  " + std::string(i18n::t(lang_, Str::Subtitle)),
+                  screen::Style::Dim}});
   }
-  frame.line(indent(title));
-  frame.line(rule(frame.width()));
+  frame.line(rule(frame.width()), screen::Style::Dim);
 }
 
 void Model::render_body(screen::Frame& frame, std::size_t rows) const {
@@ -455,10 +627,10 @@ void Model::render_body(screen::Frame& frame, std::size_t rows) const {
       if (drives_.empty()) {
         frame.line(indent(i18n::t(lang_, Str::NoDrivesFound)));
         frame.blank();
-        frame.line(indent(i18n::t(lang_, Str::PressPForPath)));
+        frame.line(indent(i18n::t(lang_, Str::PressPForPath)), screen::Style::Dim);
         break;
       }
-      frame.line(indent(i18n::t(lang_, Str::ChooseDrive)));
+      frame.line(indent(i18n::t(lang_, Str::ChooseDrive)), screen::Style::Accent);
       frame.blank();
       // The window slides with the selection, so a machine with more drives
       // than the frame has rows still shows the one that is highlighted.
@@ -466,44 +638,48 @@ void Model::render_body(screen::Frame& frame, std::size_t rows) const {
       const std::size_t top = (selected_ >= room) ? selected_ - room + 1 : 0;
       for (std::size_t i = top; i < drives_.size() && i < top + room; ++i) {
         const DriveEntry& drive = drives_[i];
-        std::string row = std::string(kIndent) + drive.path + "   [" +
-                          std::string(i18n::t(lang_, drive.has_vault
-                                                         ? Str::DriveHasVault
-                                                         : Str::DriveEmpty)) +
-                          "]";
+        const std::string badge =
+            "   [" +
+            std::string(i18n::t(
+                lang_, drive.has_vault ? Str::DriveHasVault : Str::DriveEmpty)) +
+            "]";
         if (i == selected_) {
-          frame.highlight(row);
+          // The selected row is one bar across the screen; the badge colours
+          // would fight with the reverse video rather than add to it.
+          frame.highlight(std::string(kIndent) + drive.path + badge);
         } else {
-          frame.line(row);
+          frame.spans({{std::string(kIndent) + drive.path, screen::Style::Normal},
+                       {badge, drive.has_vault ? screen::Style::Good
+                                               : screen::Style::Dim}});
         }
       }
       break;
     }
 
     case Screen::DrivePath:
-      frame.line(indent(i18n::t(lang_, Str::TypePath)));
+      frame.line(indent(i18n::t(lang_, Str::TypePath)), screen::Style::Accent);
       frame.blank();
       frame.line(indent("> " + text_));
       break;
 
     case Screen::Setup:
-      frame.line(indent(drive_path_));
+      frame.line(indent(drive_path_), screen::Style::Accent);
       frame.blank();
       frame.line(indent(i18n::t(lang_, Str::NoVaultHere)));
       frame.blank();
-      frame.line(indent(i18n::t(lang_, Str::SetupNew)));
-      frame.line(indent(i18n::t(lang_, Str::SetupRestore)));
+      frame.line(indent(i18n::t(lang_, Str::SetupNew)), screen::Style::Dim);
+      frame.line(indent(i18n::t(lang_, Str::SetupRestore)), screen::Style::Dim);
       break;
 
     case Screen::Home: {
-      frame.line(indent(i18n::t(lang_, Str::YourFingerprint)));
-      frame.line(indent(fingerprint_));
+      frame.line(indent(i18n::t(lang_, Str::YourFingerprint)), screen::Style::Dim);
+      frame.line(indent(fingerprint_), screen::Style::Accent);
       frame.blank();
-      frame.line(indent(i18n::t(lang_, Str::Contacts)));
+      frame.line(indent(i18n::t(lang_, Str::Contacts)), screen::Style::Dim);
       if (contacts_.empty()) {
         frame.blank();
         frame.line(indent(i18n::t(lang_, Str::NoContacts)));
-        frame.line(indent(i18n::t(lang_, Str::NoContactsHint)));
+        frame.line(indent(i18n::t(lang_, Str::NoContactsHint)), screen::Style::Dim);
         break;
       }
       const std::size_t room = rows > 5 ? rows - 5 : 1;
@@ -513,19 +689,29 @@ void Model::render_body(screen::Frame& frame, std::size_t rows) const {
         // The badges go first: an alias is chosen by somebody else and can be
         // as long as they like, so anything appended after it is the part that
         // gets truncated away. "NOT verified" has to be the part that stays.
-        std::string row = std::string(kIndent) + "[" +
-                          std::string(i18n::t(lang_, contact.verified
-                                                         ? Str::Verified
-                                                         : Str::Unverified)) +
-                          "] [" +
-                          std::string(i18n::t(lang_, contact.has_session
-                                                         ? Str::HasSession
-                                                         : Str::NoSession)) +
-                          "] " + contact.alias;
+        const std::string trust =
+            "[" +
+            std::string(i18n::t(lang_,
+                                contact.verified ? Str::Verified : Str::Unverified)) +
+            "]";
+        const std::string session =
+            " [" +
+            std::string(i18n::t(lang_,
+                                contact.has_session ? Str::HasSession : Str::NoSession)) +
+            "]";
         if (i == selected_) {
+          std::string row(kIndent);
+          row += trust;
+          row += session;
+          row += ' ';
+          row += contact.alias;
           frame.highlight(row);
         } else {
-          frame.line(row);
+          frame.spans({{std::string(kIndent), screen::Style::Normal},
+                       {trust, contact.verified ? screen::Style::Good
+                                                : screen::Style::Bad},
+                       {session, screen::Style::Dim},
+                       {" " + contact.alias, screen::Style::Normal}});
         }
       }
       break;
@@ -536,20 +722,23 @@ void Model::render_body(screen::Frame& frame, std::size_t rows) const {
       if (contact == nullptr) {
         break;
       }
-      frame.line(indent("[" +
-                        std::string(i18n::t(lang_, contact->verified
-                                                       ? Str::Verified
-                                                       : Str::Unverified)) +
-                        "] " + contact->alias));
+      frame.spans(
+          {{std::string(kIndent), screen::Style::Normal},
+           {"[" +
+                std::string(i18n::t(lang_, contact->verified ? Str::Verified
+                                                             : Str::Unverified)) +
+                "]",
+            contact->verified ? screen::Style::Good : screen::Style::Bad},
+           {" " + contact->alias, screen::Style::Normal}});
       frame.blank();
-      frame.line(indent(i18n::t(lang_, Str::Fingerprint)));
+      frame.line(indent(i18n::t(lang_, Str::Fingerprint)), screen::Style::Dim);
       for (const std::string& line :
            screen::wrap_text(contact->fingerprint, inner)) {
-        frame.line(indent(line));
+        frame.line(indent(line), screen::Style::Accent);
       }
       frame.blank();
       if (!contact->verified) {
-        frame.line(indent(i18n::t(lang_, Str::VerifyHint)));
+        frame.line(indent(i18n::t(lang_, Str::VerifyHint)), screen::Style::Warn);
       }
       break;
     }
@@ -558,7 +747,7 @@ void Model::render_body(screen::Frame& frame, std::size_t rows) const {
       const ContactRow* contact = selected_contact();
       frame.line(indent(std::string(i18n::t(lang_, Str::WritingTo)) + " " +
                         (contact != nullptr ? contact->alias : std::string())));
-      frame.line(indent(i18n::t(lang_, Str::ComposeHint)));
+      frame.line(indent(i18n::t(lang_, Str::ComposeHint)), screen::Style::Dim);
       frame.blank();
       const std::vector<std::string> lines = screen::wrap_text(text_, inner);
       const std::size_t room = rows > 3 ? rows - 3 : 1;
@@ -570,21 +759,22 @@ void Model::render_body(screen::Frame& frame, std::size_t rows) const {
     }
 
     case Screen::Alias:
-      frame.line(indent(i18n::t(lang_, Str::AliasPrompt)));
+      frame.line(indent(i18n::t(lang_, Str::AliasPrompt)), screen::Style::Accent);
       frame.blank();
       frame.line(indent("> " + text_));
       break;
 
     case Screen::Paste:
       frame.line(indent(i18n::t(lang_, pasting_card_ ? Str::PasteCard
-                                                     : Str::PasteBlock)));
+                                                     : Str::PasteBlock)),
+                 screen::Style::Accent);
       frame.blank();
       // What was pasted is deliberately not drawn. A card or a message block
       // is a screenful of base64 that tells the user nothing, and a message
       // being replied to would be sitting there in the clear; the count is
       // what they actually need to know.
       if (text_.empty()) {
-        frame.line(indent(i18n::t(lang_, Str::NothingPasted)));
+        frame.line(indent(i18n::t(lang_, Str::NothingPasted)), screen::Style::Dim);
       } else {
         frame.line(indent(std::to_string(text_.size()) + " " +
                           std::string(i18n::t(lang_, Str::CharsReceived))));
@@ -593,12 +783,17 @@ void Model::render_body(screen::Frame& frame, std::size_t rows) const {
 
     case Screen::Block:
     case Screen::Message: {
-      frame.line(indent(pager_heading_));
+      frame.line(indent(pager_heading_), screen::Style::Accent);
       for (const std::string& note : pager_notes_) {
-        frame.line(indent(note));
+        // The unverified warning is the one line on this screen somebody must
+        // not skim past, so it is the one line that is coloured like a warning.
+        const bool warning =
+            note == i18n::t(lang_, Str::WarnUnverified);
+        frame.line(indent(note),
+                   warning ? screen::Style::Bad : screen::Style::Dim);
       }
       if (screen_ == Screen::Block) {
-        frame.line(indent(i18n::t(lang_, Str::CopyBlock)));
+        frame.line(indent(i18n::t(lang_, Str::CopyBlock)), screen::Style::Dim);
       }
       frame.blank();
       const std::size_t used = frame.lines().size() - before;
@@ -617,25 +812,65 @@ void Model::render_body(screen::Frame& frame, std::size_t rows) const {
   }
 }
 
+std::vector<std::vector<screen::Span>> Model::menu_rows(std::size_t width) const {
+  std::vector<std::vector<screen::Span>> rows;
+  const std::vector<MenuEntry> items = menu();
+  if (items.empty()) {
+    return rows;
+  }
+
+  const std::size_t inner = width > kIndent.size() * 2 ? width - kIndent.size() * 2 : 1;
+  const std::size_t selected = menu_selection(items.size());
+
+  std::vector<screen::Span> row{{std::string(kIndent), screen::Style::Normal}};
+  std::size_t used = 0;
+  for (std::size_t i = 0; i < items.size(); ++i) {
+    const std::string label =
+        "[ " + std::string(i18n::t(lang_, items[i].label)) + " ]";
+    // Wrapped onto another row rather than truncated: an action that is cut in
+    // half is an action nobody can find, and "Quit" is always the last one.
+    if (used > 0 && used + label.size() + 1 > inner) {
+      rows.push_back(std::move(row));
+      row = {{std::string(kIndent), screen::Style::Normal}};
+      used = 0;
+    }
+    const bool active = focus_ == Focus::Menu && i == selected;
+    row.push_back({label, active ? screen::Style::MenuActive : screen::Style::Normal});
+    row.push_back({" ", screen::Style::Normal});
+    used += label.size() + 1;
+  }
+  rows.push_back(std::move(row));
+  return rows;
+}
+
+void Model::render_menu(screen::Frame& frame) const {
+  for (const std::vector<screen::Span>& row : menu_rows(frame.width())) {
+    frame.spans(row);
+  }
+}
+
 void Model::render_footer(screen::Frame& frame) const {
-  frame.line(rule(frame.width()));
-  frame.line(indent(status_));
-  frame.line(indent(footer_keys()));
+  frame.line(rule(frame.width()), screen::Style::Dim);
+  frame.line(indent(status_), status_style_);
+  frame.line(indent(footer_keys()), screen::Style::Dim);
 }
 
 void Model::render(screen::Frame& frame) const {
   frame.clear();
-  const std::size_t rows = frame.height() > kHeaderRows + kFooterRows
-                               ? frame.height() - kHeaderRows - kFooterRows
-                               : 1;
+  const std::size_t head = header_rows(frame);
+  const std::size_t foot = kFooterRows + menu_rows(frame.width()).size();
+  const std::size_t rows =
+      frame.height() > head + foot ? frame.height() - head - foot : 1;
+
   render_header(frame);
   render_body(frame, rows);
+  render_menu(frame);
   render_footer(frame);
 
   // The cursor sits at the end of whatever is being typed, and nowhere else:
   // on a list screen there is nothing to type into, so it stays hidden.
   if (screen_ == Screen::DrivePath || screen_ == Screen::Alias) {
-    frame.cursor(kHeaderRows + (screen_ == Screen::Alias ? 3 : 4),
+    frame.cursor(head + (screen_ == Screen::Alias ? 3 : 2),
                  kIndent.size() + 3 + screen::display_width(text_));
   }
 }

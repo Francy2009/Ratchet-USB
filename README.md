@@ -133,9 +133,22 @@ ratchet-usb
 ```
 
 That is the whole thing. It finds the drive, asks for the passphrase once, and
-puts your fingerprint and your contacts on screen; from there `a` adds someone
-from their card, `c` shows your own card to hand out, `r` reads a message you
-paste in, `w` writes one, `t` marks a contact verified, `l` locks, `q` quits.
+puts your fingerprint and your contacts on screen.
+
+Nothing has to be memorised. Under the list there is a row of actions -- add a
+contact, show my card, read a message, lock, quit -- and the arrow keys steer
+it: up and down move through the list, left and right move through the actions,
+Enter chooses. Each action also still has its letter (`a`, `c`, `r`, `w`, `t`,
+`l`, `q`) for anyone who has learnt them; the menu is a visible spelling of
+those keys rather than a second way in, and choosing an entry presses its key,
+so the two cannot come to mean different things.
+
+Colour is used sparingly and only to mean something: green for a verified
+contact, red for one you have not checked, cyan for a fingerprint, faint for
+the things that are there when you want them and out of the way when you do
+not. It is switched off when the output is not a terminal, when `TERM` says the
+terminal cannot do it, and when `NO_COLOR` is set.
+
 `--lang en` or `--lang it` picks the language; without it, an Italian locale
 gets Italian and everything else gets English.
 

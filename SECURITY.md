@@ -43,8 +43,11 @@ since the whole design here is about not having much surface to attack.
 What it does not add:
 
 - **No new dependency.** libsodium is still the only one. The terminal handling
-  is a few hundred lines in this tree rather than ncurses, which would also
-  have meant this process reading and interpreting terminfo files.
+  — raw mode, the frame, the colours, the ASCII banner — is a few hundred lines
+  in this tree rather than ncurses, which would also have meant this process
+  reading and interpreting terminfo files. The colours are the sixteen every
+  terminal has had for forty years, written as a fixed set of SGR sequences,
+  and they are off whenever the output is not a terminal or `NO_COLOR` is set.
 - **No graphical toolkit**, and so no X11 or Wayland socket (on X11, any client
   can read another's keystrokes), no D-Bus, and no accessibility bus — which
   exists to read the text of every widget on screen and would have been reading
@@ -86,8 +89,12 @@ And one thing it does not change: everything a contact sends is still treated
 as hostile text. An alias or a message body is escaped before it is drawn, and
 lines are truncated rather than wrapped, so neither an escape sequence nor a
 five-thousand-character alias can repaint the screen or push a "not verified"
-warning out of sight. There are tests for both, and a fuzzer over the key
-decoder and the state machine.
+warning out of sight. Colour did not weaken that: the style of a run is chosen
+by the interface and never comes from the text, so a message cannot paint
+itself green, and every run is closed again so a truncated line cannot leave
+the terminal — or the shell prompt after it — painted. There are tests for all
+of it, and a fuzzer that drives arbitrary bytes through the key decoder and the
+state machine and checks the drawn frame each time.
 
 What is explicitly **out of scope**, in the sense that the design does not try
 to defend against it:

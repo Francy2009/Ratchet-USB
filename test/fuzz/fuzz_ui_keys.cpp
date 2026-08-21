@@ -96,6 +96,17 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, std::size_t size) {
         std::abort();
       }
     }
+
+    // Contract 3: the coloured path emits only the escapes the frame chose.
+    // No OSC (a window title would show up in the taskbar and in any screen
+    // share) and no bell, whatever the keys were.
+    screen::Frame painted(40, 12, /*color=*/true);
+    model.render(painted);
+    const std::string drawn = painted.render();
+    if (drawn.find("\033]") != std::string::npos ||
+        drawn.find('\007') != std::string::npos) {
+      std::abort();
+    }
   }
   return 0;
 }

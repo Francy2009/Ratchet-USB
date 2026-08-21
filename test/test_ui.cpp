@@ -83,7 +83,7 @@ TEST("a long alias cannot make the frame taller than the screen") {
   CHECK(frame.lines().size() <= std::size_t{24});
 }
 
-TEST("a crowd of contacts cannot push the key hints off the screen") {
+TEST("a crowd of contacts cannot push the menu or the hints off the screen") {
   std::vector<ContactRow> many;
   for (int i = 0; i < 500; ++i) {
     many.push_back(contact("contact" + std::to_string(i)));
@@ -92,8 +92,10 @@ TEST("a crowd of contacts cannot push the key hints off the screen") {
   screen::Frame frame(80, 24);
   model.render(frame);
   CHECK(frame.lines().size() <= std::size_t{24});
-  // The last line is still the key hints, not the five-hundredth contact.
-  CHECK(frame.lines().back().find("quit") != std::string::npos);
+  // The last line is still the key hints, not the five-hundredth contact,
+  // and the way out is still on screen above it.
+  CHECK(frame.lines().back().find("Enter choose") != std::string::npos);
+  CHECK(draw(model).find("[ Quit ]") != std::string::npos);
 }
 
 TEST("a decrypted message cannot repaint the screen either") {
@@ -354,4 +356,129 @@ TEST("no screen draws outside the frame, however small it is") {
       }
     }
   }
+}
+
+// --- the menu ------------------------------------------------------------------
+
+TEST("the list screens carry a menu and the typing screens do not") {
+  Model model = unlocked_model({contact("alice")});
+  CHECK(!model.menu().empty());          // Home
+  model.handle_key(code(screen::KeyCode::Enter));
+  CHECK(!model.menu().empty());          // Contact
+  model.handle_key(ch("w"));
+  CHECK(model.screen() == Screen::Compose);
+  // Every key here is a character; a row of actions would be something the
+  // arrow keys fight over while somebody is trying to type.
+  CHECK(model.menu().empty());
+}
+
+TEST("left and right steer the menu, up and down the list") {
+  Model model = unlocked_model({contact("alice"), contact("bob")});
+  CHECK(model.focus() == ui::Focus::Body);
+  model.handle_key(code(screen::KeyCode::Right));
+  CHECK(model.focus() == ui::Focus::Menu);
+  // Up and down always mean the list, so nobody has to remember which half
+  // the cursor is in.
+  model.handle_key(code(screen::KeyCode::Down));
+  CHECK(model.focus() == ui::Focus::Body);
+  CHECK_EQ(model.selected(), std::size_t{1});
+}
+
+TEST("choosing a menu entry does exactly what its shortcut does") {
+  // The menu is a visible spelling of the shortcuts, not a second way in. If
+  // the two could drift apart, one of them would eventually be wrong.
+  Model reference = unlocked_model({contact("alice")});
+  const std::vector<ui::MenuEntry> items = reference.menu();
+  CHECK(!items.empty());
+
+  for (std::size_t i = 0; i < items.size(); ++i) {
+    // Press the key directly.
+    Model by_key = unlocked_model({contact("alice")});
+    screen::Key key;
+    key.code = items[i].code;
+    if (items[i].code == screen::KeyCode::Char) {
+      key.text = std::string(1, items[i].shortcut);
+    }
+    const ActionKind from_key = by_key.handle_key(key);
+
+    // Walk the menu to the same entry and press Enter.
+    Model by_menu = unlocked_model({contact("alice")});
+    by_menu.handle_key(code(screen::KeyCode::Right));  // focus the menu, entry 0
+    for (std::size_t step = 0; step < i; ++step) {
+      by_menu.handle_key(code(screen::KeyCode::Right));
+    }
+    const ActionKind from_menu = by_menu.handle_key(code(screen::KeyCode::Enter));
+
+    CHECK(from_key == from_menu);
+    CHECK(by_key.screen() == by_menu.screen());
+  }
+}
+
+TEST("the menu offers to verify only a contact that is not verified") {
+  const auto has_verify = [](const Model& model) {
+    for (const ui::MenuEntry& item : model.menu()) {
+      if (item.label == i18n::Str::MenuVerify) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  Model unverified = unlocked_model({contact("alice", false)});
+  unverified.handle_key(code(screen::KeyCode::Enter));
+  CHECK(has_verify(unverified));
+
+  Model verified = unlocked_model({contact("alice", true)});
+  verified.handle_key(code(screen::KeyCode::Enter));
+  CHECK(!has_verify(verified));
+}
+
+TEST("a menu cursor left past the end of a shrinking menu still works") {
+  // Verifying a contact removes an entry from under the cursor.
+  Model model = unlocked_model({contact("alice", false)});
+  model.handle_key(code(screen::KeyCode::Enter));
+  model.handle_key(code(screen::KeyCode::Left));  // the last entry, Back
+  model.show_contacts({contact("alice", true)});  // the menu is one shorter now
+  // Whatever it lands on, it must be an entry that exists.
+  CHECK(model.handle_key(code(screen::KeyCode::Enter)) != ActionKind::Send);
+}
+
+TEST("the menu never draws past the edge, however narrow the screen") {
+  Model model = unlocked_model({contact("alice")});
+  for (std::size_t width : {24, 40, 60, 80, 120}) {
+    screen::Frame frame(width, 24);
+    model.render(frame);
+    for (const std::string& line : frame.lines()) {
+      CHECK(screen::display_width(line) <= width);
+    }
+    // Wrapped, never truncated: an action cut in half is one nobody can find.
+    std::string all;
+    for (const std::string& line : frame.lines()) {
+      all += line + "\n";
+    }
+    CHECK(all.find("[ Quit ]") != std::string::npos);
+  }
+}
+
+// --- the banner ----------------------------------------------------------------
+
+TEST("the banner shows on the way in and gets out of the way afterwards") {
+  Model locked(i18n::Lang::En);
+  locked.show_drives({DriveEntry{"/media/usb", true}});
+  CHECK(draw(locked, 80, 24).find("|_| \\_\\") != std::string::npos);
+
+  // Once a vault is open the space belongs to the contact list, and the header
+  // has something more useful to say.
+  Model open = unlocked_model({contact("alice")});
+  CHECK(draw(open, 80, 24).find("|_| \\_\\") == std::string::npos);
+  CHECK(draw(open, 80, 24).find("/media/usb") != std::string::npos);
+}
+
+TEST("the banner steps aside on a small terminal") {
+  Model model(i18n::Lang::En);
+  model.show_drives({DriveEntry{"/media/usb", true}});
+  CHECK(draw(model, 50, 24).find("|_| \\_\\") == std::string::npos);  // too narrow
+  CHECK(draw(model, 80, 12).find("|_| \\_\\") == std::string::npos);  // too short
+  // And the screen still works without it.
+  CHECK(draw(model, 50, 24).find("/media/usb") != std::string::npos);
 }
