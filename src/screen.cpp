@@ -25,8 +25,32 @@ constexpr std::string_view kBracketedPasteOff = "\033[?2004l";
 constexpr std::string_view kHome = "\033[H";
 constexpr std::string_view kEraseLine = "\033[2K";
 constexpr std::string_view kEraseBelow = "\033[J";
-constexpr std::string_view kReverseOn = "\033[7m";
-constexpr std::string_view kReverseOff = "\033[27m";
+constexpr std::string_view kResetStyle = "\033[0m";
+
+// The SGR parameters for each Style. Deliberately the sixteen colours every
+// terminal has had since the 1980s rather than a 256-colour palette: this has
+// to be legible on a light background, a dark one, and a serial console, and
+// the design gets nothing from the extra colours.
+std::string_view sgr_for(Style style) {
+  switch (style) {
+    case Style::Normal: return {};
+    case Style::Title: return "1;36";      // bold cyan
+    case Style::Dim: return "2";           // faint
+    case Style::Accent: return "36";       // cyan
+    case Style::Good: return "32";         // green
+    case Style::Warn: return "33";         // yellow
+    case Style::Bad: return "1;31";        // bold red
+    case Style::Selected: return "7";      // reverse
+    case Style::MenuActive: return "1;7";  // bold reverse
+  }
+  return {};
+}
+
+// Reads an environment variable, treating unset and empty alike.
+std::string_view env(const char* name) {
+  const char* value = std::getenv(name);
+  return (value == nullptr) ? std::string_view() : std::string_view(value);
+}
 
 // Whether `byte` continues a UTF-8 sequence rather than starting one.
 bool is_continuation(unsigned char byte) { return (byte & 0xC0) == 0x80; }
@@ -121,6 +145,34 @@ std::size_t decode_escape(std::string_view in, bool flush, Key& out) {
 }
 
 }  // namespace
+
+bool colors_enabled() {
+  // NO_COLOR first: somebody who set it means it, whatever else is true.
+  if (!env("NO_COLOR").empty()) {
+    return false;
+  }
+  const std::string_view term = env("TERM");
+  if (term.empty() || term == "dumb") {
+    return false;
+  }
+  return isatty(STDOUT_FILENO) != 0;
+}
+
+const std::vector<std::string>& banner() {
+  // Plain ASCII rather than box-drawing characters: this is decoration, and
+  // decoration that turns into mojibake on a terminal that is not reading
+  // UTF-8 is worse than no decoration.
+  static const std::vector<std::string> art = {
+      R"( ____       _       _          _         _   _ ____  ____  )",
+      R"(|  _ \ __ _| |_ ___| |__   ___| |_      | | | / ___|| __ ) )",
+      R"(| |_) / _` | __/ __| '_ \ / _ \ __|_____| | | \___ \|  _ \ )",
+      R"(|  _ < (_| | || (__| | | |  __/ ||_____|| |_| |___) | |_) |)",
+      R"(|_| \_\__,_|\__\___|_| |_|\___|\__|      \___/|____/|____/ )",
+  };
+  return art;
+}
+
+std::size_t banner_width() { return banner().front().size(); }
 
 std::string sanitize_line(std::string_view text) {
   static constexpr char kHex[] = "0123456789abcdef";
@@ -318,30 +370,53 @@ std::size_t decode_key(std::string_view in, bool flush, Key& out) {
 
 // --- Frame ------------------------------------------------------------------
 
-Frame::Frame(std::size_t width, std::size_t height)
-    : width_(width), height_(height) {}
+Frame::Frame(std::size_t width, std::size_t height, bool color)
+    : width_(width), height_(height), color_(color) {}
 
 void Frame::clear() {
+  rows_.clear();
   lines_.clear();
-  highlighted_.clear();
   cursor_row_ = 0;
   cursor_col_ = 0;
 }
 
-void Frame::line(std::string_view text) {
-  if (lines_.size() >= height_) {
+void Frame::push(std::vector<Span> parts) {
+  if (rows_.size() >= height_) {
     return;
   }
-  lines_.push_back(truncate_to_width(sanitize_line(text), width_));
-  highlighted_.push_back(false);
+  std::string plain;
+  for (const Span& part : parts) {
+    plain += part.text;
+  }
+  rows_.push_back(std::move(parts));
+  lines_.push_back(std::move(plain));
 }
 
-void Frame::highlight(std::string_view text) {
-  if (lines_.size() >= height_) {
-    return;
+void Frame::line(std::string_view text, Style style) {
+  std::string body = truncate_to_width(sanitize_line(text), width_);
+  if (style == Style::Selected) {
+    // The selected row reads as a bar across the screen rather than as a patch
+    // of reverse video the width of whatever happens to be on it.
+    const std::size_t drawn = display_width(body);
+    if (drawn < width_) {
+      body.append(width_ - drawn, ' ');
+    }
   }
-  lines_.push_back(truncate_to_width(sanitize_line(text), width_));
-  highlighted_.push_back(true);
+  push({Span{std::move(body), style}});
+}
+
+void Frame::spans(const std::vector<Span>& parts) {
+  std::vector<Span> row;
+  std::size_t used = 0;
+  for (const Span& part : parts) {
+    if (used >= width_) {
+      break;
+    }
+    std::string text = truncate_to_width(sanitize_line(part.text), width_ - used);
+    used += display_width(text);
+    row.push_back(Span{std::move(text), part.style});
+  }
+  push(std::move(row));
 }
 
 void Frame::cursor(std::size_t row, std::size_t col) {
@@ -351,18 +426,25 @@ void Frame::cursor(std::size_t row, std::size_t col) {
 
 std::string Frame::render() const {
   std::string out;
-  out.reserve((width_ + 8) * lines_.size() + 32);
+  out.reserve((width_ + 24) * rows_.size() + 32);
   out += kHome;
-  for (std::size_t i = 0; i < lines_.size(); ++i) {
+  for (std::size_t i = 0; i < rows_.size(); ++i) {
     out += kEraseLine;
-    if (highlighted_[i]) {
-      out += kReverseOn;
-      out += lines_[i];
-      out += kReverseOff;
-    } else {
-      out += lines_[i];
+    for (const Span& part : rows_[i]) {
+      const std::string_view sgr = color_ ? sgr_for(part.style) : std::string_view();
+      if (sgr.empty()) {
+        out += part.text;
+        continue;
+      }
+      out += "\033[";
+      out += sgr;
+      out += "m";
+      out += part.text;
+      // Reset after every run rather than once at the end of the row: a row
+      // that gets truncated must not leave the terminal painted.
+      out += kResetStyle;
     }
-    if (i + 1 < lines_.size()) {
+    if (i + 1 < rows_.size()) {
       out += "\n";
     }
   }

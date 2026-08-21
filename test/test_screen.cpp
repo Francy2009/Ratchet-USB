@@ -224,3 +224,76 @@ TEST("a frame escapes a newline in the text it is given") {
   CHECK(frame.lines()[0].find('\n') == std::string::npos);
   CHECK(frame.lines()[0].find("\\x0a") != std::string::npos);
 }
+
+// --- colour ------------------------------------------------------------------
+
+TEST("a frame emits no colour unless it was asked for") {
+  screen::Frame plain(20, 3);
+  plain.line("hello", screen::Style::Bad);
+  CHECK(plain.render().find("\033[1;31m") == std::string::npos);
+
+  screen::Frame coloured(20, 3, /*color=*/true);
+  coloured.line("hello", screen::Style::Bad);
+  CHECK(coloured.render().find("\033[1;31m") != std::string::npos);
+}
+
+TEST("every styled run is closed again") {
+  // A run left open paints whatever the terminal draws next -- including the
+  // shell prompt after the program exits.
+  screen::Frame frame(20, 4, /*color=*/true);
+  frame.line("one", screen::Style::Good);
+  frame.spans({{"a", screen::Style::Warn}, {"b", screen::Style::Normal}});
+  const std::string rendered = frame.render();
+  std::size_t opens = 0;
+  std::size_t closes = 0;
+  for (std::size_t i = 0; i + 1 < rendered.size(); ++i) {
+    if (rendered.compare(i, 4, "\033[0m") == 0) {
+      ++closes;
+    } else if (rendered[i] == '\033' && rendered[i + 1] == '[' &&
+               rendered.compare(i, 4, "\033[0m") != 0 &&
+               rendered.compare(i, 4, "\033[2K") != 0 &&
+               rendered.compare(i, 3, "\033[H") != 0 &&
+               rendered.compare(i, 3, "\033[J") != 0 &&
+               rendered.compare(i, 6, "\033[?25l") != 0 &&
+               rendered.compare(i, 6, "\033[?25h") != 0) {
+      ++opens;
+    }
+  }
+  CHECK_EQ(opens, closes);
+}
+
+TEST("text cannot smuggle a colour of its own into a styled run") {
+  screen::Frame frame(40, 3, /*color=*/true);
+  frame.spans({{"\033[1;35mfake", screen::Style::Normal}});
+  const std::string rendered = frame.render();
+  // The only escapes present are the ones the frame chose; the text's own is
+  // visible as characters.
+  CHECK(rendered.find("\033[1;35m") == std::string::npos);
+  CHECK(rendered.find("\\x1b[1;35mfake") != std::string::npos);
+}
+
+TEST("the selected row is a bar across the whole width") {
+  screen::Frame frame(20, 3);
+  frame.highlight("short");
+  CHECK_EQ(screen::display_width(frame.lines()[0]), std::size_t{20});
+}
+
+TEST("spans are truncated as one line, not one by one") {
+  screen::Frame frame(10, 3);
+  frame.spans({{"12345", screen::Style::Normal}, {"67890abc", screen::Style::Normal}});
+  CHECK(screen::display_width(frame.lines()[0]) <= std::size_t{10});
+}
+
+TEST("the banner is a rectangle of plain ASCII") {
+  // It is decoration, and decoration that turns into mojibake on a terminal
+  // that is not reading UTF-8 is worse than no decoration.
+  const std::vector<std::string>& art = screen::banner();
+  CHECK(!art.empty());
+  for (const std::string& row : art) {
+    CHECK_EQ(row.size(), screen::banner_width());
+    for (const char ch : row) {
+      const auto byte = static_cast<unsigned char>(ch);
+      CHECK(byte >= 0x20 && byte < 0x7F);
+    }
+  }
+}

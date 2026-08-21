@@ -125,6 +125,46 @@ inline constexpr std::size_t kMaxEscapeSequence = 16;
 // between calls.
 std::size_t decode_key(std::string_view in, bool flush, Key& out);
 
+// --- colour -----------------------------------------------------------------
+
+// What a piece of text means, rather than what colour it is.
+//
+// The frame turns these into SGR sequences; nothing outside it writes a colour
+// escape by hand. That is the same rule as everywhere else here: the only
+// escape sequences that reach the terminal are ones this file chose, never
+// ones that arrived in somebody's alias or message.
+enum class Style : uint8_t {
+  Normal,
+  Title,       // the program name
+  Dim,         // rules and key hints, present but out of the way
+  Accent,      // a heading, a fingerprint
+  Good,        // verified, done
+  Warn,        // worth reading twice
+  Bad,         // not verified, failed
+  Selected,    // the row the cursor is on
+  MenuActive,  // the menu entry the cursor is on
+};
+
+// A run of text drawn in one style. A row is a sequence of these, so a badge
+// can be coloured without the alias next to it being coloured too.
+struct Span {
+  std::string text;
+  Style style = Style::Normal;
+};
+
+// Whether colour should be used at all.
+//
+// Off when stdout is not a terminal, when TERM says the terminal cannot do
+// anything, and when NO_COLOR is set to a non-empty value -- the convention at
+// https://no-color.org, which people who pipe terminal output around rely on.
+bool colors_enabled();
+
+// The program's name as ASCII art, five rows of 59 columns, and the width it
+// needs. Shown on the way in, where there is room for it and nothing more
+// useful to put there.
+const std::vector<std::string>& banner();
+std::size_t banner_width();
+
 // --- frame buffer -----------------------------------------------------------
 
 // A screen's worth of lines, drawn in a single write.
@@ -136,7 +176,10 @@ std::size_t decode_key(std::string_view in, bool flush, Key& out);
 // would want scrolled away.
 class Frame {
  public:
-  Frame(std::size_t width, std::size_t height);
+  // `color` off by default: a frame only emits colour when somebody has
+  // established there is a terminal that wants it. Tests and the fuzzer get
+  // plain text without having to ask.
+  Frame(std::size_t width, std::size_t height, bool color = false);
 
   std::size_t width() const { return width_; }
   std::size_t height() const { return height_; }
@@ -145,11 +188,14 @@ class Frame {
 
   // Appends one line, truncated to the frame width. Lines past the frame's
   // height are dropped.
-  void line(std::string_view text);
+  void line(std::string_view text, Style style = Style::Normal);
   void blank() { line({}); }
 
-  // Same, in reverse video, for a selected row or a header.
-  void highlight(std::string_view text);
+  // Appends a line built from several styled runs, truncated as a whole.
+  void spans(const std::vector<Span>& parts);
+
+  // The row the cursor is on, drawn in reverse video across the full width.
+  void highlight(std::string_view text) { line(text, Style::Selected); }
 
   // Places the visible cursor, one-based. Without a call to this the cursor is
   // parked at the bottom left and hidden by the driver.
@@ -162,10 +208,13 @@ class Frame {
   std::string render() const;
 
  private:
+  void push(std::vector<Span> parts);
+
   std::size_t width_;
   std::size_t height_;
-  std::vector<std::string> lines_;
-  std::vector<bool> highlighted_;
+  bool color_;
+  std::vector<std::vector<Span>> rows_;
+  std::vector<std::string> lines_;  // the same rows as plain text
   std::size_t cursor_row_ = 0;  // zero means "no cursor"
   std::size_t cursor_col_ = 0;
 };
