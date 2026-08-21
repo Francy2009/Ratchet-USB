@@ -6,6 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/Francy2009/Ratchet-USB/actions/workflows/ci.yml"><img src="https://github.com/Francy2009/Ratchet-USB/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/Francy2009/Ratchet-USB/tags"><img src="https://img.shields.io/github/v/tag/Francy2009/Ratchet-USB?label=version&color=blue" alt="Latest version"></a>
 </p>
 
 A small command-line tool for sending encrypted messages without a server.
@@ -35,6 +36,55 @@ it who isn't me. If you're the kind of person who'd face real trouble over a
 read message — a journalist, an activist, whoever — don't make this your
 only layer. Use it next to tools that have actually been audited, and get in
 touch if you want to talk through your situation first.
+
+## Who this is for
+
+The obvious answer is the one just above — somebody who could be hurt by a
+message being read. That is the case the design is built around, and it is
+also the case that applies to almost nobody reading this. The everyday
+version is smaller, and far more common: now and then you have to send
+someone something that has no business sitting in a chat forever.
+
+**A password, an account number, a recovery phrase.** The office Wi-Fi, an
+IBAN, a SIM's PIN, the code to the alarm, a wallet's seed words, the login
+to something shared. These get typed into WhatsApp or email because nothing
+easier is at hand, and then they stay: on two phones, in a cloud backup that
+is usually not end-to-end encrypted, in a mailbox that gets exported whole
+the next time somebody changes laptop. Read in thirty seconds, kept for ten
+years. Encrypt it before it goes in and the copy that outlives the
+conversation is worthless.
+
+**An invoice that has to actually be from you.** Somebody gets into a
+supplier's mailbox, changes the bank details, and sends the invoice on from
+the real address, in the middle of a real thread. It works often enough to
+have a name in every language, and small firms are the usual target because
+nobody there has any way to check. This one is not about secrecy at all —
+it is the other half of what the crypto does. Every message is tied to the
+sender's identity key through the handshake, so a fingerprint you checked
+once, out loud, over the phone, goes on answering "is this really them" for
+every message after it. Whoever owns the mailbox owns the mailbox; the
+identity is in a drawer.
+
+**A channel that outlives your accounts.** A SIM swap, a convincing login
+page, a session token lifted off a laptop — the account goes, and everything
+in it becomes readable and, worse, writable in your name. Nothing here lives
+in an account. There is no password to phish, no number to port, no session
+to steal: the identity is a file on a drive, and the only way to have it is
+to have the drive and the passphrase.
+
+**Handing a secret to a colleague with nothing in the middle.** The usual
+answer is a one-time link — a paste site with a timer, or one of the
+send-a-secret services. They work, and every one of them routes the secret
+through a machine somebody else runs, on the promise that it is deleted
+afterwards. Nothing is uploaded here. The ciphertext goes down the chat you
+were already using, and the key never leaves the two drives.
+
+What this is not is a replacement for Signal. Signal is better at being a
+messenger in every way that matters for talking to people all day, and that
+is what it should be used for. This is for the message that is not chat: the
+occasional one carrying something worth more than the conversation around
+it, that you would rather not hand to an account, a backup, or a company's
+continued good behaviour.
 
 ## Platforms
 
@@ -104,6 +154,21 @@ ctest --test-dir build --output-on-failure
 ```
 
 Binary ends up at `build/ratchet-usb`.
+
+Every release is tagged, so `git checkout v0.2.0` gets you a fixed version
+instead of whatever `main` happens to be that day. That matters more here
+than in most projects: the vault and message formats are not frozen yet, and
+both ends of a conversation have to be on the same one — see the note at the
+bottom about what pre-1.0 means for a vault.
+
+There are no prebuilt binaries, and that is on purpose rather than for lack
+of time. A static binary would be easier to hand out, and it would also be a
+closed box compiled by me, running on a machine I do not control, guarding
+messages that are worth something to you — checksums and signatures prove
+who published it, never what is inside it. Building it yourself is what
+makes the last line of this README true. Distributions that package it will
+link it against their own libsodium, which is the right way round: a fix
+there reaches you without waiting for me to notice.
 
 ## Using it
 
