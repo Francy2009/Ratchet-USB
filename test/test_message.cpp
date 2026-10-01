@@ -59,7 +59,7 @@ TEST("an envelope without X3DH fields round-trips too") {
   CHECK(decoded.ciphertext == original.ciphertext);
 }
 
-TEST("reserved Triple Ratchet suite is neither emitted nor accepted") {
+TEST("mismatched suite version and absent SPQR message are rejected") {
   message::Envelope env = make_envelope(/*with_initial=*/false);
   const std::string valid = message::encode(env);
   std::vector<uint8_t> raw = wire::decode_block("MESSAGE", valid);
@@ -69,6 +69,19 @@ TEST("reserved Triple Ratchet suite is neither emitted nor accepted") {
 
   env.suite = ProtocolSuite::TripleRatchetV1;
   CHECK_THROWS(message::encode(env));
+}
+
+TEST("v3 Triple Ratchet envelope carries an authenticated SPQR message") {
+  message::Envelope env = make_envelope(/*with_initial=*/true);
+  env.version = 3;
+  env.suite = ProtocolSuite::TripleRatchetV1;
+  env.spqr_message = {1, 2, 3, 4, 5};
+  const std::string block = message::encode(env);
+  const message::Envelope parsed = message::decode(block);
+  CHECK(parsed.suite == ProtocolSuite::TripleRatchetV1);
+  CHECK_EQ(parsed.version, uint8_t(3));
+  CHECK(parsed.spqr_message == env.spqr_message);
+  CHECK(message::envelope_aad_prefix(parsed) == message::envelope_aad_prefix(env));
 }
 
 TEST("decode tolerates the block being pasted with extra surrounding text and reflow") {

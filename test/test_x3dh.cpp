@@ -82,14 +82,13 @@ TEST("a hybrid card requires both identity signatures and authenticates all fiel
   CHECK_EQ(body_reader.str(),
            std::string("Ratchet-USB/v4/hybrid-contact-card"));
   CHECK_EQ(body_reader.u8(),
-           static_cast<uint8_t>(ProtocolSuite::HybridPqxdhV1));
+           static_cast<uint8_t>(ProtocolSuite::TripleRatchetV1));
 
-  // Even a correctly signed development card must not claim an unfinished
-  // protocol as a supported capability.
+  // Even a correctly signed card must not claim a suite this build does not
+  // implement.
   std::vector<uint8_t> unsupported_body = signed_body;
   constexpr std::string_view context = "Ratchet-USB/v4/hybrid-contact-card";
-  unsupported_body[4 + context.size()] =
-      static_cast<uint8_t>(ProtocolSuite::TripleRatchetV1);
+  unsupported_body[4 + context.size()] = 4;
   Signature ed_signature{};
   pq::MlDsaSignature pq_signature{};
   sign(bob.sk, unsupported_body.data(), unsupported_body.size(), ed_signature);
@@ -105,9 +104,27 @@ TEST("a hybrid card requires both identity signatures and authenticates all fiel
   CHECK_THROWS(x3dh::import_card(wire::encode_block(
       "CARD", unsupported_card.data(), unsupported_card.size())));
 
+  // Cards issued before SPQR integration advertised the hybrid suite.
+  unsupported_body[4 + context.size()] =
+      static_cast<uint8_t>(ProtocolSuite::HybridPqxdhV1);
+  sign(bob.sk, unsupported_body.data(), unsupported_body.size(), ed_signature);
+  pq::ml_dsa_65_sign(pq_identity.private_seed, unsupported_body.data(),
+                     unsupported_body.size(), pq_signature);
+  unsupported_card.clear();
+  serial::Writer<std::vector<uint8_t>> legacy_writer(unsupported_card);
+  legacy_writer.bytes(magic, sizeof magic);
+  legacy_writer.u8(4);
+  legacy_writer.blob(unsupported_body.data(), unsupported_body.size());
+  legacy_writer.bytes(ed_signature.data(), ed_signature.size());
+  legacy_writer.bytes(pq_signature.data(), pq_signature.size());
+  CHECK(x3dh::import_card(wire::encode_block(
+      "CARD", unsupported_card.data(), unsupported_card.size()))
+            .card.maximum_suite == ProtocolSuite::HybridPqxdhV1);
+
   const x3dh::ImportedCard imported = x3dh::import_card(encoded);
   CHECK(imported.identity_pub == bob.pk);
   CHECK(imported.card.pq_identity_pub == pq_identity.public_key);
+  CHECK(imported.card.maximum_suite == ProtocolSuite::TripleRatchetV1);
   CHECK(imported.card.pq_bundle.has_value());
   CHECK_EQ(imported.card.pq_bundle->signed_prekey.id, pq_spk.id);
   CHECK_EQ(imported.card.pq_bundle->one_time_prekeys.size(), std::size_t(1));

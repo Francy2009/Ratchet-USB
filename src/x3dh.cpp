@@ -147,7 +147,7 @@ std::string export_hybrid_card(
   std::vector<uint8_t> signed_body;
   serial::Writer<std::vector<uint8_t>> w(signed_body);
   w.str(kHybridCardContext);
-  w.u8(static_cast<uint8_t>(ProtocolSuite::HybridPqxdhV1));
+  w.u8(static_cast<uint8_t>(ProtocolSuite::TripleRatchetV1));
   w.bytes(identity_pk.data(), identity_pk.size());
   w.bytes(pq_identity.public_key.data(), pq_identity.public_key.size());
   w.u32(spk.id); w.bytes(spk.pub.data(), spk.pub.size());
@@ -222,9 +222,11 @@ ImportedCard import_card(std::string_view base64_card) {
   ImportedCard out;
   if (version == kHybridCardVersion) {
     const uint8_t suite = br.u8();
-    if (suite != static_cast<uint8_t>(ProtocolSuite::HybridPqxdhV1)) {
+    if (suite != static_cast<uint8_t>(ProtocolSuite::HybridPqxdhV1) &&
+        suite != static_cast<uint8_t>(ProtocolSuite::TripleRatchetV1)) {
       throw Error("unsupported hybrid protocol suite");
     }
+    out.card.maximum_suite = static_cast<ProtocolSuite>(suite);
   }
   br.bytes(out.identity_pub.data(), out.identity_pub.size());
   if (version == kHybridCardVersion) {

@@ -459,9 +459,7 @@ void Driver::import_card() {
     store::Contact contact;
     contact.alias = alias;
     contact.identity_pub = imported.identity_pub;
-    contact.minimum_suite = imported.card.pq_bundle
-                                ? ProtocolSuite::HybridPqxdhV1
-                                : ProtocolSuite::ClassicV2;
+    contact.minimum_suite = imported.card.maximum_suite;
     contact.card = imported.card;
     store.contacts.push_back(std::move(contact));
     save();

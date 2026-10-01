@@ -89,7 +89,8 @@ void init_receiver(store::Session& session, const SecureBytes<32>& shared_secret
 // in the envelope's ratchet header.
 void encrypt(store::Session& session, const std::string& plaintext,
             message::RatchetHeader& header, std::vector<uint8_t>& ciphertext,
-            const std::vector<uint8_t>& aad_prefix = {});
+            const std::vector<uint8_t>& aad_prefix = {},
+            const SecureBytes<32>* pq_message_key = nullptr);
 
 // Drops every cached skipped key stashed more than kSkippedKeyMaxAgeSeconds
 // before `now` (a Unix timestamp in seconds), and returns how many were
@@ -111,7 +112,8 @@ std::size_t expire_skipped_keys(store::Session& session, uint64_t now);
 // delivered twice cannot burn the key belonging to the next one.
 std::string decrypt(store::Session& session, const message::RatchetHeader& header,
                     const std::vector<uint8_t>& ciphertext,
-                    const std::vector<uint8_t>& aad_prefix = {});
+                    const std::vector<uint8_t>& aad_prefix = {},
+                    const SecureBytes<32>* pq_message_key = nullptr);
 
 }  // namespace ratchet::ratchet
 

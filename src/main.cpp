@@ -600,8 +600,12 @@ int cmd_add_contact(const Options& opts) {
       throw Error("a saved contact can only be upgraded with a hybrid card");
     }
     store::Contact& existing = store.contacts[static_cast<std::size_t>(alias_index)];
+    if (!suite_at_least(imported.card.maximum_suite,
+                        existing.minimum_suite)) {
+      throw Error("contact card would downgrade the saved protocol suite");
+    }
     existing.card = imported.card;
-    existing.minimum_suite = ProtocolSuite::HybridPqxdhV1;
+    existing.minimum_suite = imported.card.maximum_suite;
     existing.verified = false;
     store.sessions.erase(
         std::remove_if(store.sessions.begin(), store.sessions.end(),
@@ -624,9 +628,7 @@ int cmd_add_contact(const Options& opts) {
   store::Contact contact;
   contact.alias = name;
   contact.identity_pub = imported.identity_pub;
-  contact.minimum_suite = imported.card.pq_bundle
-                              ? ProtocolSuite::HybridPqxdhV1
-                              : ProtocolSuite::ClassicV2;
+  contact.minimum_suite = imported.card.maximum_suite;
   contact.card = imported.card;
   store.contacts.push_back(std::move(contact));
 

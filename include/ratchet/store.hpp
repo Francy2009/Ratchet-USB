@@ -46,6 +46,7 @@ struct PeerPqBundle {
 // initiator. Kept around after import so `send` can perform the handshake
 // lazily, the first time there is something to say to them.
 struct PeerCard {
+  ProtocolSuite maximum_suite = ProtocolSuite::ClassicV2;
   uint32_t spk_id = 0;
   x25519::PublicKey spk_pub{};
   Signature spk_signature{};
@@ -118,6 +119,7 @@ struct Session {
   Status status = Status::Pending;
   std::array<uint8_t, 32> session_id{};
   bool legacy_read_only = false;
+  SecureBuffer spqr_state;
 
   SecureBytes<32> root_key;
 

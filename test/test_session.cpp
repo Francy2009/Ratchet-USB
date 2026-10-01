@@ -102,15 +102,86 @@ TEST("simultaneous openings converge on the lexicographically smaller session") 
   }
 }
 
-TEST("sending refuses an existing session with a reserved suite") {
+TEST("sending refuses an existing session below the contact minimum suite") {
   Party alice = make_party(1);
   Party bob = make_party(1);
   introduce(bob, alice, "bob");
   const std::string first =
       session::send(alice.vault, alice.sk, alice.pk, 0, "first");
   CHECK(!first.empty());
-  alice.vault.sessions[0].suite = ProtocolSuite::TripleRatchetV1;
+  alice.vault.contacts[0].minimum_suite = ProtocolSuite::TripleRatchetV1;
+  alice.vault.sessions[0].suite = ProtocolSuite::HybridPqxdhV1;
   CHECK_THROWS(session::send(alice.vault, alice.sk, alice.pk, 0, "second"));
+}
+
+TEST("an existing hybrid-only card keeps the v2 conversation readable") {
+  Party alice = make_party(1);
+  Party bob = make_party(1);
+  introduce(bob, alice, "bob");
+  introduce(alice, bob, "alice");
+  alice.vault.contacts[0].card->maximum_suite = ProtocolSuite::HybridPqxdhV1;
+  bob.vault.contacts[0].card->maximum_suite = ProtocolSuite::HybridPqxdhV1;
+  const std::string opening = session::send(alice.vault, alice.sk, alice.pk,
+                                             0, "legacy hybrid");
+  const message::Envelope env = message::decode(opening);
+  CHECK_EQ(env.version, uint8_t(2));
+  CHECK(env.suite == ProtocolSuite::HybridPqxdhV1);
+  CHECK(alice.vault.sessions[0].spqr_state.empty());
+  CHECK_EQ(session::receive(bob.vault, bob.sk, bob.pk, opening).plaintext,
+           std::string("legacy hybrid"));
+  const std::string reply = session::send(bob.vault, bob.sk, bob.pk, 0, "reply");
+  CHECK_EQ(session::receive(alice.vault, alice.sk, alice.pk, reply).plaintext,
+           std::string("reply"));
+}
+
+TEST("Triple Ratchet state survives vault persistence and rejects forged data atomically") {
+  Party alice = make_party(3);
+  Party bob = make_party(3);
+  introduce(bob, alice, "bob");
+  introduce(alice, bob, "alice");
+
+  const std::string opening = session::send(alice.vault, alice.sk, alice.pk,
+                                             0, "hello quantum world");
+  const message::Envelope first = message::decode(opening);
+  CHECK_EQ(first.version, uint8_t(3));
+  CHECK(first.suite == ProtocolSuite::TripleRatchetV1);
+  CHECK(!first.spqr_message.empty());
+  CHECK(!alice.vault.sessions[0].spqr_state.empty());
+  CHECK_EQ(session::receive(bob.vault, bob.sk, bob.pk, opening).plaintext,
+           std::string("hello quantum world"));
+
+  const SecureBuffer saved_alice = store::serialize(alice.vault);
+  const SecureBuffer saved_bob = store::serialize(bob.vault);
+  alice.vault = store::parse(saved_alice.data(), saved_alice.size());
+  bob.vault = store::parse(saved_bob.data(), saved_bob.size());
+  CHECK(!bob.vault.sessions[0].spqr_state.empty());
+
+  const std::string reply = session::send(bob.vault, bob.sk, bob.pk, 0, "reply");
+  message::Envelope forged = message::decode(reply);
+  forged.ciphertext.back() ^= 1;
+  const SecureBuffer before = store::serialize(alice.vault);
+  CHECK_THROWS(session::receive(alice.vault, alice.sk, alice.pk,
+                                 message::encode(forged)));
+  const SecureBuffer after = store::serialize(alice.vault);
+  CHECK_EQ(before.size(), after.size());
+  CHECK(sodium_memcmp(before.data(), after.data(), before.size()) == 0);
+  CHECK_EQ(session::receive(alice.vault, alice.sk, alice.pk, reply).plaintext,
+           std::string("reply"));
+}
+
+TEST("a failed SPQR send leaves the vault untouched") {
+  Party alice = make_party(1);
+  Party bob = make_party(1);
+  introduce(bob, alice, "bob");
+  const std::string opening = session::send(alice.vault, alice.sk, alice.pk,
+                                             0, "first");
+  CHECK(!opening.empty());
+  alice.vault.sessions[0].spqr_state.clear();
+  const SecureBuffer before = store::serialize(alice.vault);
+  CHECK_THROWS(session::send(alice.vault, alice.sk, alice.pk, 0, "second"));
+  const SecureBuffer after = store::serialize(alice.vault);
+  CHECK_EQ(before.size(), after.size());
+  CHECK(sodium_memcmp(before.data(), after.data(), before.size()) == 0);
 }
 
 TEST("an opening message that used no one-time prekey cannot be replayed") {

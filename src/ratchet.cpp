@@ -1,4 +1,5 @@
 #include "ratchet/ratchet.hpp"
+#include "ratchet/triple_ratchet.hpp"
 
 #include <sodium.h>
 
@@ -222,7 +223,8 @@ void init_receiver(store::Session& s, const SecureBytes<32>& shared_secret,
 
 void encrypt(store::Session& s, const std::string& plaintext,
             message::RatchetHeader& header, std::vector<uint8_t>& ciphertext,
-            const std::vector<uint8_t>& aad_prefix) {
+            const std::vector<uint8_t>& aad_prefix,
+            const SecureBytes<32>* pq_message_key) {
   if (!s.has_cks) {
     throw Error("internal: session has no sending chain yet");
   }
@@ -240,7 +242,13 @@ void encrypt(store::Session& s, const std::string& plaintext,
   std::vector<uint8_t> aad = aad_prefix;
   const std::vector<uint8_t> ratchet_aad = message::header_aad(header);
   aad.insert(aad.end(), ratchet_aad.begin(), ratchet_aad.end());
-  ciphertext = aead_encrypt(mk, plaintext, aad);
+  SecureBytes<32> aead_key;
+  if (pq_message_key) {
+    triple_ratchet::combine_message_keys(mk, *pq_message_key, aead_key);
+  } else {
+    aead_key.assign(mk);
+  }
+  ciphertext = aead_encrypt(aead_key, plaintext, aad);
 }
 
 std::size_t expire_skipped_keys(store::Session& s, uint64_t now) {
@@ -266,7 +274,8 @@ namespace {
 std::string decrypt_in_place(store::Session& s,
                              const message::RatchetHeader& header,
                              const std::vector<uint8_t>& ciphertext,
-                             const std::vector<uint8_t>& aad_prefix) {
+                             const std::vector<uint8_t>& aad_prefix,
+                             const SecureBytes<32>* pq_message_key) {
   // Before anything else, so an expired key can neither decrypt a message nor
   // keep occupying a slot in the kMaxSkip budget.
   expire_skipped_keys(s, static_cast<uint64_t>(std::time(nullptr)));
@@ -286,7 +295,14 @@ std::string decrypt_in_place(store::Session& s,
       // message that did it. Passing the cached key straight to the AEAD
       // rather than copying it out also keeps one fewer copy of key material
       // alive.
-      std::string plaintext = aead_decrypt(it->message_key, ciphertext, aad);
+      SecureBytes<32> aead_key;
+      if (pq_message_key) {
+        triple_ratchet::combine_message_keys(it->message_key,
+                                             *pq_message_key, aead_key);
+      } else {
+        aead_key.assign(it->message_key);
+      }
+      std::string plaintext = aead_decrypt(aead_key, ciphertext, aad);
       s.skipped.erase(it);
       return plaintext;
     }
@@ -305,14 +321,21 @@ std::string decrypt_in_place(store::Session& s,
   s.chain_key_recv = std::move(new_ckr);
   s.nr += 1;
 
-  return aead_decrypt(mk, ciphertext, aad);
+  SecureBytes<32> aead_key;
+  if (pq_message_key) {
+    triple_ratchet::combine_message_keys(mk, *pq_message_key, aead_key);
+  } else {
+    aead_key.assign(mk);
+  }
+  return aead_decrypt(aead_key, ciphertext, aad);
 }
 
 }  // namespace
 
 std::string decrypt(store::Session& s, const message::RatchetHeader& header,
                     const std::vector<uint8_t>& ciphertext,
-                    const std::vector<uint8_t>& aad_prefix) {
+                    const std::vector<uint8_t>& aad_prefix,
+                    const SecureBytes<32>* pq_message_key) {
   // Everything decrypt_in_place touches -- the receiving chain, the root key
   // on a DH step, the skipped-key cache -- has to move before the tag is
   // checkable, because the tag cannot be checked until the key exists. So a
@@ -327,7 +350,8 @@ std::string decrypt(store::Session& s, const message::RatchetHeader& header,
   // does by default.
   store::Session candidate = store::clone_session(s);
   std::string plaintext =
-      decrypt_in_place(candidate, header, ciphertext, aad_prefix);
+      decrypt_in_place(candidate, header, ciphertext, aad_prefix,
+                       pq_message_key);
   s = std::move(candidate);
   return plaintext;
 }

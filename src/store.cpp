@@ -18,7 +18,7 @@ constexpr std::array<uint8_t, 4> kStoreMagic = {'R', 'S', 'T', 'R'};
 // handshakes already accepted, so an initial message cannot be replayed. All
 // four are still readable: a vault written before the guard existed simply
 // starts with an empty list, which is the same state a fresh vault is in.
-constexpr uint8_t kStoreVersion = 8;
+constexpr uint8_t kStoreVersion = 9;
 
 void write_pq_prekey(serial::Writer<SecureBuffer>& w, const PqPrekey& p) {
   w.u32(p.id);
@@ -83,6 +83,7 @@ prekey::OneTimePrekey read_one_time_prekey(serial::Reader& r) {
 }
 
 void write_peer_card(serial::Writer<SecureBuffer>& w, const PeerCard& card) {
+  w.u8(static_cast<uint8_t>(card.maximum_suite));
   w.u32(card.spk_id);
   w.bytes(card.spk_pub.data(), card.spk_pub.size());
   w.bytes(card.spk_signature.data(), card.spk_signature.size());
@@ -108,6 +109,13 @@ void write_peer_card(serial::Writer<SecureBuffer>& w, const PeerCard& card) {
 
 PeerCard read_peer_card(serial::Reader& r, uint8_t version) {
   PeerCard card;
+  if (version >= 9) {
+    const uint8_t suite = r.u8();
+    if (suite < 1 || suite > 3) throw Error("invalid card protocol suite");
+    card.maximum_suite = static_cast<ProtocolSuite>(suite);
+  } else if (version >= 7) {
+    card.maximum_suite = ProtocolSuite::HybridPqxdhV1;
+  }
   card.spk_id = r.u32();
   r.bytes(card.spk_pub.data(), card.spk_pub.size());
   r.bytes(card.spk_signature.data(), card.spk_signature.size());
@@ -199,6 +207,10 @@ void write_session(serial::Writer<SecureBuffer>& w, const Session& s) {
   w.u8(static_cast<uint8_t>(s.status));
   w.bytes(s.session_id.data(), s.session_id.size());
   w.u8(s.legacy_read_only ? 1 : 0);
+  if (s.spqr_state.size() > 8u * 1024u * 1024u) {
+    throw Error("SPQR state exceeds the vault limit");
+  }
+  w.blob(s.spqr_state.data(), s.spqr_state.size());
   w.bytes(s.root_key.data(), s.root_key.size());
 
   w.u8(s.has_dhs ? 1 : 0);
@@ -237,6 +249,9 @@ Session read_session(serial::Reader& r, uint8_t version) {
     s.status = static_cast<Session::Status>(status);
     r.bytes(s.session_id.data(), s.session_id.size());
     if (version >= 8) s.legacy_read_only = r.u8() != 0;
+    if (version >= 9) {
+      s.spqr_state = r.secure_blob(8u * 1024u * 1024u);
+    }
   }
   r.bytes(s.root_key.data(), s.root_key.size());
 
@@ -329,6 +344,7 @@ Session clone_session(const Session& session) {
   out.status = session.status;
   out.session_id = session.session_id;
   out.legacy_read_only = session.legacy_read_only;
+  out.spqr_state.append(session.spqr_state.data(), session.spqr_state.size());
   out.root_key.assign(session.root_key);
 
   out.has_dhs = session.has_dhs;

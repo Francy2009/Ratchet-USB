@@ -50,6 +50,7 @@ struct Envelope {
   ProtocolSuite suite = ProtocolSuite::HybridPqxdhV1;
   SenderId sender_id{};
   std::optional<InitialFields> initial;
+  std::vector<uint8_t> spqr_message;
   RatchetHeader header;
   std::vector<uint8_t> ciphertext;  // nonce || AEAD ciphertext || tag
 };
