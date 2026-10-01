@@ -413,3 +413,64 @@ TEST("a key stamped in the future is not expired by a clock that slipped") {
   CHECK_EQ(rr::expire_skipped_keys(pair.bob, now), std::size_t{0});
   CHECK_EQ(rr::decrypt(pair.bob, h0, ct0), std::string("first"));
 }
+
+// --- Message padding (Traffic Analysis mitigation) ---------------------------
+
+TEST("padding: padded_payload_size buckets small and large messages") {
+  CHECK_EQ(rr::detail::padded_payload_size(0), std::size_t{128});
+  CHECK_EQ(rr::detail::padded_payload_size(1), std::size_t{128});
+  CHECK_EQ(rr::detail::padded_payload_size(126), std::size_t{128});
+  CHECK_EQ(rr::detail::padded_payload_size(127), std::size_t{128});
+  CHECK_EQ(rr::detail::padded_payload_size(128), std::size_t{256});
+  CHECK_EQ(rr::detail::padded_payload_size(255), std::size_t{256});
+  CHECK_EQ(rr::detail::padded_payload_size(256), std::size_t{512});
+  CHECK_EQ(rr::detail::padded_payload_size(511), std::size_t{512});
+  CHECK_EQ(rr::detail::padded_payload_size(512), std::size_t{1024});
+  CHECK_EQ(rr::detail::padded_payload_size(1023), std::size_t{1024});
+  CHECK_EQ(rr::detail::padded_payload_size(1024), std::size_t{2048});
+  CHECK_EQ(rr::detail::padded_payload_size(2047), std::size_t{2048});
+  CHECK_EQ(rr::detail::padded_payload_size(2048), std::size_t{3072});
+}
+
+TEST("padding: short messages produce identical ciphertext lengths") {
+  Pair pair = make_established_pair();
+  message::RatchetHeader h1, h2, h3;
+  std::vector<uint8_t> ct1, ct2, ct3;
+
+  rr::encrypt(pair.alice, "k", h1, ct1);
+  rr::encrypt(pair.alice, "hello bob, how are you?", h2, ct2);
+  rr::encrypt(pair.alice, std::string(120, 'a'), h3, ct3);
+
+  // All messages under 128 bytes pad to 128 bytes + 12 nonce + 16 tag = 156 bytes
+  CHECK_EQ(ct1.size(), std::size_t{156});
+  CHECK_EQ(ct2.size(), std::size_t{156});
+  CHECK_EQ(ct3.size(), std::size_t{156});
+
+  CHECK_EQ(rr::decrypt(pair.bob, h1, ct1), std::string("k"));
+  CHECK_EQ(rr::decrypt(pair.bob, h2, ct2), std::string("hello bob, how are you?"));
+  CHECK_EQ(rr::decrypt(pair.bob, h3, ct3), std::string(120, 'a'));
+}
+
+TEST("padding: empty, binary and 0x80-terminated plaintexts round trip cleanly") {
+  Pair pair = make_established_pair();
+
+  // 1. Empty string
+  message::RatchetHeader h0;
+  std::vector<uint8_t> ct0;
+  rr::encrypt(pair.alice, "", h0, ct0);
+  CHECK_EQ(rr::decrypt(pair.bob, h0, ct0), std::string(""));
+
+  // 2. String ending in 0x80 byte
+  message::RatchetHeader h1;
+  std::vector<uint8_t> ct1;
+  const std::string text_ending_in_80 = std::string("test") + "\x80";
+  rr::encrypt(pair.alice, text_ending_in_80, h1, ct1);
+  CHECK_EQ(rr::decrypt(pair.bob, h1, ct1), text_ending_in_80);
+
+  // 3. String with embedded NUL and arbitrary bytes
+  message::RatchetHeader h2;
+  std::vector<uint8_t> ct2;
+  const std::string binary_data = std::string("pre\x00mid\x80post", 11);
+  rr::encrypt(pair.alice, binary_data, h2, ct2);
+  CHECK_EQ(rr::decrypt(pair.bob, h2, ct2), binary_data);
+}

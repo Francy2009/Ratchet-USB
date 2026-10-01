@@ -18,7 +18,29 @@ constexpr std::array<uint8_t, 4> kStoreMagic = {'R', 'S', 'T', 'R'};
 // handshakes already accepted, so an initial message cannot be replayed. All
 // four are still readable: a vault written before the guard existed simply
 // starts with an empty list, which is the same state a fresh vault is in.
-constexpr uint8_t kStoreVersion = 4;
+constexpr uint8_t kStoreVersion = 8;
+
+void write_pq_prekey(serial::Writer<SecureBuffer>& w, const PqPrekey& p) {
+  w.u32(p.id);
+  w.bytes(p.key.public_key.data(), p.key.public_key.size());
+  w.bytes(p.key.private_seed.data(), p.key.private_seed.size());
+  w.u64(p.created_at);
+}
+
+PqPrekey read_pq_prekey(serial::Reader& r) {
+  PqPrekey p;
+  p.id = r.u32();
+  r.bytes(p.key.public_key.data(), p.key.public_key.size());
+  r.bytes(p.key.private_seed.data(), p.key.private_seed.size());
+  p.created_at = r.u64();
+  const pq::MlKemKeyPair reconstructed =
+      pq::ml_kem_768_from_seed(p.key.private_seed);
+  if (sodium_memcmp(reconstructed.public_key.data(), p.key.public_key.data(),
+                    p.key.public_key.size()) != 0) {
+    throw Error("stored ML-KEM public key does not match its private seed");
+  }
+  return p;
+}
 
 void write_signed_prekey(serial::Writer<SecureBuffer>& w,
                          const prekey::SignedPrekey& spk) {
@@ -69,9 +91,22 @@ void write_peer_card(serial::Writer<SecureBuffer>& w, const PeerCard& card) {
     w.u32(o.id);
     w.bytes(o.pub.data(), o.pub.size());
   }
+  w.bytes(card.pq_identity_pub.data(), card.pq_identity_pub.size());
+  w.u8(card.pq_bundle ? 1 : 0);
+  if (card.pq_bundle) {
+    const PeerPqBundle& pqb = *card.pq_bundle;
+    w.u32(pqb.signed_prekey.id);
+    w.bytes(pqb.signed_prekey.pub.data(), pqb.signed_prekey.pub.size());
+    w.bytes(pqb.ed_signature.data(), pqb.ed_signature.size());
+    w.bytes(pqb.pq_signature.data(), pqb.pq_signature.size());
+    w.u32(static_cast<uint32_t>(pqb.one_time_prekeys.size()));
+    for (const PeerPqPrekey& p : pqb.one_time_prekeys) {
+      w.u32(p.id); w.bytes(p.pub.data(), p.pub.size());
+    }
+  }
 }
 
-PeerCard read_peer_card(serial::Reader& r) {
+PeerCard read_peer_card(serial::Reader& r, uint8_t version) {
   PeerCard card;
   card.spk_id = r.u32();
   r.bytes(card.spk_pub.data(), card.spk_pub.size());
@@ -84,6 +119,24 @@ PeerCard read_peer_card(serial::Reader& r) {
     r.bytes(o.pub.data(), o.pub.size());
     card.one_time_prekeys.push_back(o);
   }
+  if (version >= 7) {
+    r.bytes(card.pq_identity_pub.data(), card.pq_identity_pub.size());
+    if (r.u8() != 0) {
+      PeerPqBundle pqb;
+      pqb.signed_prekey.id = r.u32();
+      r.bytes(pqb.signed_prekey.pub.data(), pqb.signed_prekey.pub.size());
+      r.bytes(pqb.ed_signature.data(), pqb.ed_signature.size());
+      r.bytes(pqb.pq_signature.data(), pqb.pq_signature.size());
+      const uint32_t n = r.u32();
+      pqb.one_time_prekeys.reserve(r.bounded_count(n, 4 + pq::kMlKem768PublicKeyBytes));
+      for (uint32_t i = 0; i < n; ++i) {
+        PeerPqPrekey p; p.id = r.u32();
+        r.bytes(p.pub.data(), p.pub.size());
+        pqb.one_time_prekeys.push_back(p);
+      }
+      card.pq_bundle = std::move(pqb);
+    }
+  }
   return card;
 }
 
@@ -91,19 +144,28 @@ void write_contact(serial::Writer<SecureBuffer>& w, const Contact& contact) {
   w.str(contact.alias);
   w.bytes(contact.identity_pub.data(), contact.identity_pub.size());
   w.u8(contact.verified ? 1 : 0);
+  w.u8(static_cast<uint8_t>(contact.minimum_suite));
   w.u8(contact.card.has_value() ? 1 : 0);
   if (contact.card) {
     write_peer_card(w, *contact.card);
   }
 }
 
-Contact read_contact(serial::Reader& r) {
+Contact read_contact(serial::Reader& r, uint8_t version) {
   Contact contact;
   contact.alias = r.str();
+  if (contact.alias.empty() || contact.alias.size() > kMaxAliasBytes) {
+    throw Error("contact alias has an invalid length");
+  }
   r.bytes(contact.identity_pub.data(), contact.identity_pub.size());
   contact.verified = r.u8() != 0;
+  if (version >= 6) {
+    const uint8_t suite = r.u8();
+    if (suite < 1 || suite > 3) throw Error("invalid minimum protocol suite");
+    contact.minimum_suite = static_cast<ProtocolSuite>(suite);
+  }
   if (r.u8() != 0) {
-    contact.card = read_peer_card(r);
+    contact.card = read_peer_card(r, version);
   }
   return contact;
 }
@@ -133,6 +195,10 @@ SkippedKey read_skipped_key(serial::Reader& r, uint8_t version) {
 
 void write_session(serial::Writer<SecureBuffer>& w, const Session& s) {
   w.u32(static_cast<uint32_t>(s.contact_index));
+  w.u8(static_cast<uint8_t>(s.suite));
+  w.u8(static_cast<uint8_t>(s.status));
+  w.bytes(s.session_id.data(), s.session_id.size());
+  w.u8(s.legacy_read_only ? 1 : 0);
   w.bytes(s.root_key.data(), s.root_key.size());
 
   w.u8(s.has_dhs ? 1 : 0);
@@ -161,6 +227,17 @@ void write_session(serial::Writer<SecureBuffer>& w, const Session& s) {
 Session read_session(serial::Reader& r, uint8_t version) {
   Session s;
   s.contact_index = r.u32();
+  if (version >= 6) {
+    const uint8_t suite = r.u8();
+    const uint8_t status = r.u8();
+    if (suite < 1 || suite > 3 || status < 1 || status > 3) {
+      throw Error("invalid session protocol state");
+    }
+    s.suite = static_cast<ProtocolSuite>(suite);
+    s.status = static_cast<Session::Status>(status);
+    r.bytes(s.session_id.data(), s.session_id.size());
+    if (version >= 8) s.legacy_read_only = r.u8() != 0;
+  }
   r.bytes(s.root_key.data(), s.root_key.size());
 
   s.has_dhs = r.u8() != 0;
@@ -226,10 +303,8 @@ void VaultStore::remember_handshake(const IdentitySigningPublicKey& initiator,
   if (handshake_already_accepted(initiator, ephemeral_pub)) {
     return;
   }
-  // Oldest first, so dropping from the front drops the one whose replay window
-  // has been open longest.
-  while (accepted_handshakes.size() >= kMaxAcceptedHandshakes) {
-    accepted_handshakes.erase(accepted_handshakes.begin());
+  if (accepted_handshakes.size() >= kMaxAcceptedHandshakes) {
+    throw Error("accepted-handshake history is full; refusing replay-window eviction");
   }
   AcceptedHandshake h;
   h.initiator_identity = initiator;
@@ -250,6 +325,10 @@ int VaultStore::find_session(std::size_t contact_index) const {
 Session clone_session(const Session& session) {
   Session out;
   out.contact_index = session.contact_index;
+  out.suite = session.suite;
+  out.status = session.status;
+  out.session_id = session.session_id;
+  out.legacy_read_only = session.legacy_read_only;
   out.root_key.assign(session.root_key);
 
   out.has_dhs = session.has_dhs;
@@ -289,6 +368,10 @@ SecureBuffer serialize(const VaultStore& store) {
   w.bytes(kStoreMagic.data(), kStoreMagic.size());
   w.u8(kStoreVersion);
 
+  w.bytes(store.vault_id.data(), store.vault_id.size());
+  w.u64(store.generation);
+  w.bytes(store.previous_digest.data(), store.previous_digest.size());
+
   w.bytes(store.seed.data(), store.seed.size());
 
   w.u32(store.next_spk_id);
@@ -302,6 +385,12 @@ SecureBuffer serialize(const VaultStore& store) {
   for (const prekey::OneTimePrekey& otpk : store.one_time_prekeys) {
     write_one_time_prekey(w, otpk);
   }
+
+  w.u32(store.next_pq_prekey_id);
+  w.u32(static_cast<uint32_t>(store.pq_signed_prekeys.size()));
+  for (const PqPrekey& p : store.pq_signed_prekeys) write_pq_prekey(w, p);
+  w.u32(static_cast<uint32_t>(store.pq_one_time_prekeys.size()));
+  for (const PqPrekey& p : store.pq_one_time_prekeys) write_pq_prekey(w, p);
 
   w.u32(static_cast<uint32_t>(store.contacts.size()));
   for (const Contact& c : store.contacts) {
@@ -340,6 +429,11 @@ VaultStore parse(const uint8_t* data, std::size_t len) {
   }
 
   VaultStore store;
+  if (version >= 5) {
+    r.bytes(store.vault_id.data(), store.vault_id.size());
+    store.generation = r.u64();
+    r.bytes(store.previous_digest.data(), store.previous_digest.size());
+  }
   r.bytes(store.seed.data(), store.seed.size());
 
   // Each reservation below is capped by how many records the remaining bytes
@@ -362,11 +456,21 @@ VaultStore parse(const uint8_t* data, std::size_t len) {
     store.one_time_prekeys.push_back(read_one_time_prekey(r));
   }
 
+  if (version >= 7) {
+    store.next_pq_prekey_id = r.u32();
+    const uint32_t spq = r.u32();
+    store.pq_signed_prekeys.reserve(r.bounded_count(spq, 4 + 1184 + 64 + 8));
+    for (uint32_t i = 0; i < spq; ++i) store.pq_signed_prekeys.push_back(read_pq_prekey(r));
+    const uint32_t opq = r.u32();
+    store.pq_one_time_prekeys.reserve(r.bounded_count(opq, 4 + 1184 + 64 + 8));
+    for (uint32_t i = 0; i < opq; ++i) store.pq_one_time_prekeys.push_back(read_pq_prekey(r));
+  }
+
   const uint32_t contact_count = r.u32();
   // An empty alias(4) + identity_pub(32) + verified(1) + has_card(1).
   store.contacts.reserve(r.bounded_count(contact_count, 4 + 32 + 1 + 1));
   for (uint32_t i = 0; i < contact_count; ++i) {
-    store.contacts.push_back(read_contact(r));
+    store.contacts.push_back(read_contact(r, version));
   }
 
   const uint32_t session_count = r.u32();

@@ -12,6 +12,19 @@
 
 namespace ratchet::vault {
 
+class FileLock {
+ public:
+  FileLock() = default;
+  explicit FileLock(const std::filesystem::path& vault_path);
+  ~FileLock();
+  FileLock(const FileLock&) = delete;
+  FileLock& operator=(const FileLock&) = delete;
+  FileLock(FileLock&& other) noexcept;
+  FileLock& operator=(FileLock&& other) noexcept;
+ private:
+  int fd_ = -1;
+};
+
 // On-disk layout of vault.bin:
 //
 //   VaultHeader (41 bytes, little-endian, no padding)
@@ -34,22 +47,25 @@ struct VaultHeader {
 };
 
 inline constexpr std::array<uint8_t, 4> kMagic = {'R', 'C', 'H', 'T'};
-// v1 held a fixed 64-byte seed+identity-key pair; v2 holds the full store
-// (prekeys, contacts, sessions), serialised to a variable length.
-inline constexpr uint8_t kVersion = 2;
+// v3 adds the authenticated generation chain and host rollback anchor. v2 is
+// accepted only by the explicit migration path.
+inline constexpr uint8_t kLegacyVersion = 2;
+inline constexpr uint8_t kVersion = 3;
 
 inline constexpr std::size_t kHeaderBytes = 4 + 1 + 16 + 4 + 4 + 12;  // 41
 inline constexpr std::size_t kTagBytes = crypto_aead_chacha20poly1305_ietf_ABYTES;
 
 inline constexpr const char* kVaultFilename = "vault.bin";
+inline constexpr const char* kPreparedVaultFilename = "vault.bin.v3-prepared";
+inline constexpr std::size_t kMaxVaultBytes = 64u * 1024u * 1024u;
 
 // Argon2id cost bounds. The upper bounds exist because the parameters are read
 // back from an attacker-supplied file: without them, a doctored header could
 // make `unlock` try to allocate an absurd amount of memory.
-inline constexpr uint32_t kMinTimeCost = 1;
-inline constexpr uint32_t kMaxTimeCost = 64;
-inline constexpr uint32_t kMinMemCostKb = 8;             // libsodium's floor
-inline constexpr uint32_t kMaxMemCostKb = 4u * 1024 * 1024;  // 4 GiB
+inline constexpr uint32_t kMinTimeCost = 3;
+inline constexpr uint32_t kMaxTimeCost = 10;
+inline constexpr uint32_t kMinMemCostKb = 64u * 1024u;
+inline constexpr uint32_t kMaxMemCostKb = 1024u * 1024u;
 
 // Defaults, roughly libsodium's "moderate" profile: ~256 MiB, 3 passes.
 inline constexpr uint32_t kDefaultTimeCost = 3;
@@ -93,6 +109,11 @@ void write_file(const std::filesystem::path& path, const std::vector<uint8_t>& b
 // Reads a vault file, rejecting anything shorter than a header plus an AEAD
 // tag -- the smallest a valid vault could ever be.
 std::vector<uint8_t> read_file(const std::filesystem::path& path);
+
+// Atomically replaces target with a fully verified prepared file and durably
+// commits the directory entry. Both files must be in the same directory.
+void promote_prepared(const std::filesystem::path& prepared,
+                      const std::filesystem::path& target);
 
 }  // namespace ratchet::vault
 

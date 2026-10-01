@@ -17,7 +17,8 @@ namespace {
 
 // Argon2id at its cheapest. Real vaults use the defaults from vault.hpp; the
 // tests only care that the key derivation is wired up, not that it is slow.
-constexpr vault::Params kFastParams{/*time_cost=*/1, /*mem_cost_kb=*/8};
+constexpr vault::Params kFastParams{/*time_cost=*/vault::kMinTimeCost,
+                                    /*mem_cost_kb=*/vault::kMinMemCostKb};
 
 SecureString make_pass(std::string_view text) {
   SecureString s;
@@ -123,6 +124,11 @@ TEST("parse_header rejects malformed headers") {
   std::vector<uint8_t> bad_version = file;
   bad_version[4] = 99;
   CHECK_THROWS(vault::parse_header(bad_version.data(), bad_version.size()));
+
+  std::vector<uint8_t> legacy_header = file;
+  legacy_header[4] = vault::kLegacyVersion;
+  CHECK_EQ(vault::parse_header(legacy_header.data(), legacy_header.size()).version,
+           vault::kLegacyVersion);
 
   // A doctored memory cost must be refused before it reaches Argon2, or
   // opening a hostile file would try to allocate terabytes.
@@ -238,12 +244,14 @@ TEST("seal rejects out-of-range Argon2 parameters") {
   const SecureBuffer plaintext = make_plaintext("payload");
   const SecureString pass = make_pass("passphrase");
 
-  CHECK_THROWS(vault::seal(plaintext, pass, vault::Params{0, 8}));
+  CHECK_THROWS(vault::seal(plaintext, pass, vault::Params{0, vault::kMinMemCostKb}));
   CHECK_THROWS(vault::seal(plaintext, pass, vault::Params{1, 4}));
   CHECK_THROWS(
-      vault::seal(plaintext, pass, vault::Params{1, vault::kMaxMemCostKb + 1}));
+      vault::seal(plaintext, pass, vault::Params{vault::kMinTimeCost,
+                                                vault::kMaxMemCostKb + 1}));
   CHECK_THROWS(
-      vault::seal(plaintext, pass, vault::Params{vault::kMaxTimeCost + 1, 8}));
+      vault::seal(plaintext, pass,
+                  vault::Params{vault::kMaxTimeCost + 1, vault::kMinMemCostKb}));
 }
 
 TEST("write_file creates a 0600 file and read_file returns it unchanged") {
@@ -287,6 +295,36 @@ TEST("write_file refuses to clobber an existing vault unless told to") {
 
   vault::write_file(path, second, /*overwrite=*/true);
   CHECK(vault::read_file(path) == second);
+}
+
+TEST("vault IO rejects symlinks and hardlinks") {
+  TempDir dir;
+  const SecureBuffer plaintext = make_plaintext("link safety");
+  const SecureString pass = make_pass("correct horse battery staple");
+  const std::vector<uint8_t> file = vault::seal(plaintext, pass, kFastParams);
+  const fs::path real = dir.path() / "real.bin";
+  const fs::path symlink = dir.path() / "symlink.bin";
+  const fs::path hardlink = dir.path() / "hardlink.bin";
+  vault::write_file(real, file, false);
+  fs::create_symlink(real.filename(), symlink);
+  CHECK_THROWS(vault::read_file(symlink));
+  CHECK_THROWS(vault::write_file(symlink, file, true));
+
+  fs::create_hard_link(real, hardlink);
+  CHECK_THROWS(vault::read_file(real));
+  CHECK_THROWS(vault::read_file(hardlink));
+  CHECK_THROWS(vault::write_file(real, file, true));
+}
+
+TEST("a second process lifecycle cannot acquire the vault lock") {
+  TempDir dir;
+  const fs::path path = dir.path() / vault::kVaultFilename;
+  vault::FileLock first(path);
+  const auto acquire_again = [&] {
+    vault::FileLock second(path);
+    (void)second;
+  };
+  CHECK_THROWS(acquire_again());
 }
 
 TEST("read_file rejects a missing or too-short file") {

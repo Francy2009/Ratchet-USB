@@ -29,7 +29,8 @@ fail() { printf 'error: %s\n' "$1" >&2; exit 1; }
 
 # --- dependencies ------------------------------------------------------------
 # Only the package names differ between distributions; the build itself needs
-# libsodium's headers, CMake and a C++20 compiler, nothing else.
+# libsodium, OpenSSL 3.5+, CMake and a C++20 compiler. libsecret enables the
+# optional host rollback anchor on Linux.
 install_deps() {
   local mgr="" cmd=""
   if   command -v dnf     >/dev/null 2>&1; then mgr=dnf
@@ -39,13 +40,13 @@ install_deps() {
   fi
 
   case "$mgr" in
-    dnf)    cmd="sudo dnf install -y libsodium-devel cmake gcc-c++" ;;
-    apt)    cmd="sudo apt-get install -y libsodium-dev cmake g++" ;;
-    pacman) cmd="sudo pacman -S --needed --noconfirm libsodium cmake gcc" ;;
-    zypper) cmd="sudo zypper install -y libsodium-devel cmake gcc-c++" ;;
+    dnf)    cmd="sudo dnf install -y libsodium-devel openssl-devel libsecret-devel cmake gcc-c++" ;;
+    apt)    cmd="sudo apt-get install -y libsodium-dev libssl-dev libsecret-1-dev cmake g++" ;;
+    pacman) cmd="sudo pacman -S --needed --noconfirm libsodium openssl libsecret cmake gcc" ;;
+    zypper) cmd="sudo zypper install -y libsodium-devel libopenssl-devel libsecret-devel cmake gcc-c++" ;;
     *)
       echo "Could not tell which package manager this system uses."
-      echo "Install libsodium's development package, CMake and a C++20"
+      echo "Install libsodium, OpenSSL 3.5+, CMake and a C++20"
       echo "compiler by hand, then re-run with --no-deps."
       return 1 ;;
   esac
@@ -72,6 +73,9 @@ fi
 # --- build -------------------------------------------------------------------
 say "Building"
 command -v cmake >/dev/null 2>&1 || fail "cmake not found"
+command -v pkg-config >/dev/null 2>&1 || fail "pkg-config not found"
+pkg-config --atleast-version=3.5 openssl || \
+  fail "OpenSSL 3.5 or newer is required for ML-KEM-768 and ML-DSA-65"
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PREFIX"
 cmake --build build -j"$(nproc 2>/dev/null || echo 2)"
 

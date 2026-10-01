@@ -39,6 +39,7 @@
 #include <vector>
 
 #include "ratchet/session.hpp"
+#include "ratchet/app.hpp"
 #include "ratchet/store.hpp"
 #include "ratchet/x3dh.hpp"
 
@@ -67,18 +68,22 @@ Party make_party(std::size_t otpk_count) {
   p.vault.next_spk_id = 2;
   p.vault.one_time_prekeys = prekey::generate_one_time_prekeys(1, otpk_count);
   p.vault.next_otpk_id = static_cast<uint32_t>(1 + otpk_count);
+  app::replenish_pq_prekeys(p.vault, otpk_count);
   return p;
 }
 
 void introduce(const Party& from, Party& into) {
-  const std::string card = x3dh::export_card(
-      from.sk, from.pk, from.vault.signed_prekeys.back(),
-      from.vault.one_time_prekeys);
+  const pq::MlDsaKeyPair pq_identity = derive_pq_identity(from.vault.seed);
+  const std::string card = x3dh::export_hybrid_card(
+      from.sk, from.pk, pq_identity, from.vault.signed_prekeys.back(),
+      from.vault.one_time_prekeys, from.vault.pq_signed_prekeys.back(),
+      from.vault.pq_one_time_prekeys);
   const x3dh::ImportedCard imported = x3dh::import_card(card);
   store::Contact c;
   c.alias = "peer";
   c.identity_pub = imported.identity_pub;
   c.verified = true;
+  c.minimum_suite = ProtocolSuite::HybridPqxdhV1;
   c.card = imported.card;
   into.vault.contacts.push_back(std::move(c));
 }

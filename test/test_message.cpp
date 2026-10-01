@@ -59,6 +59,18 @@ TEST("an envelope without X3DH fields round-trips too") {
   CHECK(decoded.ciphertext == original.ciphertext);
 }
 
+TEST("reserved Triple Ratchet suite is neither emitted nor accepted") {
+  message::Envelope env = make_envelope(/*with_initial=*/false);
+  const std::string valid = message::encode(env);
+  std::vector<uint8_t> raw = wire::decode_block("MESSAGE", valid);
+  raw[5] = static_cast<uint8_t>(ProtocolSuite::TripleRatchetV1);
+  CHECK_THROWS(message::decode(
+      wire::encode_block("MESSAGE", raw.data(), raw.size())));
+
+  env.suite = ProtocolSuite::TripleRatchetV1;
+  CHECK_THROWS(message::encode(env));
+}
+
 TEST("decode tolerates the block being pasted with extra surrounding text and reflow") {
   const message::Envelope original = make_envelope(/*with_initial=*/false);
   std::string text = message::encode(original);

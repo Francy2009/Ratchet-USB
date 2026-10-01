@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "ratchet/identity.hpp"
+#include "ratchet/protocol.hpp"
 #include "ratchet/x25519.hpp"
 
 // The wire format of one pasteable message: a "-----BEGIN RATCHET
@@ -16,6 +17,9 @@
 // X3DH fields (present only on the message that opens a session), and the
 // AEAD ciphertext.
 namespace ratchet::message {
+
+inline constexpr std::size_t kMaxEnvelopeBytes = 8u * 1024u * 1024u;
+inline constexpr std::size_t kMaxPlaintextBytes = 4u * 1024u * 1024u;
 
 inline constexpr std::size_t kSenderIdBytes = 8;
 using SenderId = std::array<uint8_t, kSenderIdBytes>;
@@ -29,6 +33,10 @@ struct InitialFields {
   IdentitySigningPublicKey initiator_identity_pub{};
   uint32_t spk_id = 0;
   std::optional<uint32_t> otpk_id;
+  std::optional<uint32_t> pq_spk_id;
+  std::optional<pq::MlKemCiphertext> pq_spk_ciphertext;
+  std::optional<uint32_t> pq_otpk_id;
+  std::optional<pq::MlKemCiphertext> pq_otpk_ciphertext;
 };
 
 struct RatchetHeader {
@@ -38,6 +46,8 @@ struct RatchetHeader {
 };
 
 struct Envelope {
+  uint8_t version = 2;
+  ProtocolSuite suite = ProtocolSuite::HybridPqxdhV1;
   SenderId sender_id{};
   std::optional<InitialFields> initial;
   RatchetHeader header;
@@ -47,10 +57,11 @@ struct Envelope {
 std::string encode(const Envelope& env);
 Envelope decode(std::string_view text);
 
-// The bytes authenticated as AEAD associated data for a message: the ratchet
-// header alone, so tampering with it is caught even though it travels in the
-// clear (it has to, the recipient needs it to derive the message key).
+// The ratchet header is authenticated together with the envelope prefix
+// (version, suite, sender and opening fields). It travels in the clear because
+// the recipient needs it to derive the message key.
 std::vector<uint8_t> header_aad(const RatchetHeader& header);
+std::vector<uint8_t> envelope_aad_prefix(const Envelope& env);
 
 }  // namespace ratchet::message
 

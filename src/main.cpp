@@ -1,9 +1,10 @@
-// Ratchet-USB -- phase 2: X3DH handshake and Double Ratchet messaging.
+// Ratchet-USB -- hybrid PQXDH identity/handshake migration in progress.
 //
 // Everything sensitive lives on the removable drive passed as --usb-path;
 // nothing is ever written to the host's filesystem.
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cstdlib>
 #include <filesystem>
@@ -175,39 +176,61 @@ using app::OpenedVault;
 
 OpenedVault unlock_vault(const fs::path& path,
                          const char* prompt = "Vault passphrase: ") {
+  const fs::path prepared = path.parent_path() / vault::kPreparedVaultFilename;
+  if (fs::exists(prepared)) {
+    throw Error("a verified migration is waiting for commit; run `" +
+                std::string(kProgram) + " migrate --commit --usb-path <dir>`");
+  }
   // The container is read and validated before the prompt, so a path that
   // holds no vault says so instead of asking for a passphrase first.
-  const app::VaultFile file = app::read_vault(path);
+  app::VaultFile file = app::read_vault(path);
   SecureString passphrase = terminal::read_passphrase(prompt);
   std::cerr << "Deriving the vault key with Argon2id...\n";
-  return app::open_vault(file, std::move(passphrase));
+  OpenedVault opened = app::open_vault(std::move(file), std::move(passphrase));
+  if (opened.rollback_status == rollback::Status::Unprotected) {
+    std::cerr << "SECURITY WARNING: rollback protection is not enrolled on "
+                 "this host.\nRun `"
+              << kProgram << " anchor --usb-path <dir>` after verifying this "
+                 "USB state.\n";
+  }
+  return opened;
 }
 
-std::string read_all_stdin() {
-  std::ostringstream ss;
-  ss << std::cin.rdbuf();
-  return ss.str();
+std::string read_bounded(std::istream& input, std::size_t max_bytes,
+                         const char* what) {
+  std::string out;
+  out.reserve(std::min<std::size_t>(max_bytes, 64u * 1024u));
+  std::array<char, 8192> chunk{};
+  while (input) {
+    input.read(chunk.data(), static_cast<std::streamsize>(chunk.size()));
+    const std::size_t got = static_cast<std::size_t>(input.gcount());
+    if (got > max_bytes - out.size()) {
+      throw Error(std::string(what) + " exceeds its input size limit");
+    }
+    out.append(chunk.data(), got);
+  }
+  return out;
 }
 
 std::string read_text_arg_or_stdin(const std::optional<std::string>& arg,
-                                   const char* prompt_if_tty) {
+                                   const char* prompt_if_tty,
+                                   std::size_t max_bytes) {
   if (arg) {
+    if (arg->size() > max_bytes) throw Error("input exceeds its size limit");
     return *arg;
   }
   if (terminal::stdin_is_tty()) {
     std::cerr << prompt_if_tty << std::flush;
   }
-  return read_all_stdin();
+  return read_bounded(std::cin, max_bytes, "input");
 }
 
-std::string read_file_text(const std::string& path) {
+std::string read_file_text(const std::string& path, std::size_t max_bytes) {
   std::ifstream in(path, std::ios::binary);
   if (!in) {
     throw Error("cannot open " + path);
   }
-  std::ostringstream ss;
-  ss << in.rdbuf();
-  return ss.str();
+  return read_bounded(in, max_bytes, "file");
 }
 
 // Runs the automatic maintenance and prints what it did, in the wording
@@ -255,6 +278,7 @@ int cmd_init(const Options& opts) {
     throw Error("a vault already exists at " + path.string() +
                " (pass --force to replace it)");
   }
+  vault::FileLock init_lock(path);
 
   bip39::Entropy entropy;
   if (opts.from_mnemonic) {
@@ -282,6 +306,8 @@ int cmd_init(const Options& opts) {
   }
 
   store::VaultStore store;
+  randombytes_buf(store.vault_id.data(), store.vault_id.size());
+  store.generation = 1;
   derive_master_seed(entropy, store.seed);
   entropy.wipe();
 
@@ -296,6 +322,7 @@ int cmd_init(const Options& opts) {
   store.one_time_prekeys =
       prekey::generate_one_time_prekeys(store.next_otpk_id, opts.otpk_count);
   store.next_otpk_id += static_cast<uint32_t>(opts.otpk_count);
+  app::replenish_pq_prekeys(store, opts.otpk_count);
   identity_sk.wipe();
 
   SecureString passphrase =
@@ -312,9 +339,131 @@ int cmd_init(const Options& opts) {
   vault::write_file(path, file, opts.force);
 
   std::cout << "\nVault written to " << path.string() << "\n"
-            << "Identity fingerprint:\n" << fingerprint(identity_pk) << "\n\n"
+            << "Hybrid identity fingerprint:\n"
+            << hybrid_fingerprint(identity_pk,
+                                  derive_pq_identity(store.seed).public_key)
+            << "\n\n"
             << "Run `" << kProgram
+            << " anchor --usb-path <dir>` to enroll host rollback protection,\n"
+            << "then `" << kProgram
             << " card --usb-path <dir>` to get the contact card to share.\n";
+  return 0;
+}
+
+int cmd_anchor(const Options& opts) {
+  const fs::path usb = require_usb_path(opts);
+  const fs::path path = vault::vault_path(usb);
+  OpenedVault opened = unlock_vault(path);
+  if (opened.rollback_status == rollback::Status::Protected) {
+    std::cout << "Rollback protection is already active for this vault on this host.\n";
+    return 0;
+  }
+  app::enroll_rollback_anchor(opened);
+  std::cout << "Rollback protection enrolled for vault "
+            << rollback::vault_id_text(opened.store.vault_id) << ", generation "
+            << opened.store.generation << ".\n";
+  return 0;
+}
+
+int cmd_migrate(const Options& opts) {
+  const fs::path usb = require_usb_path(opts);
+  const fs::path path = vault::vault_path(usb);
+  const fs::path prepared = usb / vault::kPreparedVaultFilename;
+
+  app::VaultFile legacy_file = app::read_vault(path);
+  if (legacy_file.header.version != vault::kLegacyVersion) {
+    throw Error("this vault already uses format v3; no legacy migration is needed");
+  }
+  SecureString passphrase = terminal::read_passphrase("Legacy vault passphrase: ");
+  std::cerr << "Deriving the legacy vault key with Argon2id...\n";
+  OpenedVault legacy =
+      app::open_vault(std::move(legacy_file), std::move(passphrase), true);
+
+  if (!opts.commit) {
+    if (fs::exists(prepared)) {
+      throw Error("a prepared vault already exists; verify and use migrate --commit");
+    }
+    for (store::Session& session : legacy.store.sessions) {
+      session.legacy_read_only = true;
+      session.suite = ProtocolSuite::ClassicV2;
+    }
+    app::replenish_pq_prekeys(legacy.store, kDefaultOtpkCount);
+    app::save_vault(prepared, legacy.store, legacy.params, legacy.passphrase);
+
+    // Phase one is not successful until the exact bytes just written decrypt
+    // and the complete upgraded store parses again.
+    const std::vector<uint8_t> bytes = vault::read_file(prepared);
+    const vault::VaultHeader header =
+        vault::parse_header(bytes.data(), bytes.size());
+    if (header.version != vault::kVersion) {
+      throw Error("prepared migration did not produce a v3 vault");
+    }
+    SecureBuffer plaintext;
+    vault::unseal(bytes.data(), bytes.size(), legacy.passphrase, plaintext);
+    const store::VaultStore verified = store::parse(plaintext.data(), plaintext.size());
+    if (verified.vault_id != legacy.store.vault_id ||
+        verified.generation != legacy.store.generation) {
+      throw Error("prepared migration failed its identity/generation check");
+    }
+    std::cout << "Migration prepared and cryptographically verified at "
+              << prepared.string() << ".\n"
+              << "Messaging is blocked until you run `" << kProgram
+              << " migrate --commit --usb-path " << usb.string() << "`.\n";
+    return 0;
+  }
+
+  if (!fs::exists(prepared)) {
+    throw Error("no prepared migration exists; run migrate without --commit first");
+  }
+  const std::vector<uint8_t> bytes = vault::read_file(prepared);
+  const vault::VaultHeader header = vault::parse_header(bytes.data(), bytes.size());
+  if (header.version != vault::kVersion) {
+    throw Error("prepared migration is not a v3 vault");
+  }
+  SecureBuffer plaintext;
+  vault::unseal(bytes.data(), bytes.size(), legacy.passphrase, plaintext);
+  const store::VaultStore migrated = store::parse(plaintext.data(), plaintext.size());
+  const bool legacy_has_id = std::any_of(
+      legacy.store.vault_id.begin(), legacy.store.vault_id.end(),
+      [](uint8_t b) { return b != 0; });
+  if (legacy_has_id && migrated.vault_id != legacy.store.vault_id) {
+    throw Error("prepared vault identity does not match the legacy vault");
+  }
+  IdentitySigningSecretKey legacy_identity_sk;
+  IdentitySigningPublicKey legacy_identity_pk;
+  IdentitySigningSecretKey migrated_identity_sk;
+  IdentitySigningPublicKey migrated_identity_pk;
+  derive_identity(legacy.store.seed, legacy_identity_sk, legacy_identity_pk);
+  derive_identity(migrated.seed, migrated_identity_sk, migrated_identity_pk);
+  legacy_identity_sk.wipe();
+  migrated_identity_sk.wipe();
+  if (legacy_identity_pk != migrated_identity_pk) {
+    throw Error("prepared vault master identity does not match the legacy vault");
+  }
+  if (migrated.generation <= legacy.store.generation) {
+    throw Error("prepared vault generation did not advance");
+  }
+
+  vault::promote_prepared(prepared, path);
+  const rollback::Digest promoted_digest = rollback::digest(bytes.data(), bytes.size());
+  if (rollback::backend_available()) {
+    if (legacy_has_id) {
+      if (const auto anchor = rollback::load(migrated.vault_id)) {
+      rollback::validate(*anchor, legacy.store, legacy.vault_digest);
+      rollback::store(
+          rollback::AnchorRecord{migrated.vault_id, migrated.generation,
+                                 promoted_digest});
+      } else {
+        rollback::enroll(migrated, promoted_digest);
+      }
+    } else {
+      rollback::enroll(migrated, promoted_digest);
+    }
+  }
+  std::cout << "Migration committed atomically. Legacy sessions are read-only; "
+               "import post-quantum cards before sending.\n"
+            << "The old vault file was removed, but physical erasure cannot be "
+               "guaranteed on flash storage.\n";
   return 0;
 }
 
@@ -339,7 +488,10 @@ int cmd_unlock(const Options& opts) {
 
   std::cout << "Vault unlocked (" << store.contacts.size() << " contact(s), "
             << store.sessions.size() << " session(s)).\n"
-            << "Identity fingerprint:\n" << fingerprint(identity_pk) << "\n";
+            << "Hybrid identity fingerprint:\n"
+            << hybrid_fingerprint(identity_pk,
+                                  derive_pq_identity(store.seed).public_key)
+            << "\n";
   return 0;
 }
 
@@ -364,7 +516,9 @@ int cmd_card(const Options& opts) {
 
   if (opts.fingerprint_only) {
     identity_sk.wipe();
-    std::cout << fingerprint(identity_pk) << "\n";
+    std::cout << hybrid_fingerprint(
+                     identity_pk, derive_pq_identity(store.seed).public_key)
+              << "\n";
     return 0;
   }
 
@@ -391,8 +545,15 @@ int cmd_card(const Options& opts) {
   const prekey::SignedPrekey& spk = store.signed_prekeys.back();
 
   // The identity key signs the card as a whole, so it has to still be here.
-  std::cout << x3dh::export_card(identity_sk, identity_pk, spk,
-                                 store.one_time_prekeys);
+  const std::size_t pq_before = store.pq_one_time_prekeys.size();
+  const bool had_pq_spk = !store.pq_signed_prekeys.empty();
+  app::replenish_pq_prekeys(store, kDefaultOtpkCount);
+  changed = changed || !had_pq_spk ||
+            store.pq_one_time_prekeys.size() != pq_before;
+  const pq::MlDsaKeyPair pq_identity = derive_pq_identity(store.seed);
+  std::cout << x3dh::export_hybrid_card(
+      identity_sk, identity_pk, pq_identity, spk, store.one_time_prekeys,
+      store.pq_signed_prekeys.back(), store.pq_one_time_prekeys);
   identity_sk.wipe();
 
   if (store.one_time_prekeys.size() < kReplenishThreshold) {
@@ -401,7 +562,7 @@ int cmd_card(const Options& opts) {
               << kDefaultOtpkCount << "`.\n";
   }
 
-  if (changed) {
+  if (changed || store.generation == 0) {
     app::save_vault(path, store, opened.params, opened.passphrase);
   }
   return 0;
@@ -414,26 +575,58 @@ int cmd_add_contact(const Options& opts) {
   const fs::path usb = require_usb_path(opts);
   const std::string name =
       require_value(opts.name, "Contact alias: ", "an alias is required");
+  if (name.size() > store::kMaxAliasBytes) {
+    throw Error("contact alias exceeds the 128-byte limit");
+  }
   const fs::path path = vault::vault_path(usb);
 
   const std::string card_text =
-      opts.card_file.empty() ? read_all_stdin() : read_file_text(opts.card_file);
+      opts.card_file.empty()
+          ? read_bounded(std::cin, 3u * 1024u * 1024u, "contact card")
+          : read_file_text(opts.card_file, 3u * 1024u * 1024u);
 
   const x3dh::ImportedCard imported = x3dh::import_card(card_text);
 
   OpenedVault opened = unlock_vault(path);
   store::VaultStore& store = opened.store;
 
-  if (store.find_contact(name) >= 0) {
-    throw Error("a contact named '" + name + "' already exists");
-  }
-  if (store.find_contact_by_identity(imported.identity_pub) >= 0) {
-    throw Error("this identity is already saved under a different alias");
+  const int alias_index = store.find_contact(name);
+  const int identity_index = store.find_contact_by_identity(imported.identity_pub);
+  if (alias_index >= 0 || identity_index >= 0) {
+    if (alias_index < 0 || identity_index < 0 || alias_index != identity_index) {
+      throw Error("contact alias or identity belongs to a different saved contact");
+    }
+    if (!imported.card.pq_bundle) {
+      throw Error("a saved contact can only be upgraded with a hybrid card");
+    }
+    store::Contact& existing = store.contacts[static_cast<std::size_t>(alias_index)];
+    existing.card = imported.card;
+    existing.minimum_suite = ProtocolSuite::HybridPqxdhV1;
+    existing.verified = false;
+    store.sessions.erase(
+        std::remove_if(store.sessions.begin(), store.sessions.end(),
+                       [&](const store::Session& session) {
+                         return session.contact_index ==
+                                static_cast<std::size_t>(alias_index);
+                       }),
+        store.sessions.end());
+    app::save_vault(path, store, opened.params, opened.passphrase);
+    std::cout << "Updated '" << name
+              << "' to a hybrid identity and closed its legacy session.\n"
+              << "The previous verified flag was intentionally cleared. Verify "
+                 "this new safety number out of band:\n\n"
+              << hybrid_fingerprint(imported.identity_pub,
+                                    imported.card.pq_identity_pub)
+              << "\n";
+    return 0;
   }
 
   store::Contact contact;
   contact.alias = name;
   contact.identity_pub = imported.identity_pub;
+  contact.minimum_suite = imported.card.pq_bundle
+                              ? ProtocolSuite::HybridPqxdhV1
+                              : ProtocolSuite::ClassicV2;
   contact.card = imported.card;
   store.contacts.push_back(std::move(contact));
 
@@ -442,7 +635,11 @@ int cmd_add_contact(const Options& opts) {
   std::cout << "Added '" << name << "'. Verify this fingerprint with them\n"
             << "over a separate channel (in person, a phone call) before "
                "trusting it:\n\n"
-            << fingerprint(imported.identity_pub) << "\n\n"
+            << (imported.card.pq_bundle
+                    ? hybrid_fingerprint(imported.identity_pub,
+                                         imported.card.pq_identity_pub)
+                    : fingerprint(imported.identity_pub))
+            << "\n\n"
             << "Then run `" << kProgram << " trust --usb-path <dir> "
             << name << "`.\n";
   return 0;
@@ -469,7 +666,11 @@ int cmd_contacts(const Options& opts) {
               << (c.verified ? " [verified]" : " [unverified]")
               << (session_idx >= 0 ? " [session established]" : " [no session yet]")
               << "\n"
-              << fingerprint(c.identity_pub) << "\n\n";
+              << (c.card && c.card->pq_bundle
+                      ? hybrid_fingerprint(c.identity_pub,
+                                           c.card->pq_identity_pub)
+                      : fingerprint(c.identity_pub))
+              << "\n\n";
   }
   return 0;
 }
@@ -494,6 +695,31 @@ int cmd_trust(const Options& opts) {
   return 0;
 }
 
+int cmd_reset_session(const Options& opts) {
+  const fs::path usb = require_usb_path(opts);
+  const std::string name = require_value(
+      opts.name, "Contact alias: ", "a contact alias is required");
+  const fs::path path = vault::vault_path(usb);
+  OpenedVault opened = unlock_vault(path);
+  store::VaultStore& store = opened.store;
+  const int contact_idx = store.find_contact(name);
+  if (contact_idx < 0) throw Error("no contact named '" + name + "'");
+  const int session_idx =
+      store.find_session(static_cast<std::size_t>(contact_idx));
+  if (session_idx < 0) throw Error("this contact has no session to reset");
+  if (!terminal::stdin_is_tty()) {
+    throw Error("reset-session requires an interactive confirmation");
+  }
+  const std::string answer = terminal::read_line(
+      "Close this session and discard pending/skipped message keys? Type RESET: ");
+  if (answer != "RESET") throw Error("session reset cancelled");
+  store.sessions.erase(store.sessions.begin() + session_idx);
+  app::save_vault(path, store, opened.params, opened.passphrase);
+  std::cout << "Session with '" << terminal::escape_control_chars(name)
+            << "' reset. A fresh authenticated PQ opening is required.\n";
+  return 0;
+}
+
 int cmd_send(const Options& opts) {
   const fs::path usb = require_usb_path(opts);
   const std::string to =
@@ -501,7 +727,8 @@ int cmd_send(const Options& opts) {
   const fs::path path = vault::vault_path(usb);
 
   const std::string plaintext =
-      read_text_arg_or_stdin(opts.message, "Message (end with Ctrl-D): ");
+      read_text_arg_or_stdin(opts.message, "Message (end with Ctrl-D): ",
+                             message::kMaxPlaintextBytes);
   if (plaintext.empty()) {
     throw Error("message must not be empty");
   }
@@ -514,12 +741,6 @@ int cmd_send(const Options& opts) {
     throw Error("no contact named '" + to + "' (see `contacts`)");
   }
   const std::size_t contact_index = static_cast<std::size_t>(idx);
-
-  if (!store.contacts[contact_index].verified) {
-    std::cerr << "warning: '" << to
-              << "' has not been marked as trusted; run `trust` once you have "
-                 "checked the fingerprint.\n";
-  }
 
   IdentitySigningSecretKey identity_sk;
   IdentitySigningPublicKey identity_pk;
@@ -543,7 +764,8 @@ int cmd_recv(const Options& opts) {
   const fs::path path = vault::vault_path(usb);
 
   const std::string block =
-      read_text_arg_or_stdin(opts.message, "Paste the message block, then Ctrl-D: ");
+      read_text_arg_or_stdin(opts.message, "Paste the message block, then Ctrl-D: ",
+                             12u * 1024u * 1024u);
 
   OpenedVault opened = unlock_vault(path);
   store::VaultStore& store = opened.store;
@@ -622,6 +844,12 @@ int main(int argc, char** argv) {
     if (opts.command == "unlock") {
       return cmd_unlock(opts);
     }
+    if (opts.command == "anchor") {
+      return cmd_anchor(opts);
+    }
+    if (opts.command == "migrate") {
+      return cmd_migrate(opts);
+    }
     if (opts.command == "card") {
       return cmd_card(opts);
     }
@@ -633,6 +861,9 @@ int main(int argc, char** argv) {
     }
     if (opts.command == "trust") {
       return cmd_trust(opts);
+    }
+    if (opts.command == "reset-session") {
+      return cmd_reset_session(opts);
     }
     if (opts.command == "send") {
       return cmd_send(opts);

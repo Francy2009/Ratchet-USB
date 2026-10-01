@@ -34,6 +34,16 @@ void derive_identity(const MasterSeed& seed, IdentitySigningSecretKey& sk,
   }
 }
 
+pq::MlDsaKeyPair derive_pq_identity(const MasterSeed& seed) {
+  kdf::Prk prk;
+  kdf::extract(prk, nullptr, 0, seed.data(), seed.size());
+  pq::MlDsaPrivateSeed pq_seed;
+  kdf::expand(pq_seed.data(), pq_seed.size(), kIdentityMlDsaSeedInfo, prk);
+  pq::MlDsaKeyPair result = pq::ml_dsa_65_from_seed(pq_seed);
+  pq_seed.wipe();
+  return result;
+}
+
 void identity_dh_keypair(const IdentitySigningSecretKey& ed_sk,
                          const IdentitySigningPublicKey& ed_pk,
                          IdentityDHSecretKey& dh_sk, IdentityDHPublicKey& dh_pk) {
@@ -85,6 +95,28 @@ std::string fingerprint(const IdentitySigningPublicKey& pk) {
     out += hex.substr(i, 4);
   }
   return out;
+}
+
+std::string hybrid_fingerprint(const IdentitySigningPublicKey& ed_pk,
+                               const pq::MlDsaPublicKey& pq_pk) {
+  init_sodium();
+  crypto_hash_sha256_state state;
+  crypto_hash_sha256_init(&state);
+  constexpr std::string_view domain = "Ratchet-USB/v3/hybrid-fingerprint";
+  crypto_hash_sha256_update(
+      &state, reinterpret_cast<const uint8_t*>(domain.data()), domain.size());
+  crypto_hash_sha256_update(&state, ed_pk.data(), ed_pk.size());
+  crypto_hash_sha256_update(&state, pq_pk.data(), pq_pk.size());
+  std::array<uint8_t, crypto_hash_sha256_BYTES> digest{};
+  crypto_hash_sha256_final(&state, digest.data());
+  const std::string raw = to_hex(digest.data(), digest.size());
+  std::string grouped;
+  for (std::size_t i = 0; i < raw.size(); i += 4) {
+    if (!grouped.empty()) grouped.push_back(' ');
+    grouped.append(raw, i, 4);
+  }
+  sodium_memzero(digest.data(), digest.size());
+  return grouped;
 }
 
 }  // namespace ratchet

@@ -303,7 +303,7 @@ TEST("a cleared SecureBuffer re-locks the storage it allocates next") {
 
 TEST("SecureBytes still zeroes its bytes on destruction") {
   // The lock accounting changed; the wipe is the part that must not have.
-  alignas(SecureBytes<32>) unsigned char storage[sizeof(SecureBytes<32>)];
+  alignas(SecureBytes<32>) unsigned char storage[sizeof(SecureBytes<32>)]{};
   auto* secret = new (storage) SecureBytes<32>();
   for (std::size_t i = 0; i < secret->size(); ++i) {
     (*secret)[i] = 0xC5;
@@ -311,8 +311,9 @@ TEST("SecureBytes still zeroes its bytes on destruction") {
   secret->~SecureBytes();
 
   bool all_zero = true;
-  for (const unsigned char byte : storage) {
-    if (byte != 0) {
+  const volatile unsigned char* p = storage;
+  for (std::size_t i = 0; i < sizeof(storage); ++i) {
+    if (p[i] != 0) {
       all_zero = false;
     }
   }

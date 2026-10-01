@@ -27,12 +27,15 @@ const std::vector<CommandSpec>& specs() {
         "--argon2-mem-kb", "--from-mnemonic"},
        0},
       {"unlock", {"--usb-path"}, 0},
+      {"anchor", {"--usb-path"}, 0},
+      {"migrate", {"--usb-path", "--commit"}, 0},
       {"card",
        {"--usb-path", "--fingerprint", "--rotate-spk", "--replenish-otpk"},
        0},
       {"add", {"--usb-path", "--card"}, 1},
       {"contacts", {"--usb-path"}, 0},
       {"trust", {"--usb-path"}, 1},
+      {"reset-session", {"--usb-path"}, 1},
       {"send", {"--usb-path"}, 2},
       {"recv", {"--usb-path"}, 1},
       {"ui", {"--usb-path", "--lang", "--idle-lock"}, 0},
@@ -67,7 +70,8 @@ void assign_positional(Options& opts, const std::vector<std::string>& positional
     return i < positional.size() ? &positional[i++] : nullptr;
   };
 
-  if (opts.command == "add" || opts.command == "trust") {
+  if (opts.command == "add" || opts.command == "trust" ||
+      opts.command == "reset-session") {
     if (const std::string* v = take()) {
       opts.name = *v;
     }
@@ -89,12 +93,14 @@ void assign_positional(Options& opts, const std::vector<std::string>& positional
 
 void print_usage(std::ostream& os) {
   os << "Ratchet-USB " << kVersion
-     << " -- encrypted seed vault, X3DH and Double Ratchet messaging\n"
+     << " -- encrypted vault and hybrid PQXDH messaging\n"
      << "\n"
      << "Usage:\n"
      << "  " << kProgram
      << " init     --usb-path <dir> [--from-mnemonic] [options]\n"
      << "  " << kProgram << " unlock   --usb-path <dir>\n"
+     << "  " << kProgram << " anchor   --usb-path <dir>\n"
+     << "  " << kProgram << " migrate  --usb-path <dir> [--commit]\n"
      << "  " << kProgram
      << " card     --usb-path <dir> [--fingerprint] [--rotate-spk] "
         "[--replenish-otpk <n>]\n"
@@ -102,6 +108,7 @@ void print_usage(std::ostream& os) {
      << " add      --usb-path <dir> <alias> [--card <file>]\n"
      << "  " << kProgram << " contacts --usb-path <dir>\n"
      << "  " << kProgram << " trust    --usb-path <dir> <alias>\n"
+     << "  " << kProgram << " reset-session --usb-path <dir> <alias>\n"
      << "  " << kProgram
      << " send     --usb-path <dir> <alias> [message]\n"
      << "  " << kProgram << " recv     --usb-path <dir> [message]\n"
@@ -117,6 +124,10 @@ void print_usage(std::ostream& os) {
      << "            history come back with it; those only ever lived in\n"
      << "            the old vault.bin).\n"
      << "  unlock    Decrypt the vault and print the identity fingerprint.\n"
+     << "  anchor    Explicitly enroll this authenticated vault state in the\n"
+     << "            host Secret Service or macOS Keychain for rollback checks.\n"
+     << "  migrate   Prepare and verify a v3 vault beside a legacy vault. Run\n"
+     << "            it again with --commit to promote the new vault atomically.\n"
      << "  card      Print this identity's contact card, to paste to a\n"
      << "            contact so they can start a conversation. With\n"
      << "            --fingerprint, print only the fingerprint.\n"
@@ -124,6 +135,8 @@ void print_usage(std::ostream& os) {
      << "            standard input) under <alias>.\n"
      << "  contacts  List known contacts, their fingerprint and trust state.\n"
      << "  trust     Mark <alias>'s fingerprint as verified out of band.\n"
+     << "  reset-session  Explicitly discard session and skipped-key state;\n"
+     << "            the next message requires a fresh authenticated opening.\n"
      << "  send      Encrypt a message for <alias> (running the initial\n"
      << "            handshake automatically if needed) and print the block\n"
      << "            to paste into the chat. [message] falls back to standard\n"
@@ -247,6 +260,9 @@ Options parse_args(const std::vector<std::string_view>& args) {
     } else if (arg == "--from-mnemonic") {
       opts.from_mnemonic = true;
       note("--from-mnemonic");
+    } else if (arg == "--commit") {
+      opts.commit = true;
+      note("--commit");
     } else if (arg == "--lang") {
       opts.lang = std::string(next("--lang"));
       if (!i18n::is_valid_choice(opts.lang)) {

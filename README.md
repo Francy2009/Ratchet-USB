@@ -13,8 +13,9 @@ You encrypt on your machine, copy the text it prints, and paste it wherever:
 WhatsApp, email, a forum. The other person pastes it back into the tool to
 read it. Whatever carries the text in between just sees gibberish.
 
-Keys, contacts, chat history — all of it lives on a USB stick or some other
-removable drive, never on the computer itself. The tool finds the drive on
+Keys, contacts, chat history — all secret state lives on a USB stick or some other
+removable drive. An optional non-secret rollback anchor is stored in the host
+Secret Service or macOS Keychain after explicit enrollment. The tool finds the drive on
 its own most of the time; `--usb-path` is there for when you'd rather not
 leave it to guessing.
 
@@ -23,10 +24,11 @@ full-screen interface in the terminal you are already in -- arrow keys, one
 letter per action, no flags to remember. Every command it wraps is still there
 to be typed or scripted, exactly as before.
 
-Phase 2 right now: you can make an identity, add contacts, send and receive
-with forward-secret encryption. No group chats yet, no using one identity
-from two machines, no public key directory. More on all of that at the
-bottom.
+Version 0.5 development state: new contact cards use Ed25519 + ML-DSA-65
+identities and new sessions use an X25519 + ML-KEM-768 hybrid handshake.
+The continuous ML-KEM Braid/Triple Ratchet phase is not complete; messages
+currently continue with the classical Double Ratchet after the hybrid opening.
+See [the migration status](docs/PQ-MIGRATION-STATUS.md) before relying on it.
 
 One thing worth saying plainly before you rely on this for anything real: it
 hasn't been through an independent security audit. I've built it carefully
@@ -38,16 +40,12 @@ touch if you want to talk through your situation first.
 
 ## Platforms
 
-Only actually run on **Linux**. `setup.sh` knows dnf, apt, pacman and
-zypper; anywhere else, install libsodium's dev package, CMake and a C++20
-compiler yourself and pass `--no-deps`.
-
-**macOS** probably builds — nothing here is Linux-specific at the API level
-— but I haven't tried it, so I can't promise it. Two things would bite:
-drive detection reads `/proc/mounts`, which doesn't exist there, so you'll
-need `--usb-path` every time; and `fsync` on macOS doesn't force a real
-flush to disk without `F_FULLFSYNC`, which matters if you yank the drive
-mid-write.
+**Linux** and **macOS** are both supported and verified in CI. On Linux,
+`setup.sh` knows dnf, apt, pacman and zypper. On macOS, install dependencies via
+`brew install libsodium openssl@3.5 cmake`. Removable USB drive discovery uses
+sysfs on Linux and `getmntinfo` (`/Volumes`) on macOS. Disk flushes use
+`fcntl(F_FULLFSYNC)` on macOS to ensure physical durability when saving to USB.
+Host rollback anchors use Secret Service on Linux and Apple Keychain on macOS.
 
 **Windows** doesn't build, and it's not the crypto's fault — that part is
 portable. It's `termios` for turning off terminal echo, and `fsync` on both

@@ -26,11 +26,17 @@ only layer.
 
 What the design does aim at:
 
-- Messages are end-to-end encrypted with X3DH plus a Double Ratchet, so the
+- New messages are end-to-end encrypted with a hybrid X3DH + ML-KEM-768
+  opening plus a Double Ratchet, so the
   channel carrying the ciphertext (WhatsApp, email, a forum) learns nothing.
 - Forward secrecy: a key compromised today does not decrypt yesterday's
   messages.
-- Everything secret lives on the removable drive, never on the host disk.
+- Message length fingerprinting protection: Plaintext payloads are padded
+  according to ISO/IEC 7816-4 into discrete buckets (128, 256, 512, 1024, 2048
+  bytes, and 1024-byte increments beyond) before AEAD encryption, preventing
+  adversaries from inferring message contents based on ciphertext size.
+- Everything secret lives on the removable drive. An explicitly enrolled
+  host keyring record stores only vault id, generation and ciphertext digest.
 - The vault is sealed with Argon2id and ChaCha20-Poly1305, so a stolen drive is
   worth nothing without the passphrase.
 
@@ -42,7 +48,8 @@ since the whole design here is about not having much surface to attack.
 
 What it does not add:
 
-- **No new dependency.** libsodium is still the only one. The terminal handling
+- **No terminal UI dependency.** Cryptography uses libsodium and OpenSSL 3.5+.
+  The terminal handling
   — raw mode, the frame, the colours, the ASCII banner — is a few hundred lines
   in this tree rather than ncurses, which would also have meant this process
   reading and interpreting terminfo files. The colours are the sixteen every
@@ -52,8 +59,9 @@ What it does not add:
   can read another's keystrokes), no D-Bus, and no accessibility bus — which
   exists to read the text of every widget on screen and would have been reading
   the messages.
-- **No state on the host.** No config file, no history, no cache, no theme, no
-  layout. `vault.bin` on the removable drive is still the only thing written.
+- **No secret state on the host.** No config, history, cache, theme or layout.
+  The optional rollback anchor is a non-secret generation/digest record in
+  Secret Service or Keychain and is created only by the `anchor` command.
 - **Nothing outside the process.** No clipboard in either direction and no
   OSC 52, no `$EDITOR`, no helper program, no `fork` or `exec` at all.
 - **No window title**, ever. A title naming the tool would appear in the
@@ -102,14 +110,14 @@ to defend against it:
 - **A compromised host.** Malware on the machine you plug the drive into can
   read the passphrase as you type it and the plaintext as it is printed.
   Nothing in this tool can fix that.
-- **Another process running as you, on macOS.** On Linux the tool clears its
-  dumpable flag at startup, which stops a process running as the same user from
-  attaching with ptrace and reading an open vault out of memory. There is no
-  portable equivalent in this codebase for macOS, so a macOS build does not have
-  that protection — one more reason the platform is listed as unverified.
-  Refusing to write a core dump works on both.
-- **Traffic analysis.** The transport sees a base64 block of a certain size at
-  a certain time, addressed to somebody. That metadata is not hidden.
+- **Another process running as you.** On Linux the tool clears its dumpable
+  flag (`PR_SET_DUMPABLE = 0`), and on macOS it sets `PT_DENY_ATTACH`, stopping
+  a process running as the same user from attaching with ptrace and reading an
+  open vault out of memory. Refusing to write a core dump (`RLIMIT_CORE = 0`)
+  works on both.
+- **Traffic analysis.** The transport sees a base64 block at a certain time,
+  addressed to somebody. While payload lengths are masked into discrete buckets
+  via ISO/IEC 7816-4 padding, transmission timing and metadata are not hidden.
 - **A forgotten passphrase.** There is no recovery path, by design. The BIP-39
   phrase restores the identity, not the vault's contacts or history.
 - **Physical coercion.** There is no duress passphrase and no deniable volume.
@@ -118,7 +126,7 @@ to defend against it:
 
 ## No warranty, and using it lawfully
 
-This is version 0.2.0 and it is pre-1.0 in the way that matters: the vault
+This is version 0.5.0-dev and it is pre-1.0 in the way that matters: the vault
 and message formats are not frozen yet, so a future release may not read what
 this one wrote. Keep your BIP-39 words, and do not treat a vault as a durable
 archive.

@@ -10,6 +10,9 @@
 
 #if defined(__linux__)
 #include <sys/prctl.h>
+#elif defined(__APPLE__)
+#include <sys/types.h>
+#include <sys/ptrace.h>
 #endif
 
 namespace ratchet {
@@ -177,9 +180,16 @@ bool harden_process() noexcept {
   if (prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0) {
     all_applied = false;
   }
+#elif defined(__APPLE__)
+  // On macOS, PT_DENY_ATTACH stops debuggers and ptrace from attaching to the process.
+  #if defined(PT_DENY_ATTACH)
+  if (ptrace(PT_DENY_ATTACH, 0, nullptr, 0) != 0) {
+    all_applied = false;
+  }
+  #else
+  all_applied = false;
+  #endif
 #else
-  // On macOS the equivalent is PT_DENY_ATTACH, which is not portable and which
-  // this project has no way to test today. RLIMIT_CORE above still applies.
   all_applied = false;
 #endif
 

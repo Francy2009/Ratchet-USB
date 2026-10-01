@@ -11,6 +11,7 @@
 
 #include "ratchet/identity.hpp"
 #include "ratchet/prekey.hpp"
+#include "ratchet/rollback.hpp"
 #include "ratchet/secure.hpp"
 #include "ratchet/store.hpp"
 #include "ratchet/vault.hpp"
@@ -40,8 +41,11 @@ inline constexpr uint64_t kSpkMaxAgeSeconds = kSpkMaxAgeDays * 24 * 60 * 60;
 // vault -- and fail on a truncated or corrupt one -- before asking anybody for
 // a passphrase.
 struct VaultFile {
+  vault::FileLock lock;
+  std::filesystem::path path;
   std::vector<uint8_t> bytes;
   vault::VaultHeader header{};
+  rollback::Digest digest{};
 };
 
 // Reads and validates the container. Throws Error if the file is missing, too
@@ -49,17 +53,27 @@ struct VaultFile {
 VaultFile read_vault(const std::filesystem::path& path);
 
 struct OpenedVault {
+  vault::FileLock lock;
   store::VaultStore store;
   vault::Params params;     // reused on save, so a re-seal keeps the original cost
   SecureString passphrase;  // held so a mutating command only has to ask once
+  rollback::Status rollback_status = rollback::Status::Unprotected;
+  rollback::Digest vault_digest{};
+  uint8_t vault_version = 0;
 };
 
 // Derives the key with Argon2id, unseals and parses. Throws Error on a wrong
 // passphrase -- deliberately the same error a tampered file gives.
-OpenedVault open_vault(const VaultFile& file, SecureString passphrase);
+OpenedVault open_vault(VaultFile file, SecureString passphrase,
+                       bool allow_legacy = false);
 
-void save_vault(const std::filesystem::path& path, const store::VaultStore& store,
+void save_vault(const std::filesystem::path& path, store::VaultStore& store,
                 const vault::Params& params, const SecureString& passphrase);
+
+// Enrolls the current authenticated USB state in the host Secret Service or
+// Keychain. This is deliberately separate from open: host trust is an explicit
+// user action, never a side effect of merely inserting a drive.
+void enroll_rollback_anchor(const OpenedVault& opened);
 
 // Canonicalises `usb_path` and checks it is a directory this user can write
 // to. Throws Error naming the problem otherwise.
@@ -104,6 +118,7 @@ MaintenanceReport maintain_prekeys(store::VaultStore& store,
 
 // Adds `count` fresh one-time prekeys, advancing the id counter.
 void replenish_one_time_prekeys(store::VaultStore& store, std::size_t count);
+void replenish_pq_prekeys(store::VaultStore& store, std::size_t one_time_count);
 
 // Generates a new signed prekey and keeps only the newest two: a peer who
 // grabbed the card just before rotation may still send against the old one.

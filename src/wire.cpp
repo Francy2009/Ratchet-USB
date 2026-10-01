@@ -50,8 +50,13 @@ std::string encode_block(std::string_view label, const uint8_t* data,
 }
 
 std::vector<uint8_t> decode_block(std::string_view expected_label,
-                                  std::string_view text) {
+                                  std::string_view text,
+                                  std::size_t max_decoded_bytes) {
   init_sodium();
+
+  if (text.size() > max_decoded_bytes * 2u + 1024u) {
+    throw Error("armored block exceeds the format limit");
+  }
 
   const std::string begin_marker =
       "-----BEGIN RATCHET " + std::string(expected_label) + "-----";
@@ -72,6 +77,10 @@ std::vector<uint8_t> decode_block(std::string_view expected_label,
   const std::string b64 =
       strip_whitespace(text.substr(payload_start, end_pos - payload_start));
 
+  if (b64.size() > ((max_decoded_bytes + 2u) / 3u) * 4u + 4u) {
+    throw Error("decoded block would exceed the format limit");
+  }
+
   std::vector<uint8_t> out(b64.size());  // upper bound
   std::size_t out_len = 0;
   if (sodium_base642bin(out.data(), out.size(), b64.data(), b64.size(),
@@ -80,6 +89,9 @@ std::vector<uint8_t> decode_block(std::string_view expected_label,
     throw Error("invalid base64 in block");
   }
   out.resize(out_len);
+  if (out.size() > max_decoded_bytes) {
+    throw Error("decoded block exceeds the format limit");
+  }
   return out;
 }
 

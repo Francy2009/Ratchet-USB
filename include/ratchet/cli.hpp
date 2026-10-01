@@ -17,7 +17,7 @@
 namespace ratchet::cli {
 
 inline constexpr const char* kProgram = "ratchet-usb";
-inline constexpr const char* kVersion = "0.2.0";
+inline constexpr const char* kVersion = "0.5.0-dev";
 inline constexpr std::size_t kDefaultOtpkCount = 10;
 // How long the terminal interface waits before closing the vault on its own.
 inline constexpr int kDefaultIdleLockSeconds = 180;
@@ -33,6 +33,7 @@ struct Options {
   std::size_t replenish_otpk = 0;
   bool fingerprint_only = false;
   bool from_mnemonic = false;
+  bool commit = false;
   std::string name;
   std::string to;
   std::string card_file;

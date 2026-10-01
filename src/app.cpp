@@ -6,6 +6,7 @@
 
 #include <cstdlib>
 #include <ctime>
+#include <algorithm>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -19,28 +20,83 @@ namespace ratchet::app {
 
 VaultFile read_vault(const fs::path& path) {
   VaultFile file;
+  file.lock = vault::FileLock(path);
+  file.path = path;
   file.bytes = vault::read_file(path);
   file.header = vault::parse_header(file.bytes.data(), file.bytes.size());
+  file.digest = rollback::digest(file.bytes.data(), file.bytes.size());
   return file;
 }
 
-OpenedVault open_vault(const VaultFile& file, SecureString passphrase) {
+OpenedVault open_vault(VaultFile file, SecureString passphrase,
+                       bool allow_legacy) {
+  if (file.header.version == vault::kLegacyVersion && !allow_legacy) {
+    throw Error("legacy vault requires `ratchet-usb migrate` before use");
+  }
   SecureBuffer plaintext;
   vault::unseal(file.bytes.data(), file.bytes.size(), passphrase, plaintext);
 
   OpenedVault result;
+  result.lock = std::move(file.lock);
   result.store = store::parse(plaintext.data(), plaintext.size());
   result.params = vault::Params{file.header.argon2_time_cost,
                                 file.header.argon2_mem_cost_kb};
   result.passphrase = std::move(passphrase);
+  result.vault_digest = file.digest;
+  result.vault_version = file.header.version;
+  if (const auto anchor = rollback::load(result.store.vault_id)) {
+    result.rollback_status =
+        rollback::validate(*anchor, result.store, result.vault_digest);
+    if (result.rollback_status == rollback::Status::AdvancedAfterCrash) {
+      rollback::store(rollback::AnchorRecord{result.store.vault_id,
+                                              result.store.generation,
+                                              result.vault_digest});
+      result.rollback_status = rollback::Status::Protected;
+    }
+  }
   return result;
 }
 
-void save_vault(const fs::path& path, const store::VaultStore& store,
+void save_vault(const fs::path& path, store::VaultStore& store,
                 const vault::Params& params, const SecureString& passphrase) {
+  init_sodium();
+  const bool id_missing =
+      std::all_of(store.vault_id.begin(), store.vault_id.end(),
+                  [](uint8_t b) { return b == 0; });
+  if (id_missing) randombytes_buf(store.vault_id.data(), store.vault_id.size());
+  std::error_code ec;
+  std::optional<rollback::AnchorRecord> anchor;
+  rollback::Digest previous_digest{};
+  if (fs::exists(path, ec)) {
+    const std::vector<uint8_t> previous = vault::read_file(path);
+    previous_digest = rollback::digest(previous.data(), previous.size());
+    anchor = rollback::load(store.vault_id);
+    if (anchor) {
+      const rollback::Status status =
+          rollback::validate(*anchor, store, previous_digest);
+      if (status == rollback::Status::AdvancedAfterCrash) {
+        rollback::store(rollback::AnchorRecord{store.vault_id, store.generation,
+                                                previous_digest});
+      }
+    }
+    store.previous_digest = previous_digest;
+  }
+  if (store.generation == UINT64_MAX) {
+    throw Error("vault generation counter exhausted");
+  }
+  ++store.generation;
   const SecureBuffer plaintext = store::serialize(store);
   const std::vector<uint8_t> file = vault::seal(plaintext, passphrase, params);
   vault::write_file(path, file, /*overwrite=*/true);
+  if (anchor) {
+    rollback::store(rollback::AnchorRecord{
+        store.vault_id, store.generation,
+        rollback::digest(file.data(), file.size())});
+  }
+}
+
+void enroll_rollback_anchor(const OpenedVault& opened) {
+  rollback::enroll(opened.store, opened.vault_digest);
 }
 
 fs::path validate_usb_path(const fs::path& usb_path) {
@@ -95,6 +151,24 @@ void replenish_one_time_prekeys(store::VaultStore& store, std::size_t count) {
   store.next_otpk_id += static_cast<uint32_t>(count);
   for (auto& otpk : fresh) {
     store.one_time_prekeys.push_back(std::move(otpk));
+  }
+}
+
+void replenish_pq_prekeys(store::VaultStore& store, std::size_t one_time_count) {
+  const uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+  if (store.pq_signed_prekeys.empty()) {
+    store::PqPrekey p;
+    p.id = store.next_pq_prekey_id++;
+    p.key = pq::generate_ml_kem_768();
+    p.created_at = now;
+    store.pq_signed_prekeys.push_back(std::move(p));
+  }
+  while (store.pq_one_time_prekeys.size() < one_time_count) {
+    store::PqPrekey p;
+    p.id = store.next_pq_prekey_id++;
+    p.key = pq::generate_ml_kem_768();
+    p.created_at = now;
+    store.pq_one_time_prekeys.push_back(std::move(p));
   }
 }
 

@@ -28,3 +28,16 @@ Argon2id, HKDF/HMAC-SHA256). libsodium is not bundled with this repository,
 it's a build dependency you install separately (`libsodium-dev` on
 Debian/Ubuntu). It's released under the ISC license. See
 https://github.com/jedisct1/libsodium/blob/master/LICENSE for the full text.
+
+## OpenSSL
+
+Ratchet-USB requires OpenSSL Crypto 3.5 or newer for the standardized
+ML-KEM-768 and ML-DSA-65 EVP implementations. No post-quantum primitive is
+implemented locally. OpenSSL is used under the Apache License 2.0; CI builds
+the 3.5.8 LTS source archive pinned by SHA-256.
+
+## Secret Service and macOS Keychain
+
+Rollback anchors use libsecret/Secret Service when available on Linux and the
+Security framework on macOS. They are optional build/platform integrations;
+without one, the program visibly reports rollback-unprotected USB-only mode.
