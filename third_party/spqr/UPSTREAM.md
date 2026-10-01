@@ -10,6 +10,7 @@ license notices in the source files are retained. The only local source change
 is to `build.rs` and `Cargo.toml`: the build uses `protoc-bin-vendored` so it
 does not depend on a system Protocol Buffers compiler.
 
-The root Rust lockfile pins the resolved transitive dependencies. Do not update
-this vendored crate without reviewing its license, protocol behavior, and
-interoperability tests.
+`Cargo.lock` pins the dependencies, including the upstream test dependencies,
+for standalone SPQR testing. The bridge has its own lockfile for the linked
+application. Do not update this vendored crate without reviewing its license,
+protocol behavior, and interoperability tests.

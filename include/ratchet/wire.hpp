@@ -21,7 +21,7 @@ std::string encode_block(std::string_view label, const uint8_t* data,
 std::vector<uint8_t> decode_block(std::string_view expected_label,
                                   std::string_view text,
                                   std::size_t max_decoded_bytes =
-                                      8u * 1024u * 1024u);
+                                      std::size_t{8} * 1024u * 1024u);
 
 }  // namespace ratchet::wire
 

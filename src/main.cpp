@@ -199,7 +199,7 @@ OpenedVault unlock_vault(const fs::path& path,
 std::string read_bounded(std::istream& input, std::size_t max_bytes,
                          const char* what) {
   std::string out;
-  out.reserve(std::min<std::size_t>(max_bytes, 64u * 1024u));
+  out.reserve(std::min<std::size_t>(max_bytes, std::size_t{64} * 1024u));
   std::array<char, 8192> chunk{};
   while (input) {
     input.read(chunk.data(), static_cast<std::streamsize>(chunk.size()));
@@ -582,8 +582,8 @@ int cmd_add_contact(const Options& opts) {
 
   const std::string card_text =
       opts.card_file.empty()
-          ? read_bounded(std::cin, 3u * 1024u * 1024u, "contact card")
-          : read_file_text(opts.card_file, 3u * 1024u * 1024u);
+          ? read_bounded(std::cin, std::size_t{3} * 1024u * 1024u, "contact card")
+          : read_file_text(opts.card_file, std::size_t{3} * 1024u * 1024u);
 
   const x3dh::ImportedCard imported = x3dh::import_card(card_text);
 
@@ -767,7 +767,7 @@ int cmd_recv(const Options& opts) {
 
   const std::string block =
       read_text_arg_or_stdin(opts.message, "Paste the message block, then Ctrl-D: ",
-                             12u * 1024u * 1024u);
+                             std::size_t{12} * 1024u * 1024u);
 
   OpenedVault opened = unlock_vault(path);
   store::VaultStore& store = opened.store;

@@ -84,6 +84,19 @@ TEST("v3 Triple Ratchet envelope carries an authenticated SPQR message") {
   CHECK(message::envelope_aad_prefix(parsed) == message::envelope_aad_prefix(env));
 }
 
+TEST("noncanonical envelope flags are rejected before authentication") {
+  const std::string block = message::encode(make_envelope(true));
+  const std::vector<uint8_t> original = wire::decode_block("MESSAGE", block);
+  // magic(4), version(1), suite(1), sender id(8), then initial flag.
+  for (const std::size_t offset : {std::size_t(14), std::size_t(51)}) {
+    std::vector<uint8_t> changed = original;
+    CHECK_EQ(changed[offset], uint8_t(1));
+    changed[offset] = 2;
+    CHECK_THROWS(message::decode(wire::encode_block(
+        "MESSAGE", changed.data(), changed.size())));
+  }
+}
+
 TEST("decode tolerates the block being pasted with extra surrounding text and reflow") {
   const message::Envelope original = make_envelope(/*with_initial=*/false);
   std::string text = message::encode(original);

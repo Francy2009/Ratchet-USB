@@ -57,7 +57,7 @@ inline constexpr std::size_t kTagBytes = crypto_aead_chacha20poly1305_ietf_ABYTE
 
 inline constexpr const char* kVaultFilename = "vault.bin";
 inline constexpr const char* kPreparedVaultFilename = "vault.bin.v3-prepared";
-inline constexpr std::size_t kMaxVaultBytes = 64u * 1024u * 1024u;
+inline constexpr std::size_t kMaxVaultBytes = std::size_t{64} * 1024u * 1024u;
 
 // Argon2id cost bounds. The upper bounds exist because the parameters are read
 // back from an attacker-supplied file: without them, a doctored header could

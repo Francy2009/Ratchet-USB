@@ -207,7 +207,7 @@ void write_session(serial::Writer<SecureBuffer>& w, const Session& s) {
   w.u8(static_cast<uint8_t>(s.status));
   w.bytes(s.session_id.data(), s.session_id.size());
   w.u8(s.legacy_read_only ? 1 : 0);
-  if (s.spqr_state.size() > 8u * 1024u * 1024u) {
+  if (s.spqr_state.size() > std::size_t{8} * 1024u * 1024u) {
     throw Error("SPQR state exceeds the vault limit");
   }
   w.blob(s.spqr_state.data(), s.spqr_state.size());
@@ -250,7 +250,7 @@ Session read_session(serial::Reader& r, uint8_t version) {
     r.bytes(s.session_id.data(), s.session_id.size());
     if (version >= 8) s.legacy_read_only = r.u8() != 0;
     if (version >= 9) {
-      s.spqr_state = r.secure_blob(8u * 1024u * 1024u);
+      s.spqr_state = r.secure_blob(std::size_t{8} * 1024u * 1024u);
     }
   }
   r.bytes(s.root_key.data(), s.root_key.size());

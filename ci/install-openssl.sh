@@ -7,8 +7,8 @@ if [[ $# -ne 1 ]]; then
 fi
 
 readonly prefix=$1
-readonly version=3.5.8
-readonly expected_sha256=a8f84a39918ec6415ce765d9b429d313ba97b8143169c172e734b9514464f5b2
+readonly version=3.5.9
+readonly expected_sha256=603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a
 readonly archive="openssl-${version}.tar.gz"
 readonly source_url="https://www.openssl.org/source/${archive}"
 readonly work_dir="${RUNNER_TEMP:-/tmp}/openssl-source-${version}"

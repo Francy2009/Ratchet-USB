@@ -10,6 +10,12 @@
 namespace ratchet::message {
 namespace {
 constexpr std::array<uint8_t, 4> kMessageMagic = {'R', 'M', 'S', 'G'};
+
+bool read_flag(serial::Reader& r) {
+  const uint8_t value = r.u8();
+  if (value > 1) throw Error("message envelope has a noncanonical flag");
+  return value == 1;
+}
 }
 
 SenderId sender_id_for(const IdentitySigningPublicKey& identity_pub) {
@@ -66,7 +72,8 @@ std::string encode(const Envelope& env) {
       env.suite == ProtocolSuite::HybridPqxdhV1 && env.spqr_message.empty();
   const bool triple = env.version == 3 &&
       env.suite == ProtocolSuite::TripleRatchetV1 &&
-      !env.spqr_message.empty() && env.spqr_message.size() <= 1024u * 1024u;
+      !env.spqr_message.empty() &&
+      env.spqr_message.size() <= std::size_t{1024} * 1024u;
   if (!hybrid && !triple) {
     throw Error("unsupported message protocol version or suite");
   }
@@ -133,20 +140,20 @@ Envelope decode(std::string_view text) {
   env.suite = static_cast<ProtocolSuite>(suite);
   r.bytes(env.sender_id.data(), env.sender_id.size());
 
-  if (r.u8() != 0) {
+  if (read_flag(r)) {
     InitialFields f;
     r.bytes(f.initiator_identity_pub.data(), f.initiator_identity_pub.size());
     f.spk_id = r.u32();
-    if (r.u8() != 0) {
+    if (read_flag(r)) {
       f.otpk_id = r.u32();
     }
-    if (r.u8() != 0) {
+    if (read_flag(r)) {
       f.pq_spk_id = r.u32();
       pq::MlKemCiphertext ct{};
       r.bytes(ct.data(), ct.size());
       f.pq_spk_ciphertext = ct;
     }
-    if (r.u8() != 0) {
+    if (read_flag(r)) {
       f.pq_otpk_id = r.u32();
       pq::MlKemCiphertext ct{};
       r.bytes(ct.data(), ct.size());
@@ -157,7 +164,8 @@ Envelope decode(std::string_view text) {
 
   if (triple) {
     env.spqr_message = r.blob();
-    if (env.spqr_message.empty() || env.spqr_message.size() > 1024u * 1024u) {
+    if (env.spqr_message.empty() ||
+        env.spqr_message.size() > std::size_t{1024} * 1024u) {
       throw Error("SPQR message has an invalid length");
     }
   }

@@ -23,7 +23,7 @@ env:
   # Keep warnings fatal everywhere. The project already builds clean with
   # -Wall -Wextra -Wpedantic; this stops that from silently regressing.
   WARN_FLAGS: "-Wall -Wextra -Wpedantic -Werror"
-  OPENSSL_PREFIX: ${{ runner.temp }}/openssl-3.5.8
+  OPENSSL_PREFIX: ${{ runner.temp }}/openssl-3.5.9
 
 jobs:
   # ---------------------------------------------------------------------
@@ -54,6 +54,44 @@ jobs:
             echo "  python3 test/vectors/reference.py --emit > test/vectors/vectors.hpp"
             exit 1
           fi
+
+  spqr-tests:
+    name: Vendored SPQR and bridge tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal
+
+      - name: Test Signal SPQR
+        run: cargo test --manifest-path third_party/spqr/Cargo.toml --locked
+
+      - name: Test the Rust bridge
+        run: cargo test --manifest-path rust/spqr_bridge/Cargo.toml --locked
+
+      - name: Check locked dependency license inventory
+        run: python3 ci/check-rust-licenses.py --check
+
+  rust-advisories:
+    name: RustSec advisories for both lockfiles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install checksum-verified cargo-audit
+        run: |
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            'https://github.com/rustsec/rustsec/releases/download/cargo-audit/v0.22.2/cargo-audit-x86_64-unknown-linux-gnu-v0.22.2.tgz' \
+            -o "$RUNNER_TEMP/cargo-audit.tgz"
+          echo "ab28a1bdb54db4d5d8ad5981cf1f959410370b3d28250dbd35f6a44248620e39  $RUNNER_TEMP/cargo-audit.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/cargo-audit.tgz" -C "$RUNNER_TEMP"
+
+      - name: Check the bridge and vendored SPQR locks
+        run: |
+          audit="$RUNNER_TEMP/cargo-audit-x86_64-unknown-linux-gnu-v0.22.2/cargo-audit"
+          "$audit" audit --file rust/spqr_bridge/Cargo.lock
+          "$audit" audit --file third_party/spqr/Cargo.lock
 
   # ---------------------------------------------------------------------
   # The main build matrix. Both compilers, both build types -- Debug catches
@@ -87,7 +125,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ${{ env.OPENSSL_PREFIX }}
-          key: openssl-3.5.8-${{ runner.os }}-${{ runner.arch }}
+          key: openssl-3.5.9-${{ runner.os }}-${{ runner.arch }}
 
       - name: Install pinned OpenSSL 3.5 LTS
         run: ./ci/install-openssl.sh "$OPENSSL_PREFIX"
@@ -128,10 +166,10 @@ jobs:
   # checks both derive the same keys from the same vectors.
   # ---------------------------------------------------------------------
   libsodium-native-hkdf:
-    name: libsodium 1.0.20 (native HKDF path)
+    name: libsodium 1.0.22 (native HKDF path)
     runs-on: ubuntu-latest
     env:
-      SODIUM_VERSION: 1.0.20
+      SODIUM_VERSION: 1.0.22
     steps:
       - uses: actions/checkout@v4
 
@@ -146,7 +184,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ${{ env.OPENSSL_PREFIX }}
-          key: openssl-3.5.8-${{ runner.os }}-${{ runner.arch }}
+          key: openssl-3.5.9-${{ runner.os }}-${{ runner.arch }}
 
       - name: Cache the libsodium build
         id: sodium-cache
@@ -158,14 +196,8 @@ jobs:
       - name: Build libsodium from source
         if: steps.sodium-cache.outputs.cache-hit != 'true'
         env:
-          # Pinned so this job builds the tarball it was written against and
-          # nothing else. To be clear about what this does and does not buy:
-          # it detects the download changing under us -- a tampered mirror, a
-          # re-cut release, a truncated fetch -- but it is trust-on-first-use,
-          # not a signature check, because the digest was taken from a download
-          # of the same file. Verifying jedisct1's signing key would be the
-          # stronger check; this is the one that costs a single line.
-          SODIUM_SHA256: ebb65ef6ca439333c2bb41a0c1990587288da07f6c7fd07cb3a18cc18d30ce19
+          # SHA-256 published with the upstream 1.0.22 release asset.
+          SODIUM_SHA256: adbdd8f16149e81ac6078a03aca6fc03b592b89ef7b5ed83841c086191be3349
         run: |
           curl -sSL -o sodium.tar.gz \
             "https://github.com/jedisct1/libsodium/releases/download/${SODIUM_VERSION}-RELEASE/libsodium-${SODIUM_VERSION}.tar.gz"
@@ -231,7 +263,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ${{ env.OPENSSL_PREFIX }}
-          key: openssl-3.5.8-${{ runner.os }}-${{ runner.arch }}
+          key: openssl-3.5.9-${{ runner.os }}-${{ runner.arch }}
 
       - name: Install pinned OpenSSL 3.5 LTS
         run: ./ci/install-openssl.sh "$OPENSSL_PREFIX"
@@ -442,7 +474,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ${{ env.OPENSSL_PREFIX }}
-          key: openssl-3.5.8-${{ runner.os }}-${{ runner.arch }}
+          key: openssl-3.5.9-${{ runner.os }}-${{ runner.arch }}
 
       - name: Install pinned OpenSSL 3.5 LTS
         run: ./ci/install-openssl.sh "$OPENSSL_PREFIX"
@@ -472,6 +504,8 @@ jobs:
     if: always()
     needs:
       - vectors
+      - spqr-tests
+      - rust-advisories
       - build
       - libsodium-native-hkdf
       - sanitizers

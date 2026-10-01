@@ -184,13 +184,14 @@ std::vector<ContactRow> Driver::contact_rows() const {
   rows.reserve(store.contacts.size());
   for (std::size_t i = 0; i < store.contacts.size(); ++i) {
     ContactRow row;
-    row.alias = store.contacts[i].alias;
-    row.fingerprint =
-        store.contacts[i].card && store.contacts[i].card->pq_bundle
-            ? hybrid_fingerprint(store.contacts[i].identity_pub,
-                                 store.contacts[i].card->pq_identity_pub)
-            : fingerprint(store.contacts[i].identity_pub);
-    row.verified = store.contacts[i].verified;
+    const auto& contact = store.contacts[i];
+    row.alias = contact.alias;
+    row.fingerprint = contact.card.has_value() &&
+                              contact.card.value().pq_bundle.has_value()
+                          ? hybrid_fingerprint(contact.identity_pub,
+                                               contact.card.value().pq_identity_pub)
+                          : fingerprint(contact.identity_pub);
+    row.verified = contact.verified;
     row.has_session = store.find_session(i) >= 0;
     rows.push_back(std::move(row));
   }

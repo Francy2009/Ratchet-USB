@@ -179,7 +179,7 @@ std::string export_hybrid_card(
 }
 
 ImportedCard import_card(std::string_view base64_card) {
-  constexpr std::size_t kMaxCardBytes = 2u * 1024u * 1024u;
+  constexpr std::size_t kMaxCardBytes = std::size_t{2} * 1024u * 1024u;
   const std::vector<uint8_t> body =
       wire::decode_block("CARD", base64_card, kMaxCardBytes);
   serial::Reader r(body.data(), body.size());

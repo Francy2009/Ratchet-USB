@@ -19,7 +19,7 @@ struct AnchorRecord {
   Digest vault_digest{};
 };
 
-enum class Status {
+enum class Status : uint8_t {
   Protected,
   Unprotected,
   AdvancedAfterCrash,

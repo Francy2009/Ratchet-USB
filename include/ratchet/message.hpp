@@ -18,8 +18,8 @@
 // AEAD ciphertext.
 namespace ratchet::message {
 
-inline constexpr std::size_t kMaxEnvelopeBytes = 8u * 1024u * 1024u;
-inline constexpr std::size_t kMaxPlaintextBytes = 4u * 1024u * 1024u;
+inline constexpr std::size_t kMaxEnvelopeBytes = std::size_t{8} * 1024u * 1024u;
+inline constexpr std::size_t kMaxPlaintextBytes = std::size_t{4} * 1024u * 1024u;
 
 inline constexpr std::size_t kSenderIdBytes = 8;
 using SenderId = std::array<uint8_t, kSenderIdBytes>;
