@@ -7,7 +7,8 @@ Protected against by design and tests:
 - passive recording followed by later compromise, within the hybrid handshake
   and Triple Ratchet forward-secrecy limits;
 - classic-only downgrade after a contact has acquired a hybrid minimum suite;
-- message length fingerprinting via ISO/IEC 7816-4 discrete bucket padding;
+- exact message length via ISO/IEC 7816-4 discrete bucket padding; the
+  approximate size bucket remains visible;
 - concurrent cooperating processes and host-detectable USB state rollback/fork;
 - theft of a locked vault, subject to passphrase strength and configured Argon2id cost.
 

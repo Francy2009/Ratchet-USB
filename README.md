@@ -1,78 +1,76 @@
 # Ratchet-USB
 
-Ratchet-USB è un programma da terminale per scambiarsi messaggi cifrati senza un
-server dedicato. Scrivi un messaggio sul tuo computer, copi il blocco cifrato che
-compare e lo invii attraverso il canale che preferisci. La persona che lo riceve
-incolla il blocco nel programma per leggerlo. Il canale usato per il trasporto
-vede il blocco e l'ora dello scambio, ma non il testo del messaggio.
+Languages: [Italiano](README.it.md) · **English**
 
-Identità, contatti e sessioni sono conservati in un vault cifrato su una chiavetta
-USB o in una cartella scelta dall'utente. La chiavetta non è una chiave
-crittografica: la protezione del file dipende dalla passphrase del vault. Se
-qualcuno copia il file, può tentare di indovinare la passphrase senza avere la
-chiavetta.
+Ratchet-USB is a terminal program for exchanging encrypted messages without a
+dedicated server. Write a message on your computer, copy the encrypted block it
+prints, and send that block through a channel of your choice. The recipient
+pastes the block into the program to read it. The transport channel can see the
+block and the time of the exchange, but not the message text.
 
-Il progetto è ancora in sviluppo (`0.5.0-dev`). La migrazione post quantum è
-implementata in questa versione, ma non è stata sottoposta a una revisione
-indipendente. Per il dettaglio delle verifiche fatte e di quelle ancora da fare,
-vedi [lo stato della migrazione](docs/PQ-MIGRATION-STATUS.md) e il
-[modello di minaccia](docs/THREAT-MODEL.md).
+Your identity, contacts, and sessions live in an encrypted vault on a USB drive
+or in a directory you choose. The drive itself is not a cryptographic key. The
+vault file is protected by its passphrase. Someone who copies the file can try
+to guess that passphrase without having the drive.
 
-## Come si usa
+This is still a development version (`0.5.0-dev`). The post-quantum migration is
+implemented, but it has not had an independent security review. See the
+[migration status](docs/PQ-MIGRATION-STATUS.md) for completed and outstanding
+checks, and the [threat model](docs/THREAT-MODEL.md) for its limits.
 
-Avviando `ratchet-usb` senza argomenti si apre l'interfaccia nel terminale.
-Puoi creare il vault, aggiungere un contatto, verificare la sua impronta,
-scrivere e leggere messaggi con i tasti indicati sullo schermo. La lingua segue
-la locale del sistema; puoi scegliere esplicitamente `--lang it` o `--lang en`.
-L'interfaccia si blocca dopo tre minuti di inattività. L'intervallo si cambia
-con `--idle-lock <secondi>`.
+## Using it
 
-Gli stessi passaggi sono disponibili come comandi. Questo è uno scambio tipico:
+Run `ratchet-usb` without arguments to open the terminal interface. You can
+create a vault, add a contact, verify their fingerprint, and exchange messages
+using the keys shown on screen. The interface follows your system locale; use
+`--lang it` or `--lang en` to choose explicitly. It locks after three minutes
+of inactivity by default. Change that interval with `--idle-lock <seconds>`.
+
+The same steps are available as commands. A typical exchange looks like this:
 
 ```sh
 ratchet-usb init
-ratchet-usb card > mia-carta.txt
-ratchet-usb add alice --card carta-alice.txt
+ratchet-usb card > my-card.txt
+ratchet-usb add alice --card alice-card.txt
 ratchet-usb trust alice
 ratchet-usb send alice
 ratchet-usb recv
 ```
 
-Dopo `init`, il programma mostra una frase di recupero di 12 parole una sola
-volta. Conservala separatamente dalla chiavetta. La frase permette di
-ricostruire l'identità, ma non ripristina contatti, prekey o conversazioni.
-`add` importa la carta ricevuta. Prima di usare `trust`, confronta l'impronta
-con Alice al telefono, di persona o tramite un altro canale affidabile. Il
-programma richiede che il contatto sia verificato prima di inviare o ricevere
-messaggi.
+After `init`, the program shows a 12-word recovery phrase once. Keep it separate
+from the drive. The phrase can reconstruct your identity, but not your contacts,
+prekeys, or conversations. `add` imports a contact card. Before running `trust`,
+compare Alice's fingerprint by phone, in person, or through another independent
+channel. The program requires verification before sending or receiving messages.
 
-`send` senza testo lo chiede in modo interattivo o lo legge da standard input.
-Questo evita di lasciare il messaggio nella cronologia della shell. `recv`
-accetta il blocco cifrato da incollare. `contacts` mostra i contatti e lo stato
-delle sessioni. `card` genera la carta da condividere. `unlock` apre il vault
-e rinnova le prekey quando serve. `anchor` può registrare sul computer un
-riferimento per rilevare il ripristino di una vecchia copia del vault; questa
-protezione richiede un'attivazione esplicita. `migrate` prepara una migrazione
-di formato e `migrate --commit` la conferma dopo le verifiche.
+With no text argument, `send` asks for a message or reads standard input. This
+keeps the message out of your shell history. `recv` accepts a pasted encrypted
+block. `contacts` shows your contacts and their session status. `card` produces
+your shareable card. `unlock` opens the vault and refreshes prekeys when needed.
+`anchor` can enroll a reference on the computer to detect restoration of an
+older vault copy; you must enable it explicitly. `migrate` prepares a format
+migration, and `migrate --commit` confirms it after checks.
 
-Il programma prova a individuare un'unità rimovibile. Se la rilevazione non è
-adatta al tuo caso, passa `--usb-path <cartella>` ai comandi o imposta
-`RATCHET_USB_PATH`.
+The program tries to find a removable drive. If detection is unsuitable for
+your setup, pass `--usb-path <directory>` to commands or set `RATCHET_USB_PATH`.
 
-## Installazione
+## Installing
 
-Sono supportati Linux e macOS. Servono un compilatore C++20, CMake 3.16 o più
-recente, libsodium, OpenSSL 3.5 o più recente, Rust 1.88 o più recente e Cargo.
-Su macOS puoi installare le dipendenze principali con
-`brew install libsodium openssl@3.5 cmake rust`. Su Linux `setup.sh` propone i
-pacchetti per dnf, apt, pacman o zypper prima di installarli.
+Linux and macOS are supported. You need a C++20 compiler, CMake 3.16 or newer,
+libsodium, OpenSSL 3.5 or newer, Rust 1.88 or newer, and Cargo. On macOS, the
+main dependencies can be installed with
+`brew install libsodium openssl@3.5 cmake rust`. On Linux, `setup.sh` proposes
+packages for dnf, apt, pacman, or zypper before installing them.
+
+Keep the system cryptography libraries updated. CI checks OpenSSL 3.5.9 and
+libsodium 1.0.22; a local build may link other installed versions.
 
 ```sh
 ./setup.sh
 ```
 
-Lo script compila il programma, esegue i test e installa l'eseguibile in
-`~/.local/bin`. Per compilare senza installare:
+The script builds the program, runs its tests, and installs the executable in
+`~/.local/bin`. To build without installing:
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -80,72 +78,72 @@ cmake --build build -j2
 ctest --test-dir build --output-on-failure
 ```
 
-Per usare dipendenze già installate, `./setup.sh --no-deps` salta il passaggio
-dei pacchetti. Windows non è ancora supportato nativamente; l'applicazione usa
-funzioni di terminale e filesystem proprie di Linux e macOS.
+Use `./setup.sh --no-deps` to skip system package installation when dependencies
+are already present. Native Windows support is not available yet; the program
+uses terminal and filesystem functions specific to Linux and macOS.
 
-## Cosa succede a un messaggio
+## What happens to a message
 
-Ogni identità ha una chiave Ed25519 e una ML-DSA-65. La carta del contatto
-contiene le chiavi pubbliche, le prekey X25519 e ML-KEM-768 e le firme che
-proteggono la carta. La prima comunicazione usa un handshake ibrido con
-X25519 e ML-KEM-768. I due partecipanti ricavano da quel segreto uno stato
-per il Double Ratchet classico e uno per lo Sparse Post Quantum Ratchet di
-Signal, chiamato SPQR.
+Each identity has an Ed25519 key and an ML-DSA-65 key. A contact card contains
+the public keys, X25519 and ML-KEM-768 prekeys, and signatures covering the
+card. The first message uses a hybrid X25519 and ML-KEM-768 handshake. Both
+participants derive state for a classical Double Ratchet and for Signal's
+Sparse Post Quantum Ratchet, called SPQR.
 
-Per ogni nuovo messaggio i due ratchet producono una chiave. Il programma le
-combina e usa il risultato per cifrare il testo. Il messaggio SPQR, l'intestazione
-classica e i dati dell'handshake sono autenticati insieme al testo cifrato. Lo
-stato avanza solo dopo che il messaggio è stato verificato. La sessione e lo
-stato SPQR vengono salvati nel vault cifrato.
+For every subsequent message, each ratchet produces a key. The program
+combines the two keys to encrypt the text. The SPQR message, classical header,
+and handshake fields are authenticated together with the ciphertext. Session
+state advances only after authentication succeeds. The session and SPQR state
+are saved in the encrypted vault.
 
-Le carte ibride precedenti che dichiarano solo la suite 2 continuano a usare
-il loro formato di messaggio. Una sessione già avviata non cambia protocollo
-mentre è in corso. Le nuove carte dichiarano la suite 3 con Triple Ratchet.
-Questa implementazione non usa il formato dei messaggi di Signal e non può
-scambiare messaggi con l'app Signal. I dettagli dei formati sono in
-[docs/WIRE-V3.md](docs/WIRE-V3.md).
+Earlier hybrid cards that advertise only suite 2 keep their original message
+format. An established session does not change protocol while it is active.
+New cards advertise suite 3 with Triple Ratchet. Ratchet-USB does not use
+Signal's message format and cannot exchange messages with the Signal app.
+The formats are described in [docs/WIRE-V3.md](docs/WIRE-V3.md).
 
-## Limiti di sicurezza
+## Security limits
 
-Verificare l'impronta del contatto è indispensabile: una carta firmata prova
-che le sue parti appartengono alla stessa identità, non che quell'identità
-appartenga alla persona che intendi contattare. Un computer compromesso può
-leggere passphrase e messaggi mentre il programma è aperto. Il canale di
-trasporto vede quando e con chi comunichi. La memoria interna di SPQR in Rust
-non è sempre bloccata contro lo swap e non è garantito che ogni sua copia venga
-cancellata subito dopo l'uso. Anche le vecchie copie del vault possono restare
-sulla memoria fisica della chiavetta dopo un salvataggio.
+You must verify a contact's fingerprint. A signed card proves that its fields
+belong to one identity; it does not prove that the identity belongs to the
+person you intend to reach. A compromised computer can read passphrases and
+messages while the program is open. The transport channel can observe timing
+and the parties communicating. Rust's internal SPQR working state is not
+always locked against swap, and immediate erasure of every copy is not
+guaranteed. Older copies of the vault may also remain on the physical storage
+of a USB drive after a save.
 
-I test locali coprono scambi completi, messaggi fuori ordine, replay, dati
-alterati e compatibilità con la suite precedente. Restano necessari una
-revisione crittografica indipendente, test di fuzzing più lunghi e la verifica
-della nuova build nei sistemi CI Linux e macOS. Non usare questa versione come
-unica protezione per comunicazioni ad alto rischio.
+Local tests cover complete conversations, out-of-order messages, replays,
+altered data, and compatibility with the earlier suite. An independent
+cryptographic review, longer fuzzing, and CI verification of this branch on
+Linux and macOS are still needed. Do not use this development version as the
+sole protection for high-risk communications.
 
-## Evoluzione del progetto
+See [SECURITY.md](SECURITY.md) for vulnerability reporting and detailed limits.
 
-I tag `milestone/*` segnano passaggi di sviluppo nel repository locale. Sono
-riferimenti alla cronologia del codice, non versioni pubblicate o approvate
-per l'uso in produzione. I tag di questa migrazione sono:
+## Project history
 
-| Tag | Passaggio |
+The `milestone/*` tags mark development steps in the local repository. They
+are code history references, not published or production-approved releases.
+
+| Tag | Step |
 | --- | --- |
-| `milestone/pq-hybrid` | Handshake e carte ibride, prima dell'integrazione SPQR. |
-| `milestone/spqr-license` | Sorgenti SPQR integrati e licenza combinata AGPL. |
-| `milestone/spqr-bridge` | Collegamento tra C++ e la libreria Rust, con test. |
-| `milestone/triple-ratchet` | Messaggi, sessioni e persistenza Triple Ratchet. |
-| `milestone/pq-migration-docs` | Build Rust fissata e documentazione della migrazione. |
+| `milestone/pq-hybrid` | Hybrid handshake and cards before SPQR integration. |
+| `milestone/spqr-license` | SPQR sources and combined AGPL license. |
+| `milestone/spqr-bridge` | Tested connection between C++ and the Rust library. |
+| `milestone/triple-ratchet` | Triple Ratchet messages, sessions, and persistence. |
+| `milestone/pq-migration-docs` | Pinned Rust build and migration documentation. |
+| `milestone/local-verification` | Parser fix and local migration checks. |
 
-Puoi esaminare una tappa con `git show milestone/triple-ratchet` o confrontare
-due tappe con `git diff milestone/pq-hybrid milestone/triple-ratchet`. I tag
-restano locali finché non vengono pubblicati esplicitamente.
+Inspect a step with `git show milestone/triple-ratchet`, or compare two steps
+with `git diff milestone/pq-hybrid milestone/triple-ratchet`. Tags remain local
+until someone explicitly publishes them.
 
-## Licenza e componenti
+## License and dependencies
 
-La distribuzione che include Signal SPQR è sotto
-[AGPL-3.0-only](LICENSE). Il codice originale di Ratchet-USB era pubblicato
-sotto MIT; il relativo testo è conservato in [LICENSE-MIT](LICENSE-MIT).
-Provenienza e licenze dei componenti sono raccolte in
-[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Il software è fornito senza
-garanzia.
+The combined distribution that includes Signal SPQR is under
+[AGPL-3.0-only](LICENSE). The original Ratchet-USB code was published under
+MIT; its text remains in [LICENSE-MIT](LICENSE-MIT). Component provenance and
+licenses are documented in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). The software comes without a
+warranty.

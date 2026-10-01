@@ -21,8 +21,17 @@ Implemented:
 Signal SPQR is vendored at the commit recorded in `THIRD-PARTY-NOTICES.md`.
 The combined distribution is AGPL-3.0-only; the original Ratchet-USB MIT
 notice is preserved in `LICENSE-MIT`. Rust 1.88 or newer and Cargo are now
-build dependencies. `Cargo.lock` is committed for repeatable dependency
-resolution.
+build dependencies. Both Rust crates have committed `Cargo.lock` files for repeatable dependency
+resolution. Their declared package licenses are inventoried in
+`docs/RUST-DEPENDENCIES.md`.
+
+On 1 October 2026, RustSec reported no known vulnerabilities in either
+lockfile after updating `bytes`, `anyhow`, `rand`, and `chacha20`. It still
+warned that `proc-macro-error2`, reached through SPQR's libcrux build
+dependencies, is unmaintained. Standalone SPQR tests also bring in the
+unmaintained `paste` crate through a test-only dependency. These warnings
+need review when updating the vendored SPQR source and its dependencies;
+the CI advisory job checks both lockfiles for newly reported vulnerabilities.
 
 Remaining release gates: independent cryptographic and implementation review,
 extended fuzzing, CI on Linux and macOS for this branch, and a fresh assessment

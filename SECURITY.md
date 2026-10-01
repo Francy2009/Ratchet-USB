@@ -26,19 +26,22 @@ only layer.
 
 What the design does aim at:
 
-- New messages are end-to-end encrypted with a hybrid X3DH + ML-KEM-768
-  opening plus a Double Ratchet, so the
-  channel carrying the ciphertext (WhatsApp, email, a forum) learns nothing.
-- Forward secrecy: a key compromised today does not decrypt yesterday's
-  messages.
+- New suite-3 sessions use an X25519 + ML-KEM-768 hybrid opening, then
+  combine keys from the classical Double Ratchet and Signal SPQR on every
+  message. Existing suite-2 sessions continue with their original hybrid
+  opening and classical Double Ratchet. The transport cannot read plaintext.
+- Ratchet forward secrecy limits what a newly compromised session state can
+  reveal about past messages. Copies of older vault files can retain older
+  keys, especially on flash storage.
 - Message length fingerprinting protection: Plaintext payloads are padded
   according to ISO/IEC 7816-4 into discrete buckets (128, 256, 512, 1024, 2048
-  bytes, and 1024-byte increments beyond) before AEAD encryption, preventing
-  adversaries from inferring message contents based on ciphertext size.
-- Everything secret lives on the removable drive. An explicitly enrolled
-  host keyring record stores only vault id, generation and ciphertext digest.
-- The vault is sealed with Argon2id and ChaCha20-Poly1305, so a stolen drive is
-  worth nothing without the passphrase.
+  bytes, and 1024-byte increments beyond) before AEAD encryption. This hides
+  exact plaintext length but still reveals an approximate size bucket.
+- Persistent secret state lives in the encrypted vault on the removable
+  drive. An explicitly enrolled host keyring record stores only vault id,
+  generation and ciphertext digest.
+- The vault uses Argon2id and ChaCha20-Poly1305. A stolen copy permits an
+  offline passphrase-guessing attack, so passphrase strength matters.
 
 ## The terminal interface
 
@@ -55,15 +58,17 @@ What it does not add:
   reading and interpreting terminfo files. The colours are the sixteen every
   terminal has had for forty years, written as a fixed set of SGR sequences,
   and they are off whenever the output is not a terminal or `NO_COLOR` is set.
-- **No graphical toolkit**, and so no X11 or Wayland socket (on X11, any client
-  can read another's keystrokes), no D-Bus, and no accessibility bus — which
-  exists to read the text of every widget on screen and would have been reading
-  the messages.
-- **No secret state on the host.** No config, history, cache, theme or layout.
-  The optional rollback anchor is a non-secret generation/digest record in
-  Secret Service or Keychain and is created only by the `anchor` command.
-- **Nothing outside the process.** No clipboard in either direction and no
-  OSC 52, no `$EDITOR`, no helper program, no `fork` or `exec` at all.
+- **No graphical toolkit** or X11/Wayland window. The interface does not
+  publish message text to a desktop accessibility bus. On Linux, the optional
+  rollback anchor uses libsecret and may communicate with Secret Service over
+  D-Bus; its record contains no message or key material.
+- **No application-created secret files on the host.** The interface does not
+  write config, history, cache, theme or layout files. The optional rollback
+  anchor is a non-secret generation/digest record in Secret Service or
+  Keychain and is created only by the `anchor` command. The operating system
+  may still write process memory to swap or a crash dump.
+- **No clipboard or editor handoff.** The interface does not use OSC 52,
+  `$EDITOR`, a helper program, `fork` or `exec` for messages.
 - **No window title**, ever. A title naming the tool would appear in the
   taskbar, the window switcher, and any screenshot or screen share.
 - **No mouse reporting**, which keeps the escape sequences it has to decode
@@ -126,7 +131,7 @@ to defend against it:
   phrase restores the identity, not the vault's contacts or history.
 - **Physical coercion.** There is no duress passphrase and no deniable volume.
 - **Multiple devices sharing one identity**, group chats, and a key directory.
-  These are not implemented; see the roadmap in the README.
+  These are not implemented in this version.
 
 ## No warranty, and using it lawfully
 
@@ -165,6 +170,11 @@ cmake --build build && ctest --test-dir build --output-on-failure
 
 # The key schedule against vectors from an independent Python implementation.
 python3 test/vectors/reference.py --check
+
+# Signal SPQR, the bridge, and locked dependency license metadata.
+cargo test --manifest-path third_party/spqr/Cargo.toml --locked
+cargo test --manifest-path rust/spqr_bridge/Cargo.toml --locked
+python3 ci/check-rust-licenses.py --check
 
 # Sanitizers, and Valgrind for uninitialised key material.
 cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=Debug \
