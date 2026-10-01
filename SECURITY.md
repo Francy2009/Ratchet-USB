@@ -131,8 +131,9 @@ and message formats are not frozen yet, so a future release may not read what
 this one wrote. Keep your BIP-39 words, and do not treat a vault as a durable
 archive.
 
-It is released under the MIT License, which disclaims warranty and liability
-in full, and I mean that literally rather than as boilerplate: the software
+The combined distribution with Signal SPQR is under AGPL-3.0-only; earlier
+Ratchet-USB code was published under MIT (see `LICENSE-MIT`). The software
+is provided without warranty, and I mean that literally rather than as boilerplate: it
 comes as is, and I am not responsible for what it does or fails to do.
 Combined with the fact that nothing leaves your machine, it also means I have
 nothing to give you if something goes wrong — no copy of your vault, no way

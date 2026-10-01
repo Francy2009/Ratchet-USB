@@ -515,11 +515,13 @@ being read would put you in real danger, do not let this be your only layer.
 
 ## License
 
-MIT, see [LICENSE](LICENSE) — which, in the two paragraphs in capitals at
-the bottom, is also the legal version of everything above: the software
-comes with no warranty of any kind, and I am not liable for what it does or
-fails to do. The BIP-39 wordlist and libsodium are third-party and credited
-in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+The combined distribution with Signal SPQR is under
+[AGPL-3.0-only](LICENSE). The original Ratchet-USB code was published under
+MIT; its license is retained in [LICENSE-MIT](LICENSE-MIT). SPQR and the other
+components are credited in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). The SPQR integration is
+still in progress on this development branch and the Triple Ratchet suite
+remains disabled until its end-to-end tests pass.
 
 ---
 

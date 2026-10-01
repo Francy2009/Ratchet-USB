@@ -1,7 +1,18 @@
 # Third-party notices
 
-This project is MIT licensed (see `LICENSE`), but it uses a couple of things
-made by other people. Here they are, for the record.
+The combined Ratchet-USB distribution that includes Signal SPQR is licensed
+under AGPL-3.0-only (see `LICENSE`). The original Ratchet-USB code was
+published under MIT; its earlier license text is retained in `LICENSE-MIT`.
+Third-party components and their separate notices follow.
+
+## Signal Sparse Post-Quantum Ratchet (SPQR)
+
+`third_party/spqr` contains Signal Messenger's SPQR version 1.6.0 from commit
+`06959b4708f9b7b1e94d0f8cc835f3958c077e94`. It is licensed under
+AGPL-3.0-only; its complete license and source notices are retained in that
+directory. The local build patch is documented in `third_party/spqr/UPSTREAM.md`.
+The Rust bridge links SPQR into the Ratchet-USB executable. The combined
+distribution is therefore distributed under AGPL-3.0-only terms.
 
 ## BIP-39 English wordlist
 

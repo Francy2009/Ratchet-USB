@@ -5,6 +5,8 @@ cmake-build-*/
 *.a
 compile_commands.json
 .cache/
+rust/spqr_bridge/target/
+third_party/spqr/target/
 
 # Fuzzer output: the inputs it discovers and the ones that failed. The corpus
 # under test/fuzz/corpus is committed and curated by hand; this is the scratch

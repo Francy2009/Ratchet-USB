@@ -1,0 +1,204 @@
+// C ABI for the vendored Signal SPQR implementation. All secret-bearing
+// buffers crossing the boundary are owned by this library and must be freed
+// with ratchet_spqr_free, which zeroizes them first.
+
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use zeroize::{Zeroize, Zeroizing};
+
+const MAX_STATE: usize = 8 * 1024 * 1024;
+const MAX_MESSAGE: usize = 1024 * 1024;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RatchetSpqrBuffer {
+    pub ptr: *mut u8,
+    pub len: usize,
+}
+
+impl Default for RatchetSpqrBuffer {
+    fn default() -> Self {
+        Self {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+        }
+    }
+}
+
+fn input<'a>(ptr: *const u8, len: usize, max: usize) -> Result<&'a [u8], ()> {
+    if len > max {
+        return Err(());
+    }
+    if len == 0 {
+        return Ok(&[]);
+    }
+    if ptr.is_null() {
+        return Err(());
+    }
+    // SAFETY: the C++ caller promises the input remains live for this call.
+    Ok(unsafe { std::slice::from_raw_parts(ptr, len) })
+}
+
+unsafe fn output(ptr: *mut RatchetSpqrBuffer, bytes: Vec<u8>) {
+    let mut boxed = bytes.into_boxed_slice();
+    let buffer = RatchetSpqrBuffer {
+        ptr: boxed.as_mut_ptr(),
+        len: boxed.len(),
+    };
+    std::mem::forget(boxed);
+    *ptr = buffer;
+}
+
+#[no_mangle]
+pub extern "C" fn ratchet_spqr_init(
+    initiator: bool,
+    auth_key: *const u8,
+    auth_key_len: usize,
+    out_state: *mut RatchetSpqrBuffer,
+) -> i32 {
+    if out_state.is_null() {
+        return -1;
+    }
+    unsafe { *out_state = RatchetSpqrBuffer::default() };
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let key = input(auth_key, auth_key_len, 32)?;
+        if key.len() != 32 {
+            return Err(());
+        }
+        let state = spqr::initial_state(spqr::Params {
+            direction: if initiator {
+                spqr::Direction::A2B
+            } else {
+                spqr::Direction::B2A
+            },
+            version: spqr::Version::V1,
+            min_version: spqr::Version::V1,
+            auth_key: key,
+            chain_params: spqr::ChainParams {
+                max_jump: 1000,
+                max_ooo_keys: 1000,
+            },
+        })
+        .map_err(|_| ())?;
+        if state.len() > MAX_STATE {
+            return Err(());
+        }
+        unsafe { output(out_state, state) };
+        Ok(())
+    }));
+    if matches!(result, Ok(Ok(()))) { 0 } else { -1 }
+}
+
+#[no_mangle]
+pub extern "C" fn ratchet_spqr_send(
+    state_ptr: *const u8,
+    state_len: usize,
+    out_state: *mut RatchetSpqrBuffer,
+    out_message: *mut RatchetSpqrBuffer,
+    out_key: *mut RatchetSpqrBuffer,
+) -> i32 {
+    if out_state.is_null() || out_message.is_null() || out_key.is_null() {
+        return -1;
+    }
+    unsafe {
+        *out_state = RatchetSpqrBuffer::default();
+        *out_message = RatchetSpqrBuffer::default();
+        *out_key = RatchetSpqrBuffer::default();
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let state = Zeroizing::new(input(state_ptr, state_len, MAX_STATE)?.to_vec());
+        let sent = spqr::send(&state, &mut rand::rng()).map_err(|_| ())?;
+        let key = sent.key.ok_or(())?;
+        if key.len() != 32 || sent.state.len() > MAX_STATE || sent.msg.len() > MAX_MESSAGE {
+            return Err(());
+        }
+        unsafe {
+            output(out_state, sent.state);
+            output(out_message, sent.msg);
+            output(out_key, key);
+        }
+        Ok(())
+    }));
+    if matches!(result, Ok(Ok(()))) { 0 } else { -1 }
+}
+
+#[no_mangle]
+pub extern "C" fn ratchet_spqr_recv(
+    state_ptr: *const u8,
+    state_len: usize,
+    message_ptr: *const u8,
+    message_len: usize,
+    out_state: *mut RatchetSpqrBuffer,
+    out_key: *mut RatchetSpqrBuffer,
+) -> i32 {
+    if out_state.is_null() || out_key.is_null() {
+        return -1;
+    }
+    unsafe {
+        *out_state = RatchetSpqrBuffer::default();
+        *out_key = RatchetSpqrBuffer::default();
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let state = Zeroizing::new(input(state_ptr, state_len, MAX_STATE)?.to_vec());
+        let message = input(message_ptr, message_len, MAX_MESSAGE)?.to_vec();
+        let received = spqr::recv(&state, &message).map_err(|_| ())?;
+        let key = received.key.ok_or(())?;
+        if key.len() != 32 || received.state.len() > MAX_STATE {
+            return Err(());
+        }
+        unsafe {
+            output(out_state, received.state);
+            output(out_key, key);
+        }
+        Ok(())
+    }));
+    if matches!(result, Ok(Ok(()))) { 0 } else { -1 }
+}
+
+#[no_mangle]
+pub extern "C" fn ratchet_spqr_free(buffer: RatchetSpqrBuffer) {
+    if buffer.ptr.is_null() {
+        return;
+    }
+    // SAFETY: the buffer came from output() and ownership is returned once.
+    let ptr = std::ptr::slice_from_raw_parts_mut(buffer.ptr, buffer.len);
+    let mut bytes = unsafe { Box::from_raw(ptr) };
+    bytes.zeroize();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn take(buffer: RatchetSpqrBuffer) -> Vec<u8> {
+        let bytes = unsafe { std::slice::from_raw_parts(buffer.ptr, buffer.len) }.to_vec();
+        ratchet_spqr_free(buffer);
+        bytes
+    }
+
+    #[test]
+    fn both_directions_agree_on_message_keys() {
+        let auth_key = [17u8; 32];
+        let mut a = RatchetSpqrBuffer::default();
+        let mut b = RatchetSpqrBuffer::default();
+        assert_eq!(ratchet_spqr_init(true, auth_key.as_ptr(), 32, &mut a), 0);
+        assert_eq!(ratchet_spqr_init(false, auth_key.as_ptr(), 32, &mut b), 0);
+        let mut a = take(a);
+        let mut b = take(b);
+        for turn in 0..8 {
+            let (sender, receiver) = if turn % 2 == 0 { (&mut a, &mut b) } else { (&mut b, &mut a) };
+            let mut next = RatchetSpqrBuffer::default();
+            let mut msg = RatchetSpqrBuffer::default();
+            let mut key = RatchetSpqrBuffer::default();
+            assert_eq!(ratchet_spqr_send(sender.as_ptr(), sender.len(), &mut next, &mut msg, &mut key), 0);
+            *sender = take(next);
+            let msg = take(msg);
+            let send_key = take(key);
+            assert_eq!(send_key.len(), 32);
+            let mut next = RatchetSpqrBuffer::default();
+            let mut key = RatchetSpqrBuffer::default();
+            assert_eq!(ratchet_spqr_recv(receiver.as_ptr(), receiver.len(), msg.as_ptr(), msg.len(), &mut next, &mut key), 0);
+            *receiver = take(next);
+            assert_eq!(send_key, take(key));
+        }
+    }
+}
