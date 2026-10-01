@@ -9,6 +9,7 @@ add_executable(ratchet_tests
                test_rollback.cpp
                test_ratchet.cpp
                test_triple_ratchet.cpp
+               test_spqr.cpp
                test_session.cpp
                test_message.cpp
                test_cli.cpp

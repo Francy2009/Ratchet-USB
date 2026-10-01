@@ -17,6 +17,34 @@ option(RATCHET_BUILD_TESTS "Build the unit tests" ON)
 option(RATCHET_HARDENED "Enable hardening flags" ON)
 option(RATCHET_BUILD_FUZZERS "Build the libFuzzer targets (clang only)" OFF)
 
+find_program(CARGO_EXECUTABLE cargo REQUIRED)
+find_package(Threads REQUIRED)
+file(GLOB_RECURSE RATCHET_SPQR_RUST_SOURCES CONFIGURE_DEPENDS
+     "${CMAKE_CURRENT_SOURCE_DIR}/rust/spqr_bridge/src/*.rs"
+     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/spqr/src/*.rs"
+     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/spqr/src/*.proto")
+set(RATCHET_SPQR_ARCHIVE
+    "${CMAKE_CURRENT_BINARY_DIR}/cargo/release/libratchet_spqr_bridge.a")
+add_custom_command(
+  OUTPUT "${RATCHET_SPQR_ARCHIVE}"
+  COMMAND ${CMAKE_COMMAND} -E env
+          "CARGO_TARGET_DIR=${CMAKE_CURRENT_BINARY_DIR}/cargo"
+          ${CARGO_EXECUTABLE} build
+          --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/rust/spqr_bridge/Cargo.toml"
+          --release --locked
+  DEPENDS ${RATCHET_SPQR_RUST_SOURCES}
+          "${CMAKE_CURRENT_SOURCE_DIR}/rust/spqr_bridge/Cargo.toml"
+          "${CMAKE_CURRENT_SOURCE_DIR}/rust/spqr_bridge/Cargo.lock"
+          "${CMAKE_CURRENT_SOURCE_DIR}/third_party/spqr/Cargo.toml"
+          "${CMAKE_CURRENT_SOURCE_DIR}/third_party/spqr/build.rs"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  VERBATIM)
+add_custom_target(ratchet_spqr_build DEPENDS "${RATCHET_SPQR_ARCHIVE}")
+add_library(ratchet_spqr STATIC IMPORTED GLOBAL)
+set_target_properties(ratchet_spqr PROPERTIES
+                      IMPORTED_LOCATION "${RATCHET_SPQR_ARCHIVE}")
+add_dependencies(ratchet_spqr ratchet_spqr_build)
+
 if(APPLE AND NOT DEFINED OPENSSL_ROOT_DIR)
   execute_process(
     COMMAND brew --prefix openssl@3.5
@@ -127,6 +155,7 @@ add_library(ratchet_core
             src/x3dh.cpp
             src/ratchet.cpp
             src/triple_ratchet.cpp
+            src/spqr.cpp
             src/session.cpp
             src/rollback.cpp
             src/vault.cpp
@@ -141,7 +170,11 @@ add_library(ratchet_core
 
 target_include_directories(ratchet_core PUBLIC
                            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
-target_link_libraries(ratchet_core PUBLIC sodium::sodium OpenSSL::Crypto)
+target_link_libraries(ratchet_core PUBLIC sodium::sodium OpenSSL::Crypto
+                      ratchet_spqr Threads::Threads ${CMAKE_DL_LIBS})
+if(UNIX AND NOT APPLE)
+  target_link_libraries(ratchet_core PUBLIC m)
+endif()
 if(APPLE)
   target_link_libraries(ratchet_core PRIVATE "${SECURITY_FRAMEWORK}")
 elseif(TARGET PkgConfig::LIBSECRET)
