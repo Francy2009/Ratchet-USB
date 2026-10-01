@@ -76,6 +76,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal
+
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -131,6 +134,9 @@ jobs:
       SODIUM_VERSION: 1.0.20
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal
 
       - name: Install build dependencies
         run: |
@@ -214,6 +220,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal
+
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -270,6 +279,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal
+
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -303,6 +315,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal
 
       - name: Install dependencies
         run: |
@@ -389,6 +404,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal
+
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -414,6 +432,9 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal
 
       - name: Install dependencies
         run: brew install libsodium cmake

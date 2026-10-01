@@ -80,8 +80,12 @@ What it costs, stated plainly: **the vault stays open longer.** The command
 line opens and closes it once per command; the interface opens it once and
 keeps the seed, the session keys and the passphrase in memory across a whole
 session. Against the threat model this changes little — a compromised host is
-already out of scope, and the pages are locked so they never reach swap — but
+already out of scope, and C++ secret buffers are locked against swap — but
 the window is wider, so it is narrowed deliberately:
+
+The integrated Rust SPQR code temporarily holds its working state in ordinary
+heap allocations. Those allocations are not guaranteed to be locked or wiped
+on release. This is a remaining memory-hardening limitation of this build.
 
 - The vault closes on its own after three minutes with no key pressed
   (`--idle-lock <seconds>`, `0` to switch it off), and immediately if the

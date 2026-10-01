@@ -29,7 +29,7 @@ fail() { printf 'error: %s\n' "$1" >&2; exit 1; }
 
 # --- dependencies ------------------------------------------------------------
 # Only the package names differ between distributions; the build itself needs
-# libsodium, OpenSSL 3.5+, CMake and a C++20 compiler. libsecret enables the
+# libsodium, OpenSSL 3.5+, CMake, Rust 1.88+, Cargo and a C++20 compiler. libsecret enables the
 # optional host rollback anchor on Linux.
 install_deps() {
   local mgr="" cmd=""
@@ -40,14 +40,14 @@ install_deps() {
   fi
 
   case "$mgr" in
-    dnf)    cmd="sudo dnf install -y libsodium-devel openssl-devel libsecret-devel cmake gcc-c++" ;;
-    apt)    cmd="sudo apt-get install -y libsodium-dev libssl-dev libsecret-1-dev cmake g++" ;;
-    pacman) cmd="sudo pacman -S --needed --noconfirm libsodium openssl libsecret cmake gcc" ;;
-    zypper) cmd="sudo zypper install -y libsodium-devel libopenssl-devel libsecret-devel cmake gcc-c++" ;;
+    dnf)    cmd="sudo dnf install -y libsodium-devel openssl-devel libsecret-devel cmake gcc-c++ rust cargo" ;;
+    apt)    cmd="sudo apt-get install -y libsodium-dev libssl-dev libsecret-1-dev cmake g++ rustc cargo" ;;
+    pacman) cmd="sudo pacman -S --needed --noconfirm libsodium openssl libsecret cmake gcc rust" ;;
+    zypper) cmd="sudo zypper install -y libsodium-devel libopenssl-devel libsecret-devel cmake gcc-c++ rust cargo" ;;
     *)
       echo "Could not tell which package manager this system uses."
-      echo "Install libsodium, OpenSSL 3.5+, CMake and a C++20"
-      echo "compiler by hand, then re-run with --no-deps."
+      echo "Install libsodium, OpenSSL 3.5+, CMake, Rust 1.88+, Cargo and"
+      echo "a C++20 compiler by hand, then re-run with --no-deps."
       return 1 ;;
   esac
 
@@ -73,6 +73,12 @@ fi
 # --- build -------------------------------------------------------------------
 say "Building"
 command -v cmake >/dev/null 2>&1 || fail "cmake not found"
+command -v cargo >/dev/null 2>&1 || fail "cargo not found"
+command -v rustc >/dev/null 2>&1 || fail "rustc not found"
+rust_version="$(rustc --version | awk '{print $2}')"
+if [ "$(printf '%s\n' 1.88.0 "$rust_version" | sort -V | head -n 1)" != 1.88.0 ]; then
+  fail "Rust 1.88 or newer is required for Signal SPQR (found $rust_version)"
+fi
 command -v pkg-config >/dev/null 2>&1 || fail "pkg-config not found"
 pkg-config --atleast-version=3.5 openssl || \
   fail "OpenSSL 3.5 or newer is required for ML-KEM-768 and ML-DSA-65"

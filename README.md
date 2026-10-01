@@ -26,8 +26,9 @@ to be typed or scripted, exactly as before.
 
 Version 0.5 development state: new contact cards use Ed25519 + ML-DSA-65
 identities and new sessions use an X25519 + ML-KEM-768 hybrid handshake.
-The continuous ML-KEM Braid/Triple Ratchet phase is not complete; messages
-currently continue with the classical Double Ratchet after the hybrid opening.
+New sessions use Signal's sparse post-quantum ratchet alongside the classical
+Double Ratchet, with both keys combined for every message. Existing hybrid-only
+conversations stay on their original suite.
 See [the migration status](docs/PQ-MIGRATION-STATUS.md) before relying on it.
 
 One thing worth saying plainly before you rely on this for anything real: it
@@ -42,7 +43,7 @@ touch if you want to talk through your situation first.
 
 **Linux** and **macOS** are both supported and verified in CI. On Linux,
 `setup.sh` knows dnf, apt, pacman and zypper. On macOS, install dependencies via
-`brew install libsodium openssl@3.5 cmake`. Removable USB drive discovery uses
+`brew install libsodium openssl@3.5 cmake rust`. Removable USB drive discovery uses
 sysfs on Linux and `getmntinfo` (`/Volumes`) on macOS. Disk flushes use
 `fcntl(F_FULLFSYNC)` on macOS to ensure physical durability when saving to USB.
 Host rollback anchors use Secret Service on Linux and Apple Keychain on macOS.
@@ -92,8 +93,8 @@ ratchet-usb contacts
 
 `--prefix /usr/local` installs system-wide (needs sudo for that one),
 `--no-deps` skips the package install. Building by hand: C++20 compiler,
-CMake 3.16+, libsodium (1.0.19+ preferred — see the HKDF note further
-down).
+CMake 3.16+, Rust 1.88+ with Cargo, libsodium (1.0.19+ preferred — see the
+HKDF note further down).
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -503,7 +504,7 @@ Encryption is regulated differently from one country to the next, and in a
 few places using or importing it is restricted outright. Checking what
 applies where you are is your job, not mine.
 
-This is 0.2.0, and pre-1.0 in the way that matters: the vault and message
+This is 0.5.0-dev, and pre-1.0 in the way that matters: the vault and message
 formats are not frozen, so a later release may not read what this one wrote.
 Keep your recovery words, and do not treat a vault as a long-term archive.
 
@@ -519,9 +520,8 @@ The combined distribution with Signal SPQR is under
 [AGPL-3.0-only](LICENSE). The original Ratchet-USB code was published under
 MIT; its license is retained in [LICENSE-MIT](LICENSE-MIT). SPQR and the other
 components are credited in
-[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). The SPQR integration is
-still in progress on this development branch and the Triple Ratchet suite
-remains disabled until its end-to-end tests pass.
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). The Triple Ratchet suite is
+enabled in this development branch, with release review still outstanding.
 
 ---
 
