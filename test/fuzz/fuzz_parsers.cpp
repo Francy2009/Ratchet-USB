@@ -81,7 +81,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
       default:
         break;
     }
-  } catch (const std::exception&) {
+  } catch (const Error&) {
     // Rejecting malformed input by throwing is the contract, not a failure.
   }
 

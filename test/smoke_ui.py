@@ -30,7 +30,7 @@ BIN = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else "build/ratchet-usb")
 PASS = "smoke-passphrase"
 # Argon2 at its default cost would make this test take minutes for no extra
 # coverage: what is being tested here is the interface, not the KDF.
-CHEAP = ["--argon2-mem-kb", "8192", "--argon2-time", "1"]
+CHEAP = ["--argon2-mem-kb", "65536", "--argon2-time", "3"]
 
 failures = []
 
@@ -60,12 +60,16 @@ class Ui:
         self.buffer = bytearray()
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
-            env = dict(os.environ, TERM="xterm-256color")
+            env = dict(os.environ, TERM="xterm-256color", LANG="C", LC_ALL="C")
+            if not env_extra or "NO_COLOR" not in env_extra:
+                env.pop("NO_COLOR", None)
             env.update(env_extra or {})
             os.execve(BIN, [BIN, "ui", "--usb-path", drive] + (extra or []), env)
         # A window big enough that a message block is not scrolled: this test
         # reads blocks off the screen, the way a person copies one out.
-        fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", 60, 100, 0, 0))
+        # With hybrid PQXDH handshakes and padded blocks, 90 rows accommodates
+        # the entire block without scrolling.
+        fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", 90, 100, 0, 0))
         self.pump(1.0)
 
     def pump(self, seconds):
@@ -83,7 +87,13 @@ class Ui:
             self.buffer.extend(chunk)
 
     def send(self, data, wait=0.5):
-        os.write(self.fd, data.encode() if isinstance(data, str) else data)
+        payload = data.encode() if isinstance(data, str) else data
+        # Hybrid cards are tens of KiB. A single blocking write can fill the
+        # pty while the child is also trying to redraw; stream it as a real
+        # terminal paste would deliver it.
+        for offset in range(0, len(payload), 1024):
+            os.write(self.fd, payload[offset:offset + 1024])
+            self.pump(0.01)
         self.pump(wait)
 
     def paste(self, text, wait=0.8):
@@ -169,6 +179,7 @@ def main():
             handle.write(alice_card)
         cli(["add", "--usb-path", bob, "alice", "--card", card_file],
             stdin=PASS + "\n")
+        cli(["trust", "--usb-path", bob, "alice"], stdin=PASS + "\n")
 
         # --- Alice does everything through the interface --------------------
         step("opening the interface on Alice's drive")

@@ -9,6 +9,8 @@
 #include <vector>
 
 #include "ratchet/session.hpp"
+#include "ratchet/app.hpp"
+#include "ratchet/message.hpp"
 #include "ratchet/store.hpp"
 #include "ratchet/wire.hpp"
 #include "ratchet/x3dh.hpp"
@@ -37,26 +39,150 @@ Party make_party(std::size_t otpk_count) {
   p.vault.next_spk_id = 2;
   p.vault.one_time_prekeys = prekey::generate_one_time_prekeys(1, otpk_count);
   p.vault.next_otpk_id = static_cast<uint32_t>(1 + otpk_count);
+  app::replenish_pq_prekeys(p.vault, otpk_count);
   return p;
 }
 
 // Publishes `from`'s card and imports it into `into` under `alias`, the way
 // `card` piped into `add` does.
 void introduce(const Party& from, Party& into, const std::string& alias) {
-  const std::string card_text = x3dh::export_card(
-      from.sk, from.pk, from.vault.signed_prekeys.back(),
-      from.vault.one_time_prekeys);
+  const pq::MlDsaKeyPair pq_identity = derive_pq_identity(from.vault.seed);
+  const std::string card_text = x3dh::export_hybrid_card(
+      from.sk, from.pk, pq_identity, from.vault.signed_prekeys.back(),
+      from.vault.one_time_prekeys, from.vault.pq_signed_prekeys.back(),
+      from.vault.pq_one_time_prekeys);
   const x3dh::ImportedCard imported = x3dh::import_card(card_text);
 
   store::Contact contact;
   contact.alias = alias;
   contact.identity_pub = imported.identity_pub;
   contact.verified = true;
+  contact.minimum_suite = ProtocolSuite::HybridPqxdhV1;
   contact.card = imported.card;
   into.vault.contacts.push_back(std::move(contact));
 }
 
+std::array<uint8_t, 32> opening_id(const std::string& block) {
+  const message::Envelope env = message::decode(block);
+  const std::vector<uint8_t> transcript = message::envelope_aad_prefix(env);
+  std::array<uint8_t, 32> id{};
+  crypto_hash_sha256(id.data(), transcript.data(), transcript.size());
+  return id;
+}
+
 }  // namespace
+
+TEST("simultaneous openings converge on the lexicographically smaller session") {
+  Party alice = make_party(3);
+  Party bob = make_party(3);
+  introduce(bob, alice, "bob");
+  introduce(alice, bob, "alice");
+
+  const std::string from_alice =
+      session::send(alice.vault, alice.sk, alice.pk, 0, "alice opening");
+  const std::string from_bob =
+      session::send(bob.vault, bob.sk, bob.pk, 0, "bob opening");
+
+  if (opening_id(from_alice) < opening_id(from_bob)) {
+    CHECK_EQ(session::receive(bob.vault, bob.sk, bob.pk, from_alice).plaintext,
+             std::string("alice opening"));
+    CHECK_THROWS(session::receive(alice.vault, alice.sk, alice.pk, from_bob));
+    const std::string reply =
+        session::send(bob.vault, bob.sk, bob.pk, 0, "converged");
+    CHECK_EQ(session::receive(alice.vault, alice.sk, alice.pk, reply).plaintext,
+             std::string("converged"));
+  } else {
+    CHECK_EQ(session::receive(alice.vault, alice.sk, alice.pk, from_bob).plaintext,
+             std::string("bob opening"));
+    CHECK_THROWS(session::receive(bob.vault, bob.sk, bob.pk, from_alice));
+    const std::string reply =
+        session::send(alice.vault, alice.sk, alice.pk, 0, "converged");
+    CHECK_EQ(session::receive(bob.vault, bob.sk, bob.pk, reply).plaintext,
+             std::string("converged"));
+  }
+}
+
+TEST("sending refuses an existing session below the contact minimum suite") {
+  Party alice = make_party(1);
+  Party bob = make_party(1);
+  introduce(bob, alice, "bob");
+  const std::string first =
+      session::send(alice.vault, alice.sk, alice.pk, 0, "first");
+  CHECK(!first.empty());
+  alice.vault.contacts[0].minimum_suite = ProtocolSuite::TripleRatchetV1;
+  alice.vault.sessions[0].suite = ProtocolSuite::HybridPqxdhV1;
+  CHECK_THROWS(session::send(alice.vault, alice.sk, alice.pk, 0, "second"));
+}
+
+TEST("an existing hybrid-only card keeps the v2 conversation readable") {
+  Party alice = make_party(1);
+  Party bob = make_party(1);
+  introduce(bob, alice, "bob");
+  introduce(alice, bob, "alice");
+  alice.vault.contacts[0].card->maximum_suite = ProtocolSuite::HybridPqxdhV1;
+  bob.vault.contacts[0].card->maximum_suite = ProtocolSuite::HybridPqxdhV1;
+  const std::string opening = session::send(alice.vault, alice.sk, alice.pk,
+                                             0, "legacy hybrid");
+  const message::Envelope env = message::decode(opening);
+  CHECK_EQ(env.version, uint8_t(2));
+  CHECK(env.suite == ProtocolSuite::HybridPqxdhV1);
+  CHECK(alice.vault.sessions[0].spqr_state.empty());
+  CHECK_EQ(session::receive(bob.vault, bob.sk, bob.pk, opening).plaintext,
+           std::string("legacy hybrid"));
+  const std::string reply = session::send(bob.vault, bob.sk, bob.pk, 0, "reply");
+  CHECK_EQ(session::receive(alice.vault, alice.sk, alice.pk, reply).plaintext,
+           std::string("reply"));
+}
+
+TEST("Triple Ratchet state survives vault persistence and rejects forged data atomically") {
+  Party alice = make_party(3);
+  Party bob = make_party(3);
+  introduce(bob, alice, "bob");
+  introduce(alice, bob, "alice");
+
+  const std::string opening = session::send(alice.vault, alice.sk, alice.pk,
+                                             0, "hello quantum world");
+  const message::Envelope first = message::decode(opening);
+  CHECK_EQ(first.version, uint8_t(3));
+  CHECK(first.suite == ProtocolSuite::TripleRatchetV1);
+  CHECK(!first.spqr_message.empty());
+  CHECK(!alice.vault.sessions[0].spqr_state.empty());
+  CHECK_EQ(session::receive(bob.vault, bob.sk, bob.pk, opening).plaintext,
+           std::string("hello quantum world"));
+
+  const SecureBuffer saved_alice = store::serialize(alice.vault);
+  const SecureBuffer saved_bob = store::serialize(bob.vault);
+  alice.vault = store::parse(saved_alice.data(), saved_alice.size());
+  bob.vault = store::parse(saved_bob.data(), saved_bob.size());
+  CHECK(!bob.vault.sessions[0].spqr_state.empty());
+
+  const std::string reply = session::send(bob.vault, bob.sk, bob.pk, 0, "reply");
+  message::Envelope forged = message::decode(reply);
+  forged.ciphertext.back() ^= 1;
+  const SecureBuffer before = store::serialize(alice.vault);
+  CHECK_THROWS(session::receive(alice.vault, alice.sk, alice.pk,
+                                 message::encode(forged)));
+  const SecureBuffer after = store::serialize(alice.vault);
+  CHECK_EQ(before.size(), after.size());
+  CHECK(sodium_memcmp(before.data(), after.data(), before.size()) == 0);
+  CHECK_EQ(session::receive(alice.vault, alice.sk, alice.pk, reply).plaintext,
+           std::string("reply"));
+}
+
+TEST("a failed SPQR send leaves the vault untouched") {
+  Party alice = make_party(1);
+  Party bob = make_party(1);
+  introduce(bob, alice, "bob");
+  const std::string opening = session::send(alice.vault, alice.sk, alice.pk,
+                                             0, "first");
+  CHECK(!opening.empty());
+  alice.vault.sessions[0].spqr_state.clear();
+  const SecureBuffer before = store::serialize(alice.vault);
+  CHECK_THROWS(session::send(alice.vault, alice.sk, alice.pk, 0, "second"));
+  const SecureBuffer after = store::serialize(alice.vault);
+  CHECK_EQ(before.size(), after.size());
+  CHECK(sodium_memcmp(before.data(), after.data(), before.size()) == 0);
+}
 
 TEST("an opening message that used no one-time prekey cannot be replayed") {
   // No one-time prekeys on Bob's card: this is the case the guard exists for.
@@ -112,10 +238,7 @@ TEST("a replayed opening message cannot destroy an advanced session") {
            std::string("bring the maps"));
 }
 
-TEST("a genuine second handshake is still accepted") {
-  // The guard keys on the initiator's ephemeral, which is drawn fresh every
-  // time, so re-handshaking -- after losing a vault and restoring from the
-  // recovery phrase, say -- must still work.
+TEST("an established session rejects an unsolicited second handshake") {
   Party alice = make_party(3);
   Party bob = make_party(0);
   introduce(bob, alice, "bob");
@@ -131,11 +254,8 @@ TEST("a genuine second handshake is still accepted") {
   const std::string second =
       session::send(alice.vault, alice.sk, alice.pk, 0, "second");
 
-  const session::ReceiveResult result =
-      session::receive(bob.vault, bob.sk, bob.pk, second);
-  CHECK_EQ(result.plaintext, std::string("second"));
-  CHECK(result.session_established);
-  CHECK_EQ(bob.vault.accepted_handshakes.size(), std::size_t(2));
+  CHECK_THROWS(session::receive(bob.vault, bob.sk, bob.pk, second));
+  CHECK_EQ(bob.vault.accepted_handshakes.size(), std::size_t(1));
 }
 
 TEST("an opening message that used a one-time prekey is also refused twice") {
@@ -175,13 +295,13 @@ TEST("the accepted-handshake list survives a vault round-trip") {
   CHECK(parsed.handshake_already_accepted(h.initiator_identity, h.ephemeral_pub));
 }
 
-TEST("remember_handshake evicts the oldest once the list is full") {
+TEST("remember_handshake refuses silent replay-history eviction") {
   store::VaultStore s;
   IdentitySigningPublicKey id{};
   randombytes_buf(id.data(), id.size());
 
   std::vector<x25519::PublicKey> ephemerals;
-  for (std::size_t i = 0; i < store::kMaxAcceptedHandshakes + 4; ++i) {
+  for (std::size_t i = 0; i < store::kMaxAcceptedHandshakes; ++i) {
     x25519::PublicKey e{};
     randombytes_buf(e.data(), e.size());
     ephemerals.push_back(e);
@@ -189,11 +309,12 @@ TEST("remember_handshake evicts the oldest once the list is full") {
   }
 
   CHECK_EQ(s.accepted_handshakes.size(), store::kMaxAcceptedHandshakes);
-  // The four oldest were pushed out; the newest are all still there.
-  CHECK(!s.handshake_already_accepted(id, ephemerals[0]));
-  CHECK(!s.handshake_already_accepted(id, ephemerals[3]));
-  CHECK(s.handshake_already_accepted(id, ephemerals[4]));
+  CHECK(s.handshake_already_accepted(id, ephemerals[0]));
   CHECK(s.handshake_already_accepted(id, ephemerals.back()));
+
+  x25519::PublicKey extra{};
+  randombytes_buf(extra.data(), extra.size());
+  CHECK_THROWS(s.remember_handshake(id, extra, 1700010000));
 
   // Recording the same handshake twice is a no-op, not a second entry.
   const std::size_t before = s.accepted_handshakes.size();

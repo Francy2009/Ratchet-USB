@@ -1,4 +1,5 @@
 #include "ratchet/ratchet.hpp"
+#include "ratchet/triple_ratchet.hpp"
 
 #include <sodium.h>
 
@@ -38,12 +39,25 @@ void kdf_ck(const SecureBytes<32>& ck, SecureBytes<32>& new_ck, SecureBytes<32>&
   sodium_memzero(ck_tmp, sizeof ck_tmp);
 }
 
+std::size_t padded_payload_size(std::size_t raw_len) {
+  // ISO/IEC 7816-4 padding adds a 0x80 delimiter byte, so at least 1 extra byte is needed.
+  const std::size_t needed = raw_len + 1;
+  if (needed <= 128) return 128;
+  if (needed <= 256) return 256;
+  if (needed <= 512) return 512;
+  if (needed <= 1024) return 1024;
+  if (needed <= 2048) return 2048;
+  constexpr std::size_t kStep = 1024;
+  return ((needed + kStep - 1) / kStep) * kStep;
+}
+
 }  // namespace detail
 
 namespace {
 
 using detail::kdf_ck;
 using detail::kdf_rk;
+using detail::padded_payload_size;
 
 std::vector<uint8_t> aead_encrypt(const SecureBytes<32>& mk, const std::string& plaintext,
                                   const std::vector<uint8_t>& aad) {
@@ -51,14 +65,25 @@ std::vector<uint8_t> aead_encrypt(const SecureBytes<32>& mk, const std::string& 
   uint8_t nonce[12];
   randombytes_buf(nonce, sizeof nonce);
 
-  std::vector<uint8_t> ct(plaintext.size() + crypto_aead_chacha20poly1305_ietf_ABYTES);
+  const std::size_t target_len = padded_payload_size(plaintext.size());
+  SecureBuffer padded;
+  padded.resize(target_len);
+  std::memcpy(padded.data(), plaintext.data(), plaintext.size());
+  padded[plaintext.size()] = 0x80;
+  if (target_len > plaintext.size() + 1) {
+    std::memset(padded.data() + plaintext.size() + 1, 0x00,
+                target_len - (plaintext.size() + 1));
+  }
+
+  std::vector<uint8_t> ct(target_len + crypto_aead_chacha20poly1305_ietf_ABYTES);
   unsigned long long ct_len = 0;
   if (crypto_aead_chacha20poly1305_ietf_encrypt(
-          ct.data(), &ct_len, reinterpret_cast<const uint8_t*>(plaintext.data()),
-          plaintext.size(), aad.data(), aad.size(), nullptr, nonce, mk.data()) != 0) {
+          ct.data(), &ct_len, padded.data(), padded.size(), aad.data(),
+          aad.size(), nullptr, nonce, mk.data()) != 0) {
     throw Error("message encryption failed");
   }
   ct.resize(ct_len);
+  padded.clear();
 
   std::vector<uint8_t> out;
   out.reserve(sizeof nonce + ct.size());
@@ -78,15 +103,34 @@ std::string aead_decrypt(const SecureBytes<32>& mk, const std::vector<uint8_t>& 
   const uint8_t* ct = envelope.data() + kNonceBytes;
   const std::size_t ct_len = envelope.size() - kNonceBytes;
 
-  std::vector<uint8_t> pt(ct_len);
+  // Decrypt directly into locked memory (SecureBuffer)
+  SecureBuffer pt;
+  pt.resize(ct_len);
   unsigned long long pt_len = 0;
   if (crypto_aead_chacha20poly1305_ietf_decrypt(pt.data(), &pt_len, nullptr, ct, ct_len,
                                                 aad.data(), aad.size(), nonce,
                                                 mk.data()) != 0) {
     throw Error("message authentication failed (wrong key or a tampered message)");
   }
-  std::string out(reinterpret_cast<const char*>(pt.data()), pt_len);
-  sodium_memzero(pt.data(), pt.size());
+
+  std::size_t unpadded_len = pt_len;
+  if (pt_len > 0) {
+    // Check for ISO/IEC 7816-4 padding delimiter: 0x80 preceded by plaintext,
+    // followed by zero or more 0x00 bytes.
+    if (pt[pt_len - 1] == 0x00 || pt[pt_len - 1] == 0x80) {
+      std::size_t i = pt_len;
+      while (i > 0 && pt[i - 1] == 0x00) {
+        --i;
+      }
+      if (i == 0 || pt[i - 1] != 0x80) {
+        throw Error("message padding is invalid (tampered message)");
+      }
+      unpadded_len = i - 1;
+    }
+  }
+
+  std::string out(reinterpret_cast<const char*>(pt.data()), unpadded_len);
+  pt.clear();
   return out;
 }
 
@@ -178,7 +222,9 @@ void init_receiver(store::Session& s, const SecureBytes<32>& shared_secret,
 }
 
 void encrypt(store::Session& s, const std::string& plaintext,
-            message::RatchetHeader& header, std::vector<uint8_t>& ciphertext) {
+            message::RatchetHeader& header, std::vector<uint8_t>& ciphertext,
+            const std::vector<uint8_t>& aad_prefix,
+            const SecureBytes<32>* pq_message_key) {
   if (!s.has_cks) {
     throw Error("internal: session has no sending chain yet");
   }
@@ -193,8 +239,16 @@ void encrypt(store::Session& s, const std::string& plaintext,
   header.n = s.ns;
   s.ns += 1;
 
-  const std::vector<uint8_t> aad = message::header_aad(header);
-  ciphertext = aead_encrypt(mk, plaintext, aad);
+  std::vector<uint8_t> aad = aad_prefix;
+  const std::vector<uint8_t> ratchet_aad = message::header_aad(header);
+  aad.insert(aad.end(), ratchet_aad.begin(), ratchet_aad.end());
+  SecureBytes<32> aead_key;
+  if (pq_message_key) {
+    triple_ratchet::combine_message_keys(mk, *pq_message_key, aead_key);
+  } else {
+    aead_key.assign(mk);
+  }
+  ciphertext = aead_encrypt(aead_key, plaintext, aad);
 }
 
 std::size_t expire_skipped_keys(store::Session& s, uint64_t now) {
@@ -219,12 +273,16 @@ namespace {
 // public `decrypt` below runs it against a copy.
 std::string decrypt_in_place(store::Session& s,
                              const message::RatchetHeader& header,
-                             const std::vector<uint8_t>& ciphertext) {
+                             const std::vector<uint8_t>& ciphertext,
+                             const std::vector<uint8_t>& aad_prefix,
+                             const SecureBytes<32>* pq_message_key) {
   // Before anything else, so an expired key can neither decrypt a message nor
   // keep occupying a slot in the kMaxSkip budget.
   expire_skipped_keys(s, static_cast<uint64_t>(std::time(nullptr)));
 
-  const std::vector<uint8_t> aad = message::header_aad(header);
+  std::vector<uint8_t> aad = aad_prefix;
+  const std::vector<uint8_t> ratchet_aad = message::header_aad(header);
+  aad.insert(aad.end(), ratchet_aad.begin(), ratchet_aad.end());
 
   // Try a cached key from an earlier out-of-order gap first.
   for (auto it = s.skipped.begin(); it != s.skipped.end(); ++it) {
@@ -237,7 +295,14 @@ std::string decrypt_in_place(store::Session& s,
       // message that did it. Passing the cached key straight to the AEAD
       // rather than copying it out also keeps one fewer copy of key material
       // alive.
-      std::string plaintext = aead_decrypt(it->message_key, ciphertext, aad);
+      SecureBytes<32> aead_key;
+      if (pq_message_key) {
+        triple_ratchet::combine_message_keys(it->message_key,
+                                             *pq_message_key, aead_key);
+      } else {
+        aead_key.assign(it->message_key);
+      }
+      std::string plaintext = aead_decrypt(aead_key, ciphertext, aad);
       s.skipped.erase(it);
       return plaintext;
     }
@@ -256,13 +321,21 @@ std::string decrypt_in_place(store::Session& s,
   s.chain_key_recv = std::move(new_ckr);
   s.nr += 1;
 
-  return aead_decrypt(mk, ciphertext, aad);
+  SecureBytes<32> aead_key;
+  if (pq_message_key) {
+    triple_ratchet::combine_message_keys(mk, *pq_message_key, aead_key);
+  } else {
+    aead_key.assign(mk);
+  }
+  return aead_decrypt(aead_key, ciphertext, aad);
 }
 
 }  // namespace
 
 std::string decrypt(store::Session& s, const message::RatchetHeader& header,
-                    const std::vector<uint8_t>& ciphertext) {
+                    const std::vector<uint8_t>& ciphertext,
+                    const std::vector<uint8_t>& aad_prefix,
+                    const SecureBytes<32>* pq_message_key) {
   // Everything decrypt_in_place touches -- the receiving chain, the root key
   // on a DH step, the skipped-key cache -- has to move before the tag is
   // checkable, because the tag cannot be checked until the key exists. So a
@@ -276,7 +349,9 @@ std::string decrypt(store::Session& s, const message::RatchetHeader& header,
   // a thing a type or an assertion can enforce, and not a thing a fuzz harness
   // does by default.
   store::Session candidate = store::clone_session(s);
-  std::string plaintext = decrypt_in_place(candidate, header, ciphertext);
+  std::string plaintext =
+      decrypt_in_place(candidate, header, ciphertext, aad_prefix,
+                       pq_message_key);
   s = std::move(candidate);
   return plaintext;
 }

@@ -106,6 +106,18 @@ class Reader {
     return v;
   }
 
+  SecureBuffer secure_blob(std::size_t max_len) {
+    const uint32_t n = u32();
+    if (n > max_len) {
+      throw Error("secure blob exceeds its size limit");
+    }
+    need(n);
+    SecureBuffer out;
+    out.resize(n);
+    if (n > 0) bytes(out.data(), n);
+    return out;
+  }
+
   std::string str() {
     const std::vector<uint8_t> v = blob();
     return std::string(v.begin(), v.end());

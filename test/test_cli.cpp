@@ -187,13 +187,14 @@ TEST("cli: each command still accepts its own options") {
   CHECK(parse({"init", "--force", "--from-mnemonic"}).from_mnemonic);
   CHECK(parse({"card", "--fingerprint"}).fingerprint_only);
   CHECK(parse({"card", "--rotate-spk"}).rotate_spk);
+  CHECK(parse({"migrate", "--commit"}).commit);
   CHECK_EQ(parse({"card", "--replenish-otpk", "10"}).replenish_otpk,
            static_cast<std::size_t>(10));
   CHECK_EQ(parse({"add", "alice", "--card", "a.txt"}).card_file,
            std::string("a.txt"));
   // --usb-path is common to all of them.
   for (const std::string_view command :
-       {"init", "unlock", "card", "contacts"}) {
+       {"init", "unlock", "anchor", "migrate", "card", "contacts"}) {
     CHECK_EQ(parse({command, "--usb-path", "/x"}).usb_path.string(),
              std::string("/x"));
   }

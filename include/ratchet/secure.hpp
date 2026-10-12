@@ -249,6 +249,23 @@ class SecureBuffer {
   std::size_t size() const noexcept { return buf_.size(); }
   bool empty() const noexcept { return buf_.empty(); }
 
+  uint8_t& operator[](std::size_t i) noexcept { return buf_[i]; }
+  const uint8_t& operator[](std::size_t i) const noexcept { return buf_[i]; }
+
+  // Resize while preserving the lock-on-grow guarantee.  AEAD decryptors use
+  // this so plaintext is written directly into locked memory.
+  void resize(std::size_t n) {
+    if (n > buf_.capacity()) {
+      std::vector<uint8_t> bigger;
+      bigger.reserve(n);
+      lock_region(bigger.data(), bigger.capacity());
+      bigger.insert(bigger.end(), buf_.begin(), buf_.end());
+      unlock_region(buf_.data(), buf_.capacity());
+      buf_.swap(bigger);
+    }
+    buf_.resize(n);
+  }
+
   void append(const uint8_t* p, std::size_t n) {
     if (n == 0) {
       return;
@@ -262,7 +279,7 @@ class SecureBuffer {
       unlock_region(buf_.data(), buf_.capacity());
       buf_.swap(bigger);
     }
-    buf_.resize(old_size + n);
+    resize(old_size + n);
     std::memcpy(buf_.data() + old_size, p, n);
   }
 

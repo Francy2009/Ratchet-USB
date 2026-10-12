@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "ratchet/wire.hpp"
+#include "ratchet/serial.hpp"
 #include "ratchet/x3dh.hpp"
 #include "test_support.hpp"
 
@@ -47,6 +48,94 @@ TEST("a card round-trips through export/import and verifies") {
   for (size_t i = 0; i < otpks.size(); ++i) {
     CHECK_EQ(imported.card.one_time_prekeys[i].id, otpks[i].id);
     CHECK(imported.card.one_time_prekeys[i].pub == otpks[i].pub);
+  }
+}
+
+TEST("a hybrid card requires both identity signatures and authenticates all fields") {
+  const Identity bob = make_identity();
+  pq::MlDsaPrivateSeed pq_seed;
+  randombytes_buf(pq_seed.data(), pq_seed.size());
+  const pq::MlDsaKeyPair pq_identity = pq::ml_dsa_65_from_seed(pq_seed);
+  const prekey::SignedPrekey spk = prekey::generate_signed_prekey(bob.sk, 7);
+  const std::vector<prekey::OneTimePrekey> otpks =
+      prekey::generate_one_time_prekeys(10, 2);
+  store::PqPrekey pq_spk;
+  pq_spk.id = 20;
+  pq_spk.key = pq::generate_ml_kem_768();
+  pq_spk.created_at = 1700000000;
+  std::vector<store::PqPrekey> pq_otpks;
+  store::PqPrekey pq_otpk;
+  pq_otpk.id = 21;
+  pq_otpk.key = pq::generate_ml_kem_768();
+  pq_otpk.created_at = 1700000001;
+  pq_otpks.push_back(std::move(pq_otpk));
+
+  const std::string encoded = x3dh::export_hybrid_card(
+      bob.sk, bob.pk, pq_identity, spk, otpks, pq_spk, pq_otpks);
+  const std::vector<uint8_t> raw_card = wire::decode_block("CARD", encoded);
+  serial::Reader card_reader(raw_card.data(), raw_card.size());
+  uint8_t magic[4]{};
+  card_reader.bytes(magic, sizeof magic);
+  CHECK_EQ(card_reader.u8(), uint8_t(4));
+  const std::vector<uint8_t> signed_body = card_reader.blob();
+  serial::Reader body_reader(signed_body.data(), signed_body.size());
+  CHECK_EQ(body_reader.str(),
+           std::string("Ratchet-USB/v4/hybrid-contact-card"));
+  CHECK_EQ(body_reader.u8(),
+           static_cast<uint8_t>(ProtocolSuite::TripleRatchetV1));
+
+  // Even a correctly signed card must not claim a suite this build does not
+  // implement.
+  std::vector<uint8_t> unsupported_body = signed_body;
+  constexpr std::string_view context = "Ratchet-USB/v4/hybrid-contact-card";
+  unsupported_body[4 + context.size()] = 4;
+  Signature ed_signature{};
+  pq::MlDsaSignature pq_signature{};
+  sign(bob.sk, unsupported_body.data(), unsupported_body.size(), ed_signature);
+  pq::ml_dsa_65_sign(pq_identity.private_seed, unsupported_body.data(),
+                     unsupported_body.size(), pq_signature);
+  std::vector<uint8_t> unsupported_card;
+  serial::Writer<std::vector<uint8_t>> writer(unsupported_card);
+  writer.bytes(magic, sizeof magic);
+  writer.u8(4);
+  writer.blob(unsupported_body.data(), unsupported_body.size());
+  writer.bytes(ed_signature.data(), ed_signature.size());
+  writer.bytes(pq_signature.data(), pq_signature.size());
+  CHECK_THROWS(x3dh::import_card(wire::encode_block(
+      "CARD", unsupported_card.data(), unsupported_card.size())));
+
+  // Cards issued before SPQR integration advertised the hybrid suite.
+  unsupported_body[4 + context.size()] =
+      static_cast<uint8_t>(ProtocolSuite::HybridPqxdhV1);
+  sign(bob.sk, unsupported_body.data(), unsupported_body.size(), ed_signature);
+  pq::ml_dsa_65_sign(pq_identity.private_seed, unsupported_body.data(),
+                     unsupported_body.size(), pq_signature);
+  unsupported_card.clear();
+  serial::Writer<std::vector<uint8_t>> legacy_writer(unsupported_card);
+  legacy_writer.bytes(magic, sizeof magic);
+  legacy_writer.u8(4);
+  legacy_writer.blob(unsupported_body.data(), unsupported_body.size());
+  legacy_writer.bytes(ed_signature.data(), ed_signature.size());
+  legacy_writer.bytes(pq_signature.data(), pq_signature.size());
+  CHECK(x3dh::import_card(wire::encode_block(
+      "CARD", unsupported_card.data(), unsupported_card.size()))
+            .card.maximum_suite == ProtocolSuite::HybridPqxdhV1);
+
+  const x3dh::ImportedCard imported = x3dh::import_card(encoded);
+  CHECK(imported.identity_pub == bob.pk);
+  CHECK(imported.card.pq_identity_pub == pq_identity.public_key);
+  CHECK(imported.card.maximum_suite == ProtocolSuite::TripleRatchetV1);
+  CHECK(imported.card.pq_bundle.has_value());
+  CHECK_EQ(imported.card.pq_bundle->signed_prekey.id, pq_spk.id);
+  CHECK_EQ(imported.card.pq_bundle->one_time_prekeys.size(), std::size_t(1));
+
+  std::vector<uint8_t> raw = wire::decode_block("CARD", encoded);
+  for (const std::size_t offset :
+       {std::size_t(0), raw.size() / 5, raw.size() / 2, raw.size() - 1}) {
+    std::vector<uint8_t> tampered = raw;
+    tampered[offset] ^= 1;
+    CHECK_THROWS(x3dh::import_card(
+        wire::encode_block("CARD", tampered.data(), tampered.size())));
   }
 }
 

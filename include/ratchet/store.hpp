@@ -9,6 +9,7 @@
 
 #include "ratchet/identity.hpp"
 #include "ratchet/prekey.hpp"
+#include "ratchet/protocol.hpp"
 #include "ratchet/secure.hpp"
 #include "ratchet/x25519.hpp"
 
@@ -18,6 +19,10 @@
 // container format this is serialised into.
 namespace ratchet::store {
 
+inline constexpr std::size_t kMaxAliasBytes = 128;
+using VaultId = std::array<uint8_t, 16>;
+using StateDigest = std::array<uint8_t, 32>;
+
 // One of a contact's published one-time prekeys, as seen from our side: only
 // the public half, since the private half never leaves their vault.
 struct PeerOtpk {
@@ -25,14 +30,35 @@ struct PeerOtpk {
   x25519::PublicKey pub{};
 };
 
+struct PeerPqPrekey {
+  uint32_t id = 0;
+  pq::MlKemPublicKey pub{};
+};
+
+struct PeerPqBundle {
+  PeerPqPrekey signed_prekey;
+  Signature ed_signature{};
+  pq::MlDsaSignature pq_signature{};
+  std::vector<PeerPqPrekey> one_time_prekeys;
+};
+
 // A snapshot of a contact's card: everything needed to run X3DH as the
 // initiator. Kept around after import so `send` can perform the handshake
 // lazily, the first time there is something to say to them.
 struct PeerCard {
+  ProtocolSuite maximum_suite = ProtocolSuite::ClassicV2;
   uint32_t spk_id = 0;
   x25519::PublicKey spk_pub{};
   Signature spk_signature{};
   std::vector<PeerOtpk> one_time_prekeys;
+  pq::MlDsaPublicKey pq_identity_pub{};
+  std::optional<PeerPqBundle> pq_bundle;
+};
+
+struct PqPrekey {
+  uint32_t id = 0;
+  pq::MlKemKeyPair key;
+  uint64_t created_at = 0;
 };
 
 struct Contact {
@@ -44,6 +70,7 @@ struct Contact {
   // not that those keys belong to the person the user thinks they are
   // talking to -- that link only exists once a human has checked it.
   bool verified = false;
+  ProtocolSuite minimum_suite = ProtocolSuite::ClassicV2;
   std::optional<PeerCard> card;
 };
 
@@ -87,6 +114,12 @@ struct AcceptedHandshake {
 // the two can be read side by side.
 struct Session {
   std::size_t contact_index = 0;
+  ProtocolSuite suite = ProtocolSuite::ClassicV2;
+  enum class Status : uint8_t { Pending = 1, Confirmed = 2, Closed = 3 };
+  Status status = Status::Pending;
+  std::array<uint8_t, 32> session_id{};
+  bool legacy_read_only = false;
+  SecureBuffer spqr_state;
 
   SecureBytes<32> root_key;
 
@@ -111,6 +144,9 @@ struct Session {
 };
 
 struct VaultStore {
+  VaultId vault_id{};
+  uint64_t generation = 0;
+  StateDigest previous_digest{};
   MasterSeed seed;
 
   uint32_t next_spk_id = 1;
@@ -118,6 +154,9 @@ struct VaultStore {
 
   uint32_t next_otpk_id = 1;
   std::vector<prekey::OneTimePrekey> one_time_prekeys;
+  uint32_t next_pq_prekey_id = 1;
+  std::vector<PqPrekey> pq_signed_prekeys;
+  std::vector<PqPrekey> pq_one_time_prekeys;
 
   std::vector<Contact> contacts;
   std::vector<Session> sessions;
@@ -134,22 +173,19 @@ struct VaultStore {
   bool handshake_already_accepted(const IdentitySigningPublicKey& initiator,
                                   const x25519::PublicKey& ephemeral_pub) const;
 
-  // Records an accepted handshake, evicting the oldest once the list is full.
+  // Records an accepted handshake. Refuses to forget authenticated history
+  // when the bounded store is full: silent eviction would reopen replay.
   // Call it only after the message actually decrypted: recording an attempt
   // that failed would let anyone fill the list with entries of their choosing.
   void remember_handshake(const IdentitySigningPublicKey& initiator,
                           const x25519::PublicKey& ephemeral_pub, uint64_t now);
 };
 
-// How many accepted handshakes are remembered before the oldest is dropped.
+// Maximum number of accepted handshakes stored in a vault.
 //
 // Each entry is 72 bytes, so the whole list is a few tens of kilobytes at this
-// size -- small enough not to matter next to the sessions it protects. Eviction
-// is what puts a ceiling on the vault rather than an expiry date, because an
-// entry that expires makes its handshake replayable again, and there is no age
-// at which that becomes safe. Reaching the ceiling takes 512 handshakes that
-// each decrypted, which over a channel where every message is pasted by hand is
-// not something an attacker arranges quietly.
+// Reaching this ceiling requires explicit session maintenance; records are
+// never silently evicted because that would make an old opening replayable.
 inline constexpr std::size_t kMaxAcceptedHandshakes = 512;
 
 // A deliberate, deep copy of a session, key material and all.

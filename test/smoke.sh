@@ -32,7 +32,7 @@ BOB_PASS="bob-smoke-passphrase"
 
 # Argon2id is deliberately expensive in real use. The smoke test is checking
 # plumbing, not key stretching, so wind it down to keep CI quick.
-CHEAP=(--argon2-time 1 --argon2-mem-kb 8192)
+CHEAP=(--argon2-time 3 --argon2-mem-kb 65536)
 
 fail() {
   echo "smoke: FAIL: $*" >&2
@@ -91,6 +91,13 @@ printf '%s\n' "$BOB_PASS" |
   fail "bob failed to import alice's card"
 
 printf '%s\n' "$ALICE_PASS" |
+  "$BIN" trust --usb-path "$ALICE" bob >/dev/null 2>&1 ||
+  fail "alice failed to verify bob"
+printf '%s\n' "$BOB_PASS" |
+  "$BIN" trust --usb-path "$BOB" alice >/dev/null 2>&1 ||
+  fail "bob failed to verify alice"
+
+printf '%s\n' "$ALICE_PASS" |
   "$BIN" contacts --usb-path "$ALICE" 2>/dev/null | grep -q bob ||
   fail "bob is missing from alice's contact list"
 
@@ -114,8 +121,8 @@ fi
 
 step "Bob receives it"
 printf '%s\n' "$BOB_PASS" |
-  "$BIN" recv --usb-path "$BOB" "$(cat "$WORK/msg1.txt")" >"$WORK/recv1.txt" 2>/dev/null ||
-  fail "bob recv exited non-zero"
+  "$BIN" recv --usb-path "$BOB" "$(cat "$WORK/msg1.txt")" >"$WORK/recv1.txt" 2>"$WORK/recv1.err" ||
+  fail "bob recv exited non-zero: $(cat "$WORK/recv1.err")"
 
 grep -qF "$SECRET_A" "$WORK/recv1.txt" ||
   fail "Bob did not recover the plaintext. Got: $(cat "$WORK/recv1.txt")"

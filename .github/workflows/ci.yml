@@ -23,6 +23,9 @@ env:
   # Keep warnings fatal everywhere. The project already builds clean with
   # -Wall -Wextra -Wpedantic; this stops that from silently regressing.
   WARN_FLAGS: "-Wall -Wextra -Wpedantic -Werror"
+  # github.workspace is valid at workflow scope. runner.temp is not, and using
+  # it here makes GitHub reject the file before any job starts.
+  OPENSSL_PREFIX: ${{ github.workspace }}/.openssl
 
 jobs:
   # ---------------------------------------------------------------------
@@ -54,6 +57,44 @@ jobs:
             exit 1
           fi
 
+  spqr-tests:
+    name: Vendored SPQR and bridge tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal
+
+      - name: Test Signal SPQR
+        run: cargo test --manifest-path third_party/spqr/Cargo.toml --locked
+
+      - name: Test the Rust bridge
+        run: cargo test --manifest-path rust/spqr_bridge/Cargo.toml --locked
+
+      - name: Check locked dependency license inventory
+        run: python3 ci/check-rust-licenses.py --check
+
+  rust-advisories:
+    name: RustSec advisories for both lockfiles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install checksum-verified cargo-audit
+        run: |
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            'https://github.com/rustsec/rustsec/releases/download/cargo-audit/v0.22.2/cargo-audit-x86_64-unknown-linux-gnu-v0.22.2.tgz' \
+            -o "$RUNNER_TEMP/cargo-audit.tgz"
+          echo "ab28a1bdb54db4d5d8ad5981cf1f959410370b3d28250dbd35f6a44248620e39  $RUNNER_TEMP/cargo-audit.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/cargo-audit.tgz" -C "$RUNNER_TEMP"
+
+      - name: Check the bridge and vendored SPQR locks
+        run: |
+          audit="$RUNNER_TEMP/cargo-audit-x86_64-unknown-linux-gnu-v0.22.2/cargo-audit"
+          "$audit" audit --file rust/spqr_bridge/Cargo.lock
+          "$audit" audit --file third_party/spqr/Cargo.lock
+
   # ---------------------------------------------------------------------
   # The main build matrix. Both compilers, both build types -- Debug catches
   # what assertions and unoptimised code catch, Release catches what the
@@ -75,20 +116,36 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal
+
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsodium-dev cmake ${{ matrix.compiler }}
+          sudo apt-get install -y libsodium-dev cmake curl perl make ${{ matrix.compiler }}
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.OPENSSL_PREFIX }}
+          key: openssl-3.5.9-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install pinned OpenSSL 3.5 LTS
+        run: ./ci/install-openssl.sh "$OPENSSL_PREFIX"
 
       - name: Configure
         run: >
           cmake -S . -B build
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
           -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
+          -DOPENSSL_ROOT_DIR="$OPENSSL_PREFIX"
           -DCMAKE_CXX_FLAGS="$WARN_FLAGS"
 
       - name: Build
         run: cmake --build build -j"$(nproc)"
+
+      - name: Verify executable hardening
+        if: matrix.build_type == 'Release'
+        run: ./ci/check-hardening.sh build/ratchet-usb
 
       - name: Unit tests
         run: ctest --test-dir build --output-on-failure
@@ -111,12 +168,25 @@ jobs:
   # checks both derive the same keys from the same vectors.
   # ---------------------------------------------------------------------
   libsodium-native-hkdf:
-    name: libsodium 1.0.20 (native HKDF path)
+    name: libsodium 1.0.22 (native HKDF path)
     runs-on: ubuntu-latest
     env:
-      SODIUM_VERSION: 1.0.20
+      SODIUM_VERSION: 1.0.22
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake curl perl make gcc
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.OPENSSL_PREFIX }}
+          key: openssl-3.5.9-${{ runner.os }}-${{ runner.arch }}
 
       - name: Cache the libsodium build
         id: sodium-cache
@@ -128,14 +198,8 @@ jobs:
       - name: Build libsodium from source
         if: steps.sodium-cache.outputs.cache-hit != 'true'
         env:
-          # Pinned so this job builds the tarball it was written against and
-          # nothing else. To be clear about what this does and does not buy:
-          # it detects the download changing under us -- a tampered mirror, a
-          # re-cut release, a truncated fetch -- but it is trust-on-first-use,
-          # not a signature check, because the digest was taken from a download
-          # of the same file. Verifying jedisct1's signing key would be the
-          # stronger check; this is the one that costs a single line.
-          SODIUM_SHA256: ebb65ef6ca439333c2bb41a0c1990587288da07f6c7fd07cb3a18cc18d30ce19
+          # SHA-256 published with the upstream 1.0.22 release asset.
+          SODIUM_SHA256: adbdd8f16149e81ac6078a03aca6fc03b592b89ef7b5ed83841c086191be3349
         run: |
           curl -sSL -o sodium.tar.gz \
             "https://github.com/jedisct1/libsodium/releases/download/${SODIUM_VERSION}-RELEASE/libsodium-${SODIUM_VERSION}.tar.gz"
@@ -149,7 +213,9 @@ jobs:
       - name: Configure against it
         run: |
           export PKG_CONFIG_PATH="$HOME/sodium-prefix/lib/pkgconfig"
+          ./ci/install-openssl.sh "$OPENSSL_PREFIX"
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            -DOPENSSL_ROOT_DIR="$OPENSSL_PREFIX" \
             -DCMAKE_CXX_FLAGS="$WARN_FLAGS"
 
       - name: Confirm the native HKDF path was actually selected
@@ -188,10 +254,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal
+
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsodium-dev cmake g++
+          sudo apt-get install -y libsodium-dev cmake curl perl make g++
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.OPENSSL_PREFIX }}
+          key: openssl-3.5.9-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install pinned OpenSSL 3.5 LTS
+        run: ./ci/install-openssl.sh "$OPENSSL_PREFIX"
 
       # GCC rather than clang: its sanitizer runtimes ship with the compiler
       # package, whereas clang's live in a separate libclang-rt-*-dev that is
@@ -201,6 +278,7 @@ jobs:
           cmake -S . -B build
           -DCMAKE_BUILD_TYPE=Debug
           -DCMAKE_CXX_COMPILER=g++
+          -DOPENSSL_ROOT_DIR="$OPENSSL_PREFIX"
           -DCMAKE_CXX_FLAGS="$WARN_FLAGS -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all -g"
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
 
@@ -235,14 +313,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal
+
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsodium-dev cmake valgrind
+          sudo apt-get install -y libsodium-dev cmake valgrind curl perl make g++
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.OPENSSL_PREFIX }}
+          key: openssl-3.5.9-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install pinned OpenSSL 3.5 LTS
+        run: ./ci/install-openssl.sh "$OPENSSL_PREFIX"
 
       - name: Configure and build
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug \
+            -DOPENSSL_ROOT_DIR="$OPENSSL_PREFIX" \
             -DCMAKE_CXX_FLAGS="$WARN_FLAGS -g"
           cmake --build build -j"$(nproc)"
 
@@ -269,10 +359,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal
+
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsodium-dev cmake clang libclang-rt-dev
+          sudo apt-get install -y libsodium-dev cmake clang libclang-rt-dev curl perl make
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.OPENSSL_PREFIX }}
+          key: openssl-3.5.9-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install pinned OpenSSL 3.5 LTS
+        run: ./ci/install-openssl.sh "$OPENSSL_PREFIX"
 
       - name: Configure
         run: >
@@ -281,6 +382,7 @@ jobs:
           -DRATCHET_BUILD_TESTS=OFF
           -DCMAKE_CXX_COMPILER=clang++
           -DCMAKE_BUILD_TYPE=Debug
+          -DOPENSSL_ROOT_DIR="$OPENSSL_PREFIX"
 
       - name: Build
         run: cmake --build build-fuzz -j"$(nproc)"
@@ -354,13 +456,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal
+
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsodium-dev cmake clang-tidy
+          sudo apt-get install -y libsodium-dev cmake clang-tidy curl perl make g++
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.OPENSSL_PREFIX }}
+          key: openssl-3.5.9-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install pinned OpenSSL 3.5 LTS
+        run: ./ci/install-openssl.sh "$OPENSSL_PREFIX"
 
       - name: Generate the compilation database
-        run: cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+        run: >
+          cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          -DOPENSSL_ROOT_DIR="$OPENSSL_PREFIX"
 
       - name: Run clang-tidy
         # Only the .cpp files are passed in; the headers are analysed through
@@ -371,24 +486,33 @@ jobs:
         run: find src -name '*.cpp' -print0 | xargs -0 clang-tidy -p build --quiet
 
   # ---------------------------------------------------------------------
-  # The README says macOS "should build" but that nobody has tried it. This
-  # job is what turns that sentence into something checkable. It is allowed
-  # to fail without blocking: an unverified platform should report its state,
-  # not gate a Linux change.
+  # ---------------------------------------------------------------------
+  # macOS verified platform run.
   # ---------------------------------------------------------------------
   macos:
-    name: macOS (unverified platform)
+    name: macOS
     runs-on: macos-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal
 
       - name: Install dependencies
         run: brew install libsodium cmake
 
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.OPENSSL_PREFIX }}
+          key: openssl-3.5.9-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install pinned OpenSSL 3.5 LTS
+        run: ./ci/install-openssl.sh "$OPENSSL_PREFIX"
+
       - name: Configure and build
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            -DOPENSSL_ROOT_DIR="$OPENSSL_PREFIX" \
             -DCMAKE_CXX_FLAGS="$WARN_FLAGS"
           cmake --build build -j"$(sysctl -n hw.ncpu)"
 
@@ -410,12 +534,15 @@ jobs:
     if: always()
     needs:
       - vectors
+      - spqr-tests
+      - rust-advisories
       - build
       - libsodium-native-hkdf
       - sanitizers
       - valgrind
       - fuzz
       - clang-tidy
+      - macos
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any required job did not succeed

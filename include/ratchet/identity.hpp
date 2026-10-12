@@ -6,6 +6,7 @@
 #include <string>
 
 #include "ratchet/bip39.hpp"
+#include "ratchet/pq.hpp"
 #include "ratchet/secure.hpp"
 #include "ratchet/x25519.hpp"
 
@@ -28,6 +29,8 @@ using IdentityDHPublicKey = x25519::PublicKey;
 inline constexpr std::string_view kSeedSalt = "Ratchet-USB/v1/master-seed";
 inline constexpr std::string_view kIdentityEdSeedInfo =
     "Ratchet-USB/v1/identity-ed25519-seed";
+inline constexpr std::string_view kIdentityMlDsaSeedInfo =
+    "Ratchet-USB/v3/ML-DSA-65/identity-seed";
 
 // 128-bit mnemonic entropy -> 256-bit master seed, via HKDF-Extract.
 void derive_master_seed(const bip39::Entropy& entropy, MasterSeed& out);
@@ -39,6 +42,7 @@ void derive_master_seed(const bip39::Entropy& entropy, MasterSeed& out);
 // One key pair, one fingerprint to verify, one thing the mnemonic backs up.
 void derive_identity(const MasterSeed& seed, IdentitySigningSecretKey& sk,
                      IdentitySigningPublicKey& pk);
+pq::MlDsaKeyPair derive_pq_identity(const MasterSeed& seed);
 
 // Converts the Ed25519 identity to the X25519 keypair X3DH's Diffie-Hellman
 // steps run on.
@@ -63,6 +67,8 @@ std::string to_hex(const uint8_t* data, std::size_t len);
 // hash of it -- at 32 bytes there is nothing a hash of it would buy over
 // showing the key itself, and one fewer thing to get subtly wrong.
 std::string fingerprint(const IdentitySigningPublicKey& pk);
+std::string hybrid_fingerprint(const IdentitySigningPublicKey& ed_pk,
+                               const pq::MlDsaPublicKey& pq_pk);
 
 }  // namespace ratchet
 

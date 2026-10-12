@@ -20,6 +20,11 @@ constexpr std::array<uint8_t, 4> kCardMagic = {'R', 'C', 'R', 'C'};
 // accepted with a warning, and the fix for a stale card is to ask for a new one.
 constexpr uint8_t kCardVersion = 2;
 constexpr std::string_view kCardContext = "Ratchet-USB/v2/contact-card";
+constexpr uint8_t kHybridCardVersion = 4;
+constexpr std::string_view kHybridCardContext =
+    "Ratchet-USB/v4/hybrid-contact-card";
+constexpr std::string_view kPqPrekeyContext =
+    "Ratchet-USB/v4/ML-KEM-768/signed-prekey";
 
 }  // namespace
 
@@ -57,6 +62,25 @@ void derive_shared_secret(const IdentitySigningPublicKey& ik_initiator,
 namespace {
 
 using detail::derive_shared_secret;
+
+void combine_hybrid(const IdentitySigningPublicKey& initiator,
+                    const IdentitySigningPublicKey& responder,
+                    const SecureBytes<32>& classical,
+                    const pq::MlKemSharedSecret& pq_static,
+                    const pq::MlKemSharedSecret* pq_one_time,
+                    SecureBytes<32>& out) {
+  SecureBuffer ikm;
+  ikm.append(classical.data(), classical.size());
+  ikm.append(pq_static.data(), pq_static.size());
+  if (pq_one_time) ikm.append(pq_one_time->data(), pq_one_time->size());
+  std::vector<uint8_t> salt;
+  salt.insert(salt.end(), initiator.begin(), initiator.end());
+  salt.insert(salt.end(), responder.begin(), responder.end());
+  kdf::Prk prk;
+  kdf::extract(prk, salt.data(), salt.size(), ikm.data(), ikm.size());
+  kdf::expand(out.data(), out.size(),
+              "Ratchet-USB/v3/PQXDH/X25519+ML-KEM-768", prk);
+}
 
 // Everything a card commits to, in one buffer: the identity, the signed
 // prekey with its id, and every one-time prekey. This is what the card-wide
@@ -102,8 +126,62 @@ std::string export_card(const IdentitySigningSecretKey& identity_sk,
   return wire::encode_block("CARD", body.data(), body.size());
 }
 
+std::string export_hybrid_card(
+    const IdentitySigningSecretKey& identity_sk,
+    const IdentitySigningPublicKey& identity_pk,
+    const pq::MlDsaKeyPair& pq_identity, const prekey::SignedPrekey& spk,
+    const std::vector<prekey::OneTimePrekey>& otpks,
+    const store::PqPrekey& pq_spk,
+    const std::vector<store::PqPrekey>& pq_otpks) {
+  std::vector<uint8_t> pq_prekey_body;
+  serial::Writer<std::vector<uint8_t>> pw(pq_prekey_body);
+  pw.str(kPqPrekeyContext);
+  pw.u32(pq_spk.id);
+  pw.bytes(pq_spk.key.public_key.data(), pq_spk.key.public_key.size());
+  Signature pq_spk_ed_sig{};
+  pq::MlDsaSignature pq_spk_pq_sig{};
+  sign(identity_sk, pq_prekey_body.data(), pq_prekey_body.size(), pq_spk_ed_sig);
+  pq::ml_dsa_65_sign(pq_identity.private_seed, pq_prekey_body.data(),
+                     pq_prekey_body.size(), pq_spk_pq_sig);
+
+  std::vector<uint8_t> signed_body;
+  serial::Writer<std::vector<uint8_t>> w(signed_body);
+  w.str(kHybridCardContext);
+  w.u8(static_cast<uint8_t>(ProtocolSuite::TripleRatchetV1));
+  w.bytes(identity_pk.data(), identity_pk.size());
+  w.bytes(pq_identity.public_key.data(), pq_identity.public_key.size());
+  w.u32(spk.id); w.bytes(spk.pub.data(), spk.pub.size());
+  w.bytes(spk.signature.data(), spk.signature.size());
+  w.u32(static_cast<uint32_t>(otpks.size()));
+  for (const auto& o : otpks) { w.u32(o.id); w.bytes(o.pub.data(), o.pub.size()); }
+  w.u32(pq_spk.id);
+  w.bytes(pq_spk.key.public_key.data(), pq_spk.key.public_key.size());
+  w.bytes(pq_spk_ed_sig.data(), pq_spk_ed_sig.size());
+  w.bytes(pq_spk_pq_sig.data(), pq_spk_pq_sig.size());
+  w.u32(static_cast<uint32_t>(pq_otpks.size()));
+  for (const auto& p : pq_otpks) {
+    w.u32(p.id); w.bytes(p.key.public_key.data(), p.key.public_key.size());
+  }
+
+  Signature ed_card_sig{};
+  pq::MlDsaSignature pq_card_sig{};
+  sign(identity_sk, signed_body.data(), signed_body.size(), ed_card_sig);
+  pq::ml_dsa_65_sign(pq_identity.private_seed, signed_body.data(),
+                     signed_body.size(), pq_card_sig);
+  std::vector<uint8_t> body;
+  serial::Writer<std::vector<uint8_t>> ow(body);
+  ow.bytes(kCardMagic.data(), kCardMagic.size());
+  ow.u8(kHybridCardVersion);
+  ow.blob(signed_body.data(), signed_body.size());
+  ow.bytes(ed_card_sig.data(), ed_card_sig.size());
+  ow.bytes(pq_card_sig.data(), pq_card_sig.size());
+  return wire::encode_block("CARD", body.data(), body.size());
+}
+
 ImportedCard import_card(std::string_view base64_card) {
-  const std::vector<uint8_t> body = wire::decode_block("CARD", base64_card);
+  constexpr std::size_t kMaxCardBytes = std::size_t{2} * 1024u * 1024u;
+  const std::vector<uint8_t> body =
+      wire::decode_block("CARD", base64_card, kMaxCardBytes);
   serial::Reader r(body.data(), body.size());
 
   std::array<uint8_t, 4> magic{};
@@ -112,17 +190,21 @@ ImportedCard import_card(std::string_view base64_card) {
     throw Error("not a Ratchet-USB contact card");
   }
   const uint8_t version = r.u8();
-  if (version != kCardVersion) {
+  if (version != kCardVersion && version != kHybridCardVersion) {
     throw Error(
         "unsupported contact card version " + std::to_string(version) +
         " (this build issues and accepts version " +
-        std::to_string(kCardVersion) +
+        std::to_string(kHybridCardVersion) +
         "; ask them for a freshly exported card)");
   }
 
   const std::vector<uint8_t> signed_body = r.blob();
   Signature card_sig{};
   r.bytes(card_sig.data(), card_sig.size());
+  pq::MlDsaSignature pq_card_sig{};
+  if (version == kHybridCardVersion) {
+    r.bytes(pq_card_sig.data(), pq_card_sig.size());
+  }
   if (!r.at_end()) {
     throw Error("contact card has trailing data");
   }
@@ -131,17 +213,35 @@ ImportedCard import_card(std::string_view base64_card) {
   // then used to check the body that carries it. Everything after this point
   // is walking bytes that key has signed.
   serial::Reader br(signed_body.data(), signed_body.size());
-  if (br.str() != kCardContext) {
+  const std::string context = br.str();
+  if ((version == kCardVersion && context != kCardContext) ||
+      (version == kHybridCardVersion && context != kHybridCardContext)) {
     throw Error("not a Ratchet-USB contact card");
   }
 
   ImportedCard out;
+  if (version == kHybridCardVersion) {
+    const uint8_t suite = br.u8();
+    if (suite != static_cast<uint8_t>(ProtocolSuite::HybridPqxdhV1) &&
+        suite != static_cast<uint8_t>(ProtocolSuite::TripleRatchetV1)) {
+      throw Error("unsupported hybrid protocol suite");
+    }
+    out.card.maximum_suite = static_cast<ProtocolSuite>(suite);
+  }
   br.bytes(out.identity_pub.data(), out.identity_pub.size());
+  if (version == kHybridCardVersion) {
+    br.bytes(out.card.pq_identity_pub.data(), out.card.pq_identity_pub.size());
+  }
   if (!verify(out.identity_pub, signed_body.data(), signed_body.size(),
               card_sig)) {
     throw Error(
         "the card's signature does not match its identity key (the card may "
         "be corrupted or forged)");
+  }
+  if (version == kHybridCardVersion &&
+      !pq::ml_dsa_65_verify(out.card.pq_identity_pub, signed_body.data(),
+                            signed_body.size(), pq_card_sig)) {
+    throw Error("the card's post-quantum signature is invalid");
   }
 
   out.card.spk_id = br.u32();
@@ -157,6 +257,34 @@ ImportedCard import_card(std::string_view base64_card) {
     o.id = br.u32();
     br.bytes(o.pub.data(), o.pub.size());
     out.card.one_time_prekeys.push_back(o);
+  }
+
+  if (version == kHybridCardVersion) {
+    store::PeerPqBundle bundle;
+    bundle.signed_prekey.id = br.u32();
+    br.bytes(bundle.signed_prekey.pub.data(), bundle.signed_prekey.pub.size());
+    br.bytes(bundle.ed_signature.data(), bundle.ed_signature.size());
+    br.bytes(bundle.pq_signature.data(), bundle.pq_signature.size());
+    const uint32_t pq_count = br.u32();
+    bundle.one_time_prekeys.reserve(
+        br.bounded_count(pq_count, 4 + pq::kMlKem768PublicKeyBytes));
+    for (uint32_t i = 0; i < pq_count; ++i) {
+      store::PeerPqPrekey p;
+      p.id = br.u32(); br.bytes(p.pub.data(), p.pub.size());
+      bundle.one_time_prekeys.push_back(p);
+    }
+    std::vector<uint8_t> prekey_body;
+    serial::Writer<std::vector<uint8_t>> pkw(prekey_body);
+    pkw.str(kPqPrekeyContext);
+    pkw.u32(bundle.signed_prekey.id);
+    pkw.bytes(bundle.signed_prekey.pub.data(), bundle.signed_prekey.pub.size());
+    if (!verify(out.identity_pub, prekey_body.data(), prekey_body.size(),
+                bundle.ed_signature) ||
+        !pq::ml_dsa_65_verify(out.card.pq_identity_pub, prekey_body.data(),
+                              prekey_body.size(), bundle.pq_signature)) {
+      throw Error("the hybrid signed prekey is invalid");
+    }
+    out.card.pq_bundle = std::move(bundle);
   }
 
   if (!br.at_end()) {
@@ -238,8 +366,66 @@ InitiatorResult initiate(const IdentitySigningSecretKey& my_identity_sk,
   // We are the initiator; the contact is the responder.
   derive_shared_secret(my_identity_pk, contact.identity_pub, parts,
                        result.shared_secret);
+  if (card.pq_bundle) {
+    store::PeerPqBundle& pqb = *card.pq_bundle;
+    pq::MlKemSharedSecret static_secret;
+    pq::MlKemCiphertext static_ct{};
+    pq::ml_kem_768_encapsulate(pqb.signed_prekey.pub, static_ct, static_secret);
+    result.pq_spk_id = pqb.signed_prekey.id;
+    result.pq_spk_ciphertext = static_ct;
+    pq::MlKemSharedSecret one_time_secret;
+    pq::MlKemSharedSecret* one_time_ptr = nullptr;
+    if (!pqb.one_time_prekeys.empty()) {
+      const std::size_t pick = randombytes_uniform(
+          static_cast<uint32_t>(pqb.one_time_prekeys.size()));
+      const store::PeerPqPrekey picked = pqb.one_time_prekeys[pick];
+      pqb.one_time_prekeys.erase(pqb.one_time_prekeys.begin() +
+                                 static_cast<std::ptrdiff_t>(pick));
+      pq::MlKemCiphertext ct{};
+      pq::ml_kem_768_encapsulate(picked.pub, ct, one_time_secret);
+      result.pq_otpk_id = picked.id;
+      result.pq_otpk_ciphertext = ct;
+      one_time_ptr = &one_time_secret;
+    }
+    SecureBytes<32> hybrid;
+    combine_hybrid(my_identity_pk, contact.identity_pub, result.shared_secret,
+                   static_secret, one_time_ptr, hybrid);
+    result.shared_secret.assign(hybrid);
+  }
   result.ephemeral_sk = std::move(eph_sk);
   return result;
+}
+
+SecureBytes<32> respond_hybrid(
+    const IdentitySigningSecretKey& my_identity_sk,
+    const IdentitySigningPublicKey& my_identity_pk,
+    const IdentitySigningPublicKey& their_identity_pk,
+    const x25519::PublicKey& their_ephemeral_pub,
+    const prekey::SignedPrekey& my_spk,
+    const prekey::OneTimePrekey* my_otpk,
+    const store::PqPrekey& my_pq_spk,
+    const pq::MlKemCiphertext& pq_spk_ciphertext,
+    const store::PqPrekey* my_pq_otpk,
+    const pq::MlKemCiphertext* pq_otpk_ciphertext) {
+  SecureBytes<32> classical = respond(my_identity_sk, my_identity_pk,
+                                      their_identity_pk, their_ephemeral_pub,
+                                      my_spk, my_otpk);
+  pq::MlKemSharedSecret pq_static;
+  pq::ml_kem_768_decapsulate(my_pq_spk.key.private_seed, pq_spk_ciphertext,
+                             pq_static);
+  pq::MlKemSharedSecret pq_one_time;
+  pq::MlKemSharedSecret* pq_one_time_ptr = nullptr;
+  if (my_pq_otpk && pq_otpk_ciphertext) {
+    pq::ml_kem_768_decapsulate(my_pq_otpk->key.private_seed,
+                               *pq_otpk_ciphertext, pq_one_time);
+    pq_one_time_ptr = &pq_one_time;
+  } else if (my_pq_otpk || pq_otpk_ciphertext) {
+    throw Error("message authentication failed");
+  }
+  SecureBytes<32> hybrid;
+  combine_hybrid(their_identity_pk, my_identity_pk, classical, pq_static,
+                 pq_one_time_ptr, hybrid);
+  return hybrid;
 }
 
 SecureBytes<32> respond(const IdentitySigningSecretKey& my_identity_sk,

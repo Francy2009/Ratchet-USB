@@ -86,6 +86,14 @@ std::string export_card(const IdentitySigningSecretKey& identity_sk,
                         const prekey::SignedPrekey& spk,
                         const std::vector<prekey::OneTimePrekey>& otpks);
 
+std::string export_hybrid_card(
+    const IdentitySigningSecretKey& identity_sk,
+    const IdentitySigningPublicKey& identity_pk,
+    const pq::MlDsaKeyPair& pq_identity, const prekey::SignedPrekey& spk,
+    const std::vector<prekey::OneTimePrekey>& otpks,
+    const store::PqPrekey& pq_spk,
+    const std::vector<store::PqPrekey>& pq_otpks);
+
 struct ImportedCard {
   IdentitySigningPublicKey identity_pub{};
   store::PeerCard card;
@@ -118,6 +126,10 @@ struct InitiatorResult {
   // established, against a card that is mutated during the call.
   x25519::PublicKey spk_pub{};
   std::optional<uint32_t> otpk_id;
+  std::optional<uint32_t> pq_spk_id;
+  std::optional<pq::MlKemCiphertext> pq_spk_ciphertext;
+  std::optional<uint32_t> pq_otpk_id;
+  std::optional<pq::MlKemCiphertext> pq_otpk_ciphertext;
 };
 
 // Alice's side: consumes one of Bob's one-time prekeys from `contact.card`
@@ -138,6 +150,18 @@ SecureBytes<32> respond(const IdentitySigningSecretKey& my_identity_sk,
                         const x25519::PublicKey& their_ephemeral_pub,
                         const prekey::SignedPrekey& my_spk,
                         const prekey::OneTimePrekey* my_otpk);
+
+SecureBytes<32> respond_hybrid(
+    const IdentitySigningSecretKey& my_identity_sk,
+    const IdentitySigningPublicKey& my_identity_pk,
+    const IdentitySigningPublicKey& their_identity_pk,
+    const x25519::PublicKey& their_ephemeral_pub,
+    const prekey::SignedPrekey& my_spk,
+    const prekey::OneTimePrekey* my_otpk,
+    const store::PqPrekey& my_pq_spk,
+    const pq::MlKemCiphertext& pq_spk_ciphertext,
+    const store::PqPrekey* my_pq_otpk,
+    const pq::MlKemCiphertext* pq_otpk_ciphertext);
 
 }  // namespace ratchet::x3dh
 

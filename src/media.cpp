@@ -2,6 +2,11 @@
 
 #include <unistd.h>
 
+#if defined(__APPLE__)
+#include <sys/param.h>
+#include <sys/mount.h>
+#endif
+
 #include <algorithm>
 #include <fstream>
 #include <sstream>
@@ -134,6 +139,37 @@ bool device_is_removable(const std::string& device, const fs::path& sys_root) {
 }
 
 std::vector<fs::path> removable_drives() {
+#if defined(__APPLE__)
+  struct statfs* mounts = nullptr;
+  const int count = getmntinfo(&mounts, MNT_NOWAIT);
+  if (count <= 0 || mounts == nullptr) {
+    return {};
+  }
+
+  std::vector<fs::path> drives;
+  for (int i = 0; i < count; ++i) {
+    const std::string_view mount_point(mounts[i].f_mntonname);
+    // "/" is never offered
+    if (mount_point == "/" || !mount_point.starts_with("/Volumes/")) {
+      continue;
+    }
+    const fs::path p(mount_point);
+    std::error_code ec;
+    if (!fs::is_directory(p, ec) || fs::equivalent(p, "/", ec)) {
+      continue;
+    }
+    if (::access(p.c_str(), W_OK | X_OK) != 0) {
+      continue;
+    }
+    if ((mounts[i].f_flags & MNT_RDONLY) != 0) {
+      continue;
+    }
+    if (std::find(drives.begin(), drives.end(), p) == drives.end()) {
+      drives.push_back(p);
+    }
+  }
+  return drives;
+#else
   const std::string mounts_text = read_file_text("/proc/mounts");
   if (mounts_text.empty()) {
     return {};
@@ -163,6 +199,7 @@ std::vector<fs::path> removable_drives() {
     }
   }
   return drives;
+#endif
 }
 
 std::vector<fs::path> drives_with_vault() {

@@ -19,7 +19,9 @@ std::string encode_block(std::string_view label, const uint8_t* data,
 // Throws Error if the label does not match (wrong kind of block pasted where
 // another was expected) or the payload is not valid base64.
 std::vector<uint8_t> decode_block(std::string_view expected_label,
-                                  std::string_view text);
+                                  std::string_view text,
+                                  std::size_t max_decoded_bytes =
+                                      std::size_t{8} * 1024u * 1024u);
 
 }  // namespace ratchet::wire
 

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project(ratchet-usb
-        VERSION 0.2.0
+        VERSION 0.5.0
         DESCRIPTION "Encrypted seed vault for over-the-top messaging"
         LANGUAGES CXX)
 
@@ -17,6 +17,56 @@ option(RATCHET_BUILD_TESTS "Build the unit tests" ON)
 option(RATCHET_HARDENED "Enable hardening flags" ON)
 option(RATCHET_BUILD_FUZZERS "Build the libFuzzer targets (clang only)" OFF)
 
+find_program(CARGO_EXECUTABLE cargo REQUIRED)
+find_package(Threads REQUIRED)
+file(GLOB_RECURSE RATCHET_SPQR_RUST_SOURCES CONFIGURE_DEPENDS
+     "${CMAKE_CURRENT_SOURCE_DIR}/rust/spqr_bridge/src/*.rs"
+     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/spqr/src/*.rs"
+     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/spqr/src/*.proto")
+set(RATCHET_SPQR_ARCHIVE
+    "${CMAKE_CURRENT_BINARY_DIR}/cargo/release/libratchet_spqr_bridge.a")
+add_custom_command(
+  OUTPUT "${RATCHET_SPQR_ARCHIVE}"
+  COMMAND ${CMAKE_COMMAND} -E env
+          "CARGO_TARGET_DIR=${CMAKE_CURRENT_BINARY_DIR}/cargo"
+          ${CARGO_EXECUTABLE} build
+          --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/rust/spqr_bridge/Cargo.toml"
+          --release --locked
+  DEPENDS ${RATCHET_SPQR_RUST_SOURCES}
+          "${CMAKE_CURRENT_SOURCE_DIR}/rust/spqr_bridge/Cargo.toml"
+          "${CMAKE_CURRENT_SOURCE_DIR}/rust/spqr_bridge/Cargo.lock"
+          "${CMAKE_CURRENT_SOURCE_DIR}/third_party/spqr/Cargo.toml"
+          "${CMAKE_CURRENT_SOURCE_DIR}/third_party/spqr/build.rs"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  VERBATIM)
+add_custom_target(ratchet_spqr_build DEPENDS "${RATCHET_SPQR_ARCHIVE}")
+add_library(ratchet_spqr STATIC IMPORTED GLOBAL)
+set_target_properties(ratchet_spqr PROPERTIES
+                      IMPORTED_LOCATION "${RATCHET_SPQR_ARCHIVE}")
+add_dependencies(ratchet_spqr ratchet_spqr_build)
+
+if(APPLE AND NOT DEFINED OPENSSL_ROOT_DIR)
+  execute_process(
+    COMMAND brew --prefix openssl@3.5
+    OUTPUT_VARIABLE BREW_OPENSSL_PREFIX
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+  )
+  if(NOT BREW_OPENSSL_PREFIX OR NOT EXISTS "${BREW_OPENSSL_PREFIX}")
+    execute_process(
+      COMMAND brew --prefix openssl@3
+      OUTPUT_VARIABLE BREW_OPENSSL_PREFIX
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET
+    )
+  endif()
+  if(BREW_OPENSSL_PREFIX AND EXISTS "${BREW_OPENSSL_PREFIX}")
+    set(OPENSSL_ROOT_DIR "${BREW_OPENSSL_PREFIX}")
+  endif()
+endif()
+
+find_package(OpenSSL 3.5 REQUIRED COMPONENTS Crypto)
+
 # Shared by ratchet_core and the harnesses, so the library the fuzzer explores
 # and the harness driving it agree on their sanitizer runtimes -- mixing them
 # links but misreports.
@@ -24,11 +74,17 @@ set(RATCHET_FUZZ_FLAGS
     -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g)
 
 # --- libsodium -------------------------------------------------------------
-# The only crypto dependency. pkg-config first, then a manual search so the
+# The classical crypto dependency. pkg-config first, then a manual search so the
 # build also works against a libsodium installed by hand on the USB toolchain.
 find_package(PkgConfig QUIET)
 if(PkgConfig_FOUND)
   pkg_check_modules(SODIUM QUIET IMPORTED_TARGET libsodium)
+  if(UNIX AND NOT APPLE)
+    pkg_check_modules(LIBSECRET QUIET IMPORTED_TARGET libsecret-1)
+  endif()
+endif()
+if(APPLE)
+  find_library(SECURITY_FRAMEWORK Security REQUIRED)
 endif()
 
 if(TARGET PkgConfig::SODIUM)
@@ -90,6 +146,7 @@ add_library(ratchet_core
             src/bip39_wordlist.cpp
             src/kdf.cpp
             src/x25519.cpp
+            src/pq.cpp
             src/identity.cpp
             src/prekey.cpp
             src/wire.cpp
@@ -97,7 +154,10 @@ add_library(ratchet_core
             src/message.cpp
             src/x3dh.cpp
             src/ratchet.cpp
+            src/triple_ratchet.cpp
+            src/spqr.cpp
             src/session.cpp
+            src/rollback.cpp
             src/vault.cpp
             src/terminal.cpp
             src/media.cpp
@@ -110,7 +170,19 @@ add_library(ratchet_core
 
 target_include_directories(ratchet_core PUBLIC
                            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
-target_link_libraries(ratchet_core PUBLIC sodium::sodium)
+target_link_libraries(ratchet_core PUBLIC sodium::sodium OpenSSL::Crypto
+                      ratchet_spqr Threads::Threads ${CMAKE_DL_LIBS})
+if(UNIX AND NOT APPLE)
+  target_link_libraries(ratchet_core PUBLIC m)
+endif()
+if(APPLE)
+  target_link_libraries(ratchet_core PRIVATE "${SECURITY_FRAMEWORK}")
+elseif(TARGET PkgConfig::LIBSECRET)
+  target_link_libraries(ratchet_core PRIVATE PkgConfig::LIBSECRET)
+  target_compile_definitions(ratchet_core PRIVATE RATCHET_HAVE_LIBSECRET)
+else()
+  message(WARNING "libsecret-1 not found: host rollback anchors are unavailable; USB-only mode will be reported")
+endif()
 
 if(RATCHET_HAVE_SODIUM_HKDF)
   target_compile_definitions(ratchet_core PUBLIC RATCHET_HAVE_SODIUM_HKDF)
@@ -128,7 +200,17 @@ if(RATCHET_HARDENED AND NOT MSVC)
   # This says nothing about core dumps, whatever an earlier version of this
   # comment claimed -- keeping secrets out of a dump is a run-time matter, and
   # it is harden_process() in src/secure.cpp that does it.
-  target_compile_definitions(ratchet_core PRIVATE _FORTIFY_SOURCE=2)
+  if(APPLE)
+    target_compile_definitions(ratchet_core PRIVATE
+      $<$<CONFIG:Release>:_FORTIFY_SOURCE=2>)
+  else()
+    target_compile_definitions(ratchet_core PRIVATE
+      $<$<CONFIG:Release>:_FORTIFY_SOURCE=3>)
+  endif()
+  target_compile_options(ratchet_core PRIVATE -fPIE)
+  if(NOT APPLE AND NOT WIN32)
+    target_link_options(ratchet_core INTERFACE -Wl,-z,relro,-z,now)
+  endif()
 endif()
 
 # Instrument the library itself, not just the harness: libFuzzer steers by
@@ -144,7 +226,11 @@ endif()
 add_executable(ratchet-usb src/main.cpp)
 target_link_libraries(ratchet-usb PRIVATE ratchet_core)
 if(RATCHET_HARDENED AND NOT MSVC)
-  target_compile_options(ratchet-usb PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(ratchet-usb PRIVATE -Wall -Wextra -Wpedantic
+                         -fstack-protector-strong -fPIE)
+  if(NOT APPLE AND NOT WIN32)
+    target_link_options(ratchet-usb PRIVATE -pie -Wl,-z,relro,-z,now)
+  endif()
 endif()
 
 # --- tests -----------------------------------------------------------------

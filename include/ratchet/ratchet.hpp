@@ -65,6 +65,10 @@ void kdf_rk(const SecureBytes<32>& rk, const SecureBytes<32>& dh_out,
 void kdf_ck(const SecureBytes<32>& ck, SecureBytes<32>& new_ck,
             SecureBytes<32>& mk);
 
+// Computes the padded payload size for a plaintext of raw_len bytes using
+// bucketed ISO/IEC 7816-4 padding.
+std::size_t padded_payload_size(std::size_t raw_len);
+
 }  // namespace detail
 
 // Alice: turns an X3DH shared secret into a session's sending half. Her
@@ -84,7 +88,9 @@ void init_receiver(store::Session& session, const SecureBytes<32>& shared_secret
 // Encrypts `plaintext`, advancing the sending chain by one message, and fills
 // in the envelope's ratchet header.
 void encrypt(store::Session& session, const std::string& plaintext,
-            message::RatchetHeader& header, std::vector<uint8_t>& ciphertext);
+            message::RatchetHeader& header, std::vector<uint8_t>& ciphertext,
+            const std::vector<uint8_t>& aad_prefix = {},
+            const SecureBytes<32>* pq_message_key = nullptr);
 
 // Drops every cached skipped key stashed more than kSkippedKeyMaxAgeSeconds
 // before `now` (a Unix timestamp in seconds), and returns how many were
@@ -105,7 +111,9 @@ std::size_t expire_skipped_keys(store::Session& session, uint64_t now);
 // forged header cannot leave a half-ratcheted session behind and a message
 // delivered twice cannot burn the key belonging to the next one.
 std::string decrypt(store::Session& session, const message::RatchetHeader& header,
-                    const std::vector<uint8_t>& ciphertext);
+                    const std::vector<uint8_t>& ciphertext,
+                    const std::vector<uint8_t>& aad_prefix = {},
+                    const SecureBytes<32>* pq_message_key = nullptr);
 
 }  // namespace ratchet::ratchet
 

@@ -184,9 +184,14 @@ std::vector<ContactRow> Driver::contact_rows() const {
   rows.reserve(store.contacts.size());
   for (std::size_t i = 0; i < store.contacts.size(); ++i) {
     ContactRow row;
-    row.alias = store.contacts[i].alias;
-    row.fingerprint = fingerprint(store.contacts[i].identity_pub);
-    row.verified = store.contacts[i].verified;
+    const auto& contact = store.contacts[i];
+    row.alias = contact.alias;
+    row.fingerprint = contact.card.has_value() &&
+                              contact.card.value().pq_bundle.has_value()
+                          ? hybrid_fingerprint(contact.identity_pub,
+                                               contact.card.value().pq_identity_pub)
+                          : fingerprint(contact.identity_pub);
+    row.verified = contact.verified;
     row.has_session = store.find_session(i) >= 0;
     rows.push_back(std::move(row));
   }
@@ -243,6 +248,12 @@ void Driver::use_path(const fs::path& path) {
 
   vault_path_ = vault::vault_path(drive_);
   std::error_code ec;
+  const fs::path prepared = drive_ / vault::kPreparedVaultFilename;
+  if (fs::exists(prepared, ec)) {
+    model_.set_status("A verified migration is waiting for `migrate --commit`; "
+                      "messaging is disabled.", screen::Style::Bad);
+    return;
+  }
   if (fs::exists(vault_path_, ec)) {
     unlock();
   } else {
@@ -255,7 +266,7 @@ void Driver::use_path(const fs::path& path) {
 
 void Driver::unlock() {
   try {
-    const app::VaultFile file = app::read_vault(vault_path_);
+    app::VaultFile file = app::read_vault(vault_path_);
     SecureString passphrase;
     {
       Modal modal(raw_);
@@ -263,7 +274,7 @@ void Driver::unlock() {
       passphrase = terminal::read_passphrase(std::string(t(Str::PassphrasePrompt)));
       std::cout << "\n  " << t(Str::DerivingKey) << "\n";
       std::cout.flush();
-      vault_ = app::open_vault(file, std::move(passphrase));
+      vault_ = app::open_vault(std::move(file), std::move(passphrase));
     }
   } catch (const std::exception&) {
     // Deliberately not the underlying message: a wrong passphrase and a
@@ -291,7 +302,8 @@ void Driver::after_unlock() {
     save();
   }
 
-  fingerprint_ = fingerprint(identity_pk);
+  fingerprint_ = hybrid_fingerprint(
+      identity_pk, derive_pq_identity(vault().store.seed).public_key);
   go_home();
 }
 
@@ -343,6 +355,8 @@ void Driver::create_identity(bool from_mnemonic) {
     }
 
     store::VaultStore store;
+    randombytes_buf(store.vault_id.data(), store.vault_id.size());
+    store.generation = 1;
     derive_master_seed(entropy, store.seed);
     entropy.wipe();
 
@@ -351,6 +365,7 @@ void Driver::create_identity(bool from_mnemonic) {
     derive_identity(store.seed, identity_sk, identity_pk);
     app::rotate_signed_prekey(store, identity_sk);
     app::replenish_one_time_prekeys(store, cli::kDefaultOtpkCount);
+    app::replenish_pq_prekeys(store, cli::kDefaultOtpkCount);
     identity_sk.wipe();
 
     SecureString passphrase = terminal::read_new_passphrase(
@@ -362,11 +377,13 @@ void Driver::create_identity(bool from_mnemonic) {
     const vault::Params params;
     std::cout << "\n  " << t(Str::DerivingKey) << "\n";
       std::cout.flush();
+    vault::FileLock creation_lock(vault_path_);
     const SecureBuffer plaintext = store::serialize(store);
     const std::vector<uint8_t> file = vault::seal(plaintext, passphrase, params);
     vault::write_file(vault_path_, file, /*overwrite=*/false);
 
     app::OpenedVault opened;
+    opened.lock = std::move(creation_lock);
     opened.store = std::move(store);
     opened.params = params;
     opened.passphrase = std::move(passphrase);
@@ -389,15 +406,25 @@ void Driver::show_card() {
     IdentitySigningPublicKey identity_pk;
     derive_identity(vault().store.seed, identity_sk, identity_pk);
 
-    const bool changed =
+    bool changed =
         app::resign_stale_prekeys(vault().store, identity_pk, identity_sk);
     if (vault().store.signed_prekeys.empty()) {
       identity_sk.wipe();
       throw Error("internal: vault has no signed prekey");
     }
-    std::string card = x3dh::export_card(identity_sk, identity_pk,
-                                         vault().store.signed_prekeys.back(),
-                                         vault().store.one_time_prekeys);
+    const std::size_t pq_before = vault().store.pq_one_time_prekeys.size();
+    const bool had_pq_spk = !vault().store.pq_signed_prekeys.empty();
+    app::replenish_pq_prekeys(vault().store, cli::kDefaultOtpkCount);
+    changed = changed || !had_pq_spk ||
+              vault().store.pq_one_time_prekeys.size() != pq_before;
+    const pq::MlDsaKeyPair pq_identity =
+        derive_pq_identity(vault().store.seed);
+    std::string card = x3dh::export_hybrid_card(
+        identity_sk, identity_pk, pq_identity,
+        vault().store.signed_prekeys.back(),
+        vault().store.one_time_prekeys,
+        vault().store.pq_signed_prekeys.back(),
+        vault().store.pq_one_time_prekeys);
     identity_sk.wipe();
     if (changed) {
       save();
@@ -411,6 +438,11 @@ void Driver::show_card() {
 void Driver::import_card() {
   std::string text = model_.text();
   const std::string alias = model_.alias();
+  if (alias.size() > store::kMaxAliasBytes) {
+    model_.clear_text();
+    report(Error("contact alias exceeds the 128-byte limit"));
+    return;
+  }
   model_.clear_text();
 
   try {
@@ -428,6 +460,7 @@ void Driver::import_card() {
     store::Contact contact;
     contact.alias = alias;
     contact.identity_pub = imported.identity_pub;
+    contact.minimum_suite = imported.card.maximum_suite;
     contact.card = imported.card;
     store.contacts.push_back(std::move(contact));
     save();
