@@ -134,9 +134,8 @@ Per segnalare una vulnerabilità e leggere i limiti nel dettaglio, vedi
 
 ## Evoluzione del progetto
 
-I tag `milestone/*` segnano passaggi di sviluppo nel repository locale. Sono
-riferimenti alla cronologia del codice, non versioni pubblicate o approvate
-per l'uso in produzione. I tag di questa migrazione sono:
+Questi tag sono pubblicati come pre-release su GitHub. Segnano passaggi di
+sviluppo, non versioni approvate per l'uso in produzione.
 
 | Tag | Passaggio |
 | --- | --- |
@@ -146,10 +145,12 @@ per l'uso in produzione. I tag di questa migrazione sono:
 | `milestone/triple-ratchet` | Messaggi, sessioni e persistenza Triple Ratchet. |
 | `milestone/pq-migration-docs` | Build Rust fissata e documentazione della migrazione. |
 | `milestone/local-verification` | Correzione del parser e verifiche locali della migrazione. |
+| `v0.5.0-dev` | Istantanea di sviluppo attuale su `main`. |
 
 Puoi esaminare una tappa con `git show milestone/triple-ratchet` o confrontare
-due tappe con `git diff milestone/pq-hybrid milestone/triple-ratchet`. I tag
-restano locali finché non vengono pubblicati esplicitamente.
+due tappe con `git diff milestone/pq-hybrid milestone/triple-ratchet`. Gli
+stessi commit sono elencati su
+<https://github.com/Francy2009/Ratchet-USB/releases>.
 
 ## Licenza e componenti
 

@@ -123,8 +123,8 @@ See [SECURITY.md](SECURITY.md) for vulnerability reporting and detailed limits.
 
 ## Project history
 
-The `milestone/*` tags mark development steps in the local repository. They
-are code history references, not published or production-approved releases.
+These tags are published as GitHub pre-releases. They mark development steps.
+They are not production-approved releases.
 
 | Tag | Step |
 | --- | --- |
@@ -134,10 +134,11 @@ are code history references, not published or production-approved releases.
 | `milestone/triple-ratchet` | Triple Ratchet messages, sessions, and persistence. |
 | `milestone/pq-migration-docs` | Pinned Rust build and migration documentation. |
 | `milestone/local-verification` | Parser fix and local migration checks. |
+| `v0.5.0-dev` | Current development snapshot on `main`. |
 
 Inspect a step with `git show milestone/triple-ratchet`, or compare two steps
-with `git diff milestone/pq-hybrid milestone/triple-ratchet`. Tags remain local
-until someone explicitly publishes them.
+with `git diff milestone/pq-hybrid milestone/triple-ratchet`. The same commits
+are listed at <https://github.com/Francy2009/Ratchet-USB/releases>.
 
 ## License and dependencies
 
