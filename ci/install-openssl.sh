@@ -20,14 +20,17 @@ fi
 mkdir -p "${work_dir}"
 curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
   "${source_url}" --output "${work_dir}/${archive}"
-# macOS runners ship a sha256sum that rejects GNU --check. --version succeeds
-# only for GNU coreutils, so that is the test.
-if sha256sum --version >/dev/null 2>&1; then
-  echo "${expected_sha256}  ${work_dir}/${archive}" | sha256sum --check --strict
-elif command -v shasum >/dev/null 2>&1; then
-  echo "${expected_sha256}  ${work_dir}/${archive}" | shasum -a 256 --check
+# The sha256sum on GitHub's macOS runners accepts --version and then rejects
+# --check. Do not probe it. Darwin has shasum; Linux has GNU sha256sum.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  actual_sha256=$(shasum -a 256 "${work_dir}/${archive}")
 else
-  echo "no SHA-256 checker found" >&2
+  actual_sha256=$(sha256sum "${work_dir}/${archive}")
+fi
+actual_sha256=${actual_sha256%%[[:space:]]*}
+if [[ "${actual_sha256}" != "${expected_sha256}" ]]; then
+  printf 'OpenSSL archive checksum mismatch\nexpected %s\nactual   %s\n' \
+    "${expected_sha256}" "${actual_sha256}" >&2
   exit 1
 fi
 tar -xzf "${work_dir}/${archive}" -C "${work_dir}"
