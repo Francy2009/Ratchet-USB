@@ -23,7 +23,9 @@ env:
   # Keep warnings fatal everywhere. The project already builds clean with
   # -Wall -Wextra -Wpedantic; this stops that from silently regressing.
   WARN_FLAGS: "-Wall -Wextra -Wpedantic -Werror"
-  OPENSSL_PREFIX: ${{ runner.temp }}/openssl-3.5.9
+  # github.workspace is valid at workflow scope. runner.temp is not, and using
+  # it here makes GitHub reject the file before any job starts.
+  OPENSSL_PREFIX: ${{ github.workspace }}/.openssl
 
 jobs:
   # ---------------------------------------------------------------------
@@ -317,11 +319,20 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsodium-dev cmake valgrind
+          sudo apt-get install -y libsodium-dev cmake valgrind curl perl make g++
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.OPENSSL_PREFIX }}
+          key: openssl-3.5.9-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install pinned OpenSSL 3.5 LTS
+        run: ./ci/install-openssl.sh "$OPENSSL_PREFIX"
 
       - name: Configure and build
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug \
+            -DOPENSSL_ROOT_DIR="$OPENSSL_PREFIX" \
             -DCMAKE_CXX_FLAGS="$WARN_FLAGS -g"
           cmake --build build -j"$(nproc)"
 
@@ -354,7 +365,15 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsodium-dev cmake clang libclang-rt-dev
+          sudo apt-get install -y libsodium-dev cmake clang libclang-rt-dev curl perl make
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.OPENSSL_PREFIX }}
+          key: openssl-3.5.9-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install pinned OpenSSL 3.5 LTS
+        run: ./ci/install-openssl.sh "$OPENSSL_PREFIX"
 
       - name: Configure
         run: >
@@ -363,6 +382,7 @@ jobs:
           -DRATCHET_BUILD_TESTS=OFF
           -DCMAKE_CXX_COMPILER=clang++
           -DCMAKE_BUILD_TYPE=Debug
+          -DOPENSSL_ROOT_DIR="$OPENSSL_PREFIX"
 
       - name: Build
         run: cmake --build build-fuzz -j"$(nproc)"
@@ -442,10 +462,20 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsodium-dev cmake clang-tidy
+          sudo apt-get install -y libsodium-dev cmake clang-tidy curl perl make g++
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.OPENSSL_PREFIX }}
+          key: openssl-3.5.9-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install pinned OpenSSL 3.5 LTS
+        run: ./ci/install-openssl.sh "$OPENSSL_PREFIX"
 
       - name: Generate the compilation database
-        run: cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+        run: >
+          cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          -DOPENSSL_ROOT_DIR="$OPENSSL_PREFIX"
 
       - name: Run clang-tidy
         # Only the .cpp files are passed in; the headers are analysed through
