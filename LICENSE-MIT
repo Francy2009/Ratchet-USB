@@ -1,3 +1,8 @@
+This file records the MIT license for Francesco Dell'Orto's Ratchet-USB
+code as published before it was combined with Signal SPQR. It does not
+license third_party/spqr, the Rust bridge, or the combined distribution.
+Those are under AGPL-3.0-only; see LICENSE.
+
 MIT License
 
 Copyright (c) 2026 Francesco Dell'Orto
