@@ -41,6 +41,12 @@ void kdf_ck(const SecureBytes<32>& ck, SecureBytes<32>& new_ck, SecureBytes<32>&
 
 std::size_t padded_payload_size(std::size_t raw_len) {
   // ISO/IEC 7816-4 padding adds a 0x80 delimiter byte, so at least 1 extra byte is needed.
+  // The limit is also what lets GCC prove the following memcpy stays inside
+  // the buffer. Without it, -O3 -Werror treats a wrapping size_t as a real
+  // overflow and rejects the Release build.
+  if (raw_len > message::kMaxPlaintextBytes) {
+    throw Error("message exceeds the 4 MiB plaintext limit");
+  }
   const std::size_t needed = raw_len + 1;
   if (needed <= 128) return 128;
   if (needed <= 256) return 256;
@@ -66,6 +72,9 @@ std::vector<uint8_t> aead_encrypt(const SecureBytes<32>& mk, const std::string& 
   randombytes_buf(nonce, sizeof nonce);
 
   const std::size_t target_len = padded_payload_size(plaintext.size());
+  if (plaintext.size() > target_len) {
+    throw Error("message exceeds the 4 MiB plaintext limit");
+  }
   SecureBuffer padded;
   padded.resize(target_len);
   std::memcpy(padded.data(), plaintext.data(), plaintext.size());

@@ -594,7 +594,9 @@ mod lib_test {
     use rand::Rng;
     use rand::TryRngCore;
     use rand_core::OsRng;
-    use std::assert_matches;
+    // std::assert_matches is unstable on the pinned Rust 1.88 toolchain.
+    // The matches crate is already a dev-dependency and provides the same macro.
+    use matches::assert_matches;
 
     use super::*;
 
