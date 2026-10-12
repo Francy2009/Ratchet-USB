@@ -122,12 +122,8 @@ TEST("harden_process disables core dumps and ptrace attachment") {
   if (pid == 0) {
     const bool fully_hardened = harden_process();
 
-    // The return value says whether *everything* was applied, and on a platform
-    // without the ptrace half it is honestly false -- so it is only an
-    // assertion where both halves exist. Asserting it everywhere is what broke
-    // this test on macOS: the code was right and the test was wrong about what
-    // the platform promises. What follows checks the effects themselves, which
-    // is the property that actually matters.
+    // The return value says whether both protections were applied. That is
+    // true on Linux. What follows checks the effects themselves.
 #if defined(__linux__)
     if (!fully_hardened) {
       _exit(10);

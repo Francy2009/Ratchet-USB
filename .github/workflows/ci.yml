@@ -486,46 +486,6 @@ jobs:
         run: find src -name '*.cpp' -print0 | xargs -0 clang-tidy -p build --quiet
 
   # ---------------------------------------------------------------------
-  # ---------------------------------------------------------------------
-  # macOS verified platform run.
-  # ---------------------------------------------------------------------
-  macos:
-    name: macOS
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install pinned Rust toolchain
-        run: rustup toolchain install 1.88.0 --profile minimal
-
-      - name: Install dependencies
-        run: brew install libsodium cmake
-
-      - uses: actions/cache@v4
-        with:
-          path: ${{ env.OPENSSL_PREFIX }}
-          key: openssl-3.5.9-${{ runner.os }}-${{ runner.arch }}
-
-      - name: Install pinned OpenSSL 3.5 LTS
-        run: ./ci/install-openssl.sh "$OPENSSL_PREFIX"
-
-      - name: Configure and build
-        run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
-            -DOPENSSL_ROOT_DIR="$OPENSSL_PREFIX" \
-            -DCMAKE_CXX_FLAGS="$WARN_FLAGS"
-          cmake --build build -j"$(sysctl -n hw.ncpu)"
-
-      - name: Unit tests
-        run: ctest --test-dir build --output-on-failure
-
-      - name: End-to-end smoke test
-        run: ./test/smoke.sh build/ratchet-usb
-
-      - name: The interface, driven through a real terminal
-        run: python3 test/smoke_ui.py build/ratchet-usb
-
-  # ---------------------------------------------------------------------
   # A single gate for branch protection to point at, so adding a job above
   # does not mean remembering to update a required-checks list.
   # ---------------------------------------------------------------------
@@ -542,7 +502,6 @@ jobs:
       - valgrind
       - fuzz
       - clang-tidy
-      - macos
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any required job did not succeed

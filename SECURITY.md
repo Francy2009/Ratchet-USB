@@ -64,8 +64,8 @@ What it does not add:
   D-Bus; its record contains no message or key material.
 - **No application-created secret files on the host.** The interface does not
   write config, history, cache, theme or layout files. The optional rollback
-  anchor is a non-secret generation/digest record in Secret Service or
-  Keychain and is created only by the `anchor` command. The operating system
+  anchor is a non-secret generation/digest record in Secret Service and is
+  created only by the `anchor` command. The operating system
   may still write process memory to swap or a crash dump.
 - **No clipboard or editor handoff.** The interface does not use OSC 52,
   `$EDITOR`, a helper program, `fork` or `exec` for messages.
@@ -119,11 +119,10 @@ to defend against it:
 - **A compromised host.** Malware on the machine you plug the drive into can
   read the passphrase as you type it and the plaintext as it is printed.
   Nothing in this tool can fix that.
-- **Another process running as you.** On Linux the tool clears its dumpable
-  flag (`PR_SET_DUMPABLE = 0`), and on macOS it sets `PT_DENY_ATTACH`, stopping
-  a process running as the same user from attaching with ptrace and reading an
-  open vault out of memory. Refusing to write a core dump (`RLIMIT_CORE = 0`)
-  works on both.
+- **Another process running as you.** The tool clears its dumpable flag
+  (`PR_SET_DUMPABLE = 0`), stopping a process running as the same user from
+  attaching with ptrace and reading an open vault out of memory. It also
+  refuses to write a core dump (`RLIMIT_CORE = 0`).
 - **Traffic analysis.** The transport sees a base64 block at a certain time,
   addressed to somebody. While payload lengths are masked into discrete buckets
   via ISO/IEC 7816-4 padding, transmission timing and metadata are not hidden.

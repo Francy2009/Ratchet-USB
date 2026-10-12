@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <charconv>
 #include <cstring>
-#include <memory>
 #include <string_view>
 #include <vector>
 
@@ -14,8 +13,6 @@
 
 #if defined(RATCHET_HAVE_LIBSECRET)
 #include <libsecret/secret.h>
-#elif defined(__APPLE__)
-#include <Security/Security.h>
 #endif
 
 namespace ratchet::rollback {
@@ -70,48 +67,6 @@ const SecretSchema kSchema = {
     "org.ratchet_usb.RollbackAnchor", SECRET_SCHEMA_NONE,
     {{"vault-id", SECRET_SCHEMA_ATTRIBUTE_STRING},
      {nullptr, SECRET_SCHEMA_ATTRIBUTE_STRING}}};
-#elif defined(__APPLE__)
-// Current macOS SDKs mark the SecKeychain functions deprecated, and CI builds
-// with -Werror. SecItem is the supported Keychain interface.
-struct ReleaseCf {
-  void operator()(CFTypeRef value) const noexcept {
-    if (value != nullptr) CFRelease(value);
-  }
-};
-
-template <typename Ref>
-using CfPtr = std::unique_ptr<std::remove_pointer_t<Ref>, ReleaseCf>;
-
-constexpr std::string_view kKeychainService = "Ratchet-USB";
-
-CfPtr<CFStringRef> cf_string(std::string_view text) {
-  CFStringRef raw = CFStringCreateWithBytes(
-      kCFAllocatorDefault, reinterpret_cast<const UInt8*>(text.data()),
-      static_cast<CFIndex>(text.size()), kCFStringEncodingUTF8, false);
-  if (raw == nullptr) throw Error("cannot encode a Keychain attribute");
-  return CfPtr<CFStringRef>(raw);
-}
-
-CfPtr<CFDataRef> cf_data(std::string_view bytes) {
-  CFDataRef raw = CFDataCreate(
-      kCFAllocatorDefault, reinterpret_cast<const UInt8*>(bytes.data()),
-      static_cast<CFIndex>(bytes.size()));
-  if (raw == nullptr) throw Error("cannot encode a Keychain value");
-  return CfPtr<CFDataRef>(raw);
-}
-
-CfPtr<CFMutableDictionaryRef> keychain_query(CFStringRef account) {
-  CFMutableDictionaryRef raw = CFDictionaryCreateMutable(
-      kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks,
-      &kCFTypeDictionaryValueCallBacks);
-  if (raw == nullptr) throw Error("cannot build a Keychain query");
-  CfPtr<CFMutableDictionaryRef> query(raw);
-  const CfPtr<CFStringRef> service = cf_string(kKeychainService);
-  CFDictionarySetValue(query.get(), kSecClass, kSecClassGenericPassword);
-  CFDictionarySetValue(query.get(), kSecAttrService, service.get());
-  CFDictionarySetValue(query.get(), kSecAttrAccount, account);
-  return query;
-}
 #endif
 
 }  // namespace
@@ -158,7 +113,7 @@ Status validate(const AnchorRecord& anchor, const store::VaultStore& usb,
 }
 
 bool backend_available() {
-#if defined(RATCHET_HAVE_LIBSECRET) || defined(__APPLE__)
+#if defined(RATCHET_HAVE_LIBSECRET)
   return true;
 #else
   return false;
@@ -180,24 +135,6 @@ std::optional<AnchorRecord> load(const store::VaultId& vault_id) {
   const AnchorRecord record = decode(password);
   secret_password_free(password);
   return record;
-#elif defined(__APPLE__)
-  const CfPtr<CFStringRef> account = cf_string(id);
-  CfPtr<CFMutableDictionaryRef> query = keychain_query(account.get());
-  CFDictionarySetValue(query.get(), kSecReturnData, kCFBooleanTrue);
-  CFDictionarySetValue(query.get(), kSecMatchLimit, kSecMatchLimitOne);
-  CFTypeRef found = nullptr;
-  const OSStatus status = SecItemCopyMatching(query.get(), &found);
-  if (status == errSecItemNotFound) return std::nullopt;
-  if (status != errSecSuccess || found == nullptr ||
-      CFGetTypeID(found) != CFDataGetTypeID()) {
-    if (found != nullptr) CFRelease(found);
-    throw Error("cannot read rollback anchor from Keychain");
-  }
-  const CfPtr<CFDataRef> secret(static_cast<CFDataRef>(found));
-  const UInt8* bytes = CFDataGetBytePtr(secret.get());
-  const CFIndex length = CFDataGetLength(secret.get());
-  const char* text = bytes == nullptr ? "" : reinterpret_cast<const char*>(bytes);
-  return decode(std::string_view(text, static_cast<std::size_t>(length)));
 #else
   (void)id;
   return std::nullopt;
@@ -217,22 +154,6 @@ void store(const AnchorRecord& record) {
     if (error != nullptr) g_error_free(error);
     throw Error("cannot store rollback anchor in Secret Service: " + message);
   }
-#elif defined(__APPLE__)
-  const CfPtr<CFStringRef> account = cf_string(id);
-  CfPtr<CFMutableDictionaryRef> query = keychain_query(account.get());
-  const CfPtr<CFDataRef> secret = cf_data(value);
-  const void* keys[] = {kSecValueData};
-  const void* values[] = {secret.get()};
-  const CfPtr<CFDictionaryRef> changes(CFDictionaryCreate(
-      kCFAllocatorDefault, keys, values, 1, &kCFTypeDictionaryKeyCallBacks,
-      &kCFTypeDictionaryValueCallBacks));
-  if (changes == nullptr) throw Error("cannot store rollback anchor in Keychain");
-  OSStatus status = SecItemUpdate(query.get(), changes.get());
-  if (status == errSecItemNotFound) {
-    CFDictionarySetValue(query.get(), kSecValueData, secret.get());
-    status = SecItemAdd(query.get(), nullptr);
-  }
-  if (status != errSecSuccess) throw Error("cannot store rollback anchor in Keychain");
 #else
   (void)id;
   (void)value;

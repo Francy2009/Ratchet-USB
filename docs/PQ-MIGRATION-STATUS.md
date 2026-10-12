@@ -34,7 +34,7 @@ need review when updating the vendored SPQR source and its dependencies;
 the CI advisory job checks both lockfiles for newly reported vulnerabilities.
 
 Remaining release gates: independent cryptographic and implementation review,
-extended fuzzing, CI on Linux and macOS for this branch, and a fresh assessment
+extended fuzzing, and a fresh assessment
 of process-memory exposure in the Rust SPQR implementation. Rust's internal
 SPQR state is deserialized into ordinary heap memory while processing a
 message; the persisted serialized state resides in a locked C++ buffer.

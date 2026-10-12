@@ -63,11 +63,10 @@ adatta al tuo caso, passa `--usb-path <cartella>` ai comandi o imposta
 
 ## Installazione
 
-Sono supportati Linux e macOS. Servono un compilatore C++20, CMake 3.16 o più
+Il sistema supportato è Linux. Servono un compilatore C++20, CMake 3.16 o più
 recente, libsodium, OpenSSL 3.5 o più recente, Rust 1.88 o più recente e Cargo.
-Su macOS puoi installare le dipendenze principali con
-`brew install libsodium openssl@3.5 cmake rust`. Su Linux `setup.sh` propone i
-pacchetti per dnf, apt, pacman o zypper prima di installarli.
+`setup.sh` propone i pacchetti per dnf, apt, pacman o zypper prima di
+installarli.
 
 Tieni aggiornate le librerie crittografiche del sistema. I controlli automatici
 usano OpenSSL 3.5.9 e libsodium 1.0.22; una build locale può collegarsi ad altre
@@ -87,8 +86,8 @@ ctest --test-dir build --output-on-failure
 ```
 
 Per usare dipendenze già installate, `./setup.sh --no-deps` salta il passaggio
-dei pacchetti. Windows non è ancora supportato nativamente; l'applicazione usa
-funzioni di terminale e filesystem proprie di Linux e macOS.
+dei pacchetti. macOS e Windows non sono supportati. L'applicazione usa funzioni
+di terminale e filesystem proprie di Linux.
 
 ## Cosa succede a un messaggio
 
@@ -125,9 +124,8 @@ sulla memoria fisica della chiavetta dopo un salvataggio.
 
 I test locali coprono scambi completi, messaggi fuori ordine, replay, dati
 alterati e compatibilità con la suite precedente. Restano necessari una
-revisione crittografica indipendente, test di fuzzing più lunghi e la verifica
-della nuova build nei sistemi CI Linux e macOS. Non usare questa versione come
-unica protezione per comunicazioni ad alto rischio.
+revisione crittografica indipendente e test di fuzzing più lunghi. Non usare
+questa versione come unica protezione per comunicazioni ad alto rischio.
 
 Per segnalare una vulnerabilità e leggere i limiti nel dettaglio, vedi
 [SECURITY.md](SECURITY.md).

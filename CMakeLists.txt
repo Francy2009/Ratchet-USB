@@ -5,6 +5,10 @@ project(ratchet-usb
         DESCRIPTION "Encrypted seed vault for over-the-top messaging"
         LANGUAGES CXX)
 
+if(APPLE)
+  message(FATAL_ERROR "Ratchet-USB supports Linux only.")
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -45,26 +49,6 @@ set_target_properties(ratchet_spqr PROPERTIES
                       IMPORTED_LOCATION "${RATCHET_SPQR_ARCHIVE}")
 add_dependencies(ratchet_spqr ratchet_spqr_build)
 
-if(APPLE AND NOT DEFINED OPENSSL_ROOT_DIR)
-  execute_process(
-    COMMAND brew --prefix openssl@3.5
-    OUTPUT_VARIABLE BREW_OPENSSL_PREFIX
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET
-  )
-  if(NOT BREW_OPENSSL_PREFIX OR NOT EXISTS "${BREW_OPENSSL_PREFIX}")
-    execute_process(
-      COMMAND brew --prefix openssl@3
-      OUTPUT_VARIABLE BREW_OPENSSL_PREFIX
-      OUTPUT_STRIP_TRAILING_WHITESPACE
-      ERROR_QUIET
-    )
-  endif()
-  if(BREW_OPENSSL_PREFIX AND EXISTS "${BREW_OPENSSL_PREFIX}")
-    set(OPENSSL_ROOT_DIR "${BREW_OPENSSL_PREFIX}")
-  endif()
-endif()
-
 find_package(OpenSSL 3.5 REQUIRED COMPONENTS Crypto)
 
 # Shared by ratchet_core and the harnesses, so the library the fuzzer explores
@@ -79,12 +63,7 @@ set(RATCHET_FUZZ_FLAGS
 find_package(PkgConfig QUIET)
 if(PkgConfig_FOUND)
   pkg_check_modules(SODIUM QUIET IMPORTED_TARGET libsodium)
-  if(UNIX AND NOT APPLE)
-    pkg_check_modules(LIBSECRET QUIET IMPORTED_TARGET libsecret-1)
-  endif()
-endif()
-if(APPLE)
-  find_library(SECURITY_FRAMEWORK Security REQUIRED)
+  pkg_check_modules(LIBSECRET QUIET IMPORTED_TARGET libsecret-1)
 endif()
 
 if(TARGET PkgConfig::SODIUM)
@@ -172,12 +151,10 @@ target_include_directories(ratchet_core PUBLIC
                            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 target_link_libraries(ratchet_core PUBLIC sodium::sodium OpenSSL::Crypto
                       ratchet_spqr Threads::Threads ${CMAKE_DL_LIBS})
-if(UNIX AND NOT APPLE)
+if(UNIX)
   target_link_libraries(ratchet_core PUBLIC m)
 endif()
-if(APPLE)
-  target_link_libraries(ratchet_core PRIVATE "${SECURITY_FRAMEWORK}")
-elseif(TARGET PkgConfig::LIBSECRET)
+if(TARGET PkgConfig::LIBSECRET)
   target_link_libraries(ratchet_core PRIVATE PkgConfig::LIBSECRET)
   target_compile_definitions(ratchet_core PRIVATE RATCHET_HAVE_LIBSECRET)
 else()
@@ -200,15 +177,10 @@ if(RATCHET_HARDENED AND NOT MSVC)
   # This says nothing about core dumps, whatever an earlier version of this
   # comment claimed -- keeping secrets out of a dump is a run-time matter, and
   # it is harden_process() in src/secure.cpp that does it.
-  if(APPLE)
-    target_compile_definitions(ratchet_core PRIVATE
-      $<$<CONFIG:Release>:_FORTIFY_SOURCE=2>)
-  else()
-    target_compile_definitions(ratchet_core PRIVATE
-      $<$<CONFIG:Release>:_FORTIFY_SOURCE=3>)
-  endif()
+  target_compile_definitions(ratchet_core PRIVATE
+    $<$<CONFIG:Release>:_FORTIFY_SOURCE=3>)
   target_compile_options(ratchet_core PRIVATE -fPIE)
-  if(NOT APPLE AND NOT WIN32)
+  if(NOT WIN32)
     target_link_options(ratchet_core INTERFACE -Wl,-z,relro,-z,now)
   endif()
 endif()
@@ -228,7 +200,7 @@ target_link_libraries(ratchet-usb PRIVATE ratchet_core)
 if(RATCHET_HARDENED AND NOT MSVC)
   target_compile_options(ratchet-usb PRIVATE -Wall -Wextra -Wpedantic
                          -fstack-protector-strong -fPIE)
-  if(NOT APPLE AND NOT WIN32)
+  if(NOT WIN32)
     target_link_options(ratchet-usb PRIVATE -pie -Wl,-z,relro,-z,now)
   endif()
 endif()

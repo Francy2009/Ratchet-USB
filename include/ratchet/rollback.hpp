@@ -34,7 +34,7 @@ std::string vault_id_text(const store::VaultId& id);
 Status validate(const AnchorRecord& anchor, const store::VaultStore& usb,
                 const Digest& usb_digest);
 
-// The host backend is Secret Service on Linux and Keychain on macOS. A missing
+// The host backend is Secret Service. A missing
 // service is not silently treated as protection: load returns nullopt and the
 // caller must expose USB-only mode to the user.
 bool backend_available();

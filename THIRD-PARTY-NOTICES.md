@@ -56,8 +56,7 @@ ML-KEM-768 and ML-DSA-65 EVP implementations. No post-quantum primitive is
 implemented locally. OpenSSL is used under the Apache License 2.0; CI builds
 the 3.5.9 LTS source archive pinned by SHA-256.
 
-## Secret Service and macOS Keychain
+## Secret Service
 
-Rollback anchors use libsecret/Secret Service when available on Linux and the
-Security framework on macOS. They are optional build/platform integrations;
-without one, the program visibly reports rollback-unprotected USB-only mode.
+Rollback anchors use libsecret/Secret Service when it is available. Without
+it, the program visibly reports rollback-unprotected USB-only mode.

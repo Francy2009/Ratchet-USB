@@ -300,13 +300,8 @@ void write_file(const std::filesystem::path& path,
   }
 
   // fsync before the rename, otherwise the rename can reach the USB stick
-  // before the data does. On macOS, F_FULLFSYNC asks the drive controller
-  // to physically flush its internal write cache to non-volatile media.
-#if defined(__APPLE__)
-  if (::fcntl(fd, F_FULLFSYNC) != 0 && ::fsync(fd) != 0) {
-#else
+  // before the data does.
   if (::fsync(fd) != 0) {
-#endif
     const std::string msg = std::strerror(errno);
     ::close(fd);
     ::unlinkat(dir_fd, tmp_name.c_str(), 0);
@@ -330,12 +325,7 @@ void write_file(const std::filesystem::path& path,
   }
 
   // Flush the directory entry too, so the file survives an unplug.
-  // On macOS, APFS/HFS+ can return EINVAL, ENOTSUP or ENOTTY on directory fsync.
-#if defined(__APPLE__)
-  if (::fsync(dir_fd) != 0 && errno != EINVAL && errno != ENOTSUP && errno != ENOTTY) {
-#else
   if (::fsync(dir_fd) != 0) {
-#endif
     const std::string msg = std::strerror(errno);
     ::close(dir_fd);
     throw Error("cannot flush vault directory: " + msg);
@@ -409,11 +399,7 @@ void promote_prepared(const std::filesystem::path& prepared,
     errno = saved;
     throw_errno("cannot promote prepared vault");
   }
-#if defined(__APPLE__)
-  if (::fsync(dir_fd) != 0 && errno != EINVAL && errno != ENOTSUP && errno != ENOTTY) {
-#else
   if (::fsync(dir_fd) != 0) {
-#endif
     const int saved = errno;
     ::close(dir_fd);
     errno = saved;

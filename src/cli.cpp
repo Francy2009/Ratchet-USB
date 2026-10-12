@@ -125,7 +125,7 @@ void print_usage(std::ostream& os) {
      << "            the old vault.bin).\n"
      << "  unlock    Decrypt the vault and print the identity fingerprint.\n"
      << "  anchor    Explicitly enroll this authenticated vault state in the\n"
-     << "            host Secret Service or macOS Keychain for rollback checks.\n"
+     << "            host Secret Service for rollback checks.\n"
      << "  migrate   Prepare and verify a v3 vault beside a legacy vault. Run\n"
      << "            it again with --commit to promote the new vault atomically.\n"
      << "  card      Print this identity's contact card, to paste to a\n"

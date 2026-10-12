@@ -70,8 +70,8 @@ OpenedVault open_vault(VaultFile file, SecureString passphrase,
 void save_vault(const std::filesystem::path& path, store::VaultStore& store,
                 const vault::Params& params, const SecureString& passphrase);
 
-// Enrolls the current authenticated USB state in the host Secret Service or
-// Keychain. This is deliberately separate from open: host trust is an explicit
+// Enrolls the current authenticated USB state in the host Secret Service.
+// This is deliberately separate from open: host trust is an explicit
 // user action, never a side effect of merely inserting a drive.
 void enroll_rollback_anchor(const OpenedVault& opened);
 

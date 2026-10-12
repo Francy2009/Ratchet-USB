@@ -56,11 +56,9 @@ your setup, pass `--usb-path <directory>` to commands or set `RATCHET_USB_PATH`.
 
 ## Installing
 
-Linux and macOS are supported. You need a C++20 compiler, CMake 3.16 or newer,
-libsodium, OpenSSL 3.5 or newer, Rust 1.88 or newer, and Cargo. On macOS, the
-main dependencies can be installed with
-`brew install libsodium openssl@3.5 cmake rust`. On Linux, `setup.sh` proposes
-packages for dnf, apt, pacman, or zypper before installing them.
+Linux is the supported system. You need a C++20 compiler, CMake 3.16 or newer,
+libsodium, OpenSSL 3.5 or newer, Rust 1.88 or newer, and Cargo. `setup.sh`
+proposes packages for dnf, apt, pacman, or zypper before installing them.
 
 Keep the system cryptography libraries updated. CI checks OpenSSL 3.5.9 and
 libsodium 1.0.22; a local build may link other installed versions.
@@ -79,8 +77,8 @@ ctest --test-dir build --output-on-failure
 ```
 
 Use `./setup.sh --no-deps` to skip system package installation when dependencies
-are already present. Native Windows support is not available yet; the program
-uses terminal and filesystem functions specific to Linux and macOS.
+are already present. macOS and Windows are not supported. The program uses
+terminal and filesystem functions specific to Linux.
 
 ## What happens to a message
 
@@ -115,9 +113,8 @@ of a USB drive after a save.
 
 Local tests cover complete conversations, out-of-order messages, replays,
 altered data, and compatibility with the earlier suite. An independent
-cryptographic review, longer fuzzing, and CI verification of this branch on
-Linux and macOS are still needed. Do not use this development version as the
-sole protection for high-risk communications.
+cryptographic review and longer fuzzing are still needed. Do not use this
+development version as the sole protection for high-risk communications.
 
 See [SECURITY.md](SECURITY.md) for vulnerability reporting and detailed limits.
 

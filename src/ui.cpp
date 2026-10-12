@@ -1,7 +1,6 @@
 // For _exit, in the handler that hands the terminal back when the terminal
-// itself is going away. Glibc declares it through other headers, so leaving
-// this out still compiled on Linux with both compilers; libc++ does not, and
-// the macOS build is what said so.
+// itself is going away. Glibc declares it through other headers; libc++ does
+// not, so the include stays.
 #include <unistd.h>
 
 #include <chrono>
