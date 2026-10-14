@@ -1,0 +1,138 @@
+(* Symbolic model of the session rules in src/session.cpp.
+   One opening and one follow-up. The ratchet chain, SPQR state, and the
+   X3DH transcript are not expanded: the message key is the symbolic
+   combination of a classical key and a post-quantum key, then bound to
+   the ordered identity encodings.
+
+   The honest sender is a triple session. "xwing" here is only another
+   suite name. It is not a model of the suite-4 handshake. The responder
+   accepts it when the contact minimum allows it and the ciphertext
+   decrypts under the bound key, which is the same rule as the C++ code.
+   The attacker does not have that key, so the xwing queries are true.
+   This file is not a proof of the C++ or Rust program. *)
+
+free net: channel.
+
+type key.
+type suite.
+
+const hybrid: suite [data].
+const triple: suite [data].
+const xwing: suite [data].
+
+(* The prekey id sits in the ciphertext, as it sits in the envelope AAD. *)
+fun senc(suite, bitstring, bitstring, bitstring, key): bitstring.
+reduc forall s: suite, n: bitstring, p: bitstring, m: bitstring, k: key;
+  sdec(senc(s, n, p, m, k), s, n, p, k) = m.
+
+fun combine(key, key): key.
+fun bind(key, bitstring, bitstring): key.
+
+free secretPlain: bitstring [private].
+free followupPlain: bitstring [private].
+const openingCounter: bitstring [data].
+const followupCounter: bitstring [data].
+const publishedPrekey: bitstring [data].
+const noPrekey: bitstring [data].
+const initiatorId: bitstring [data].
+const responderId: bitstring [data].
+
+event Sent(bitstring).
+event Committed(bitstring).
+event AcceptedOpening(suite).
+event AcceptedFollowup(suite).
+event ContactVerified().
+event PrekeyOffered(bitstring).
+event PrekeyConsumed(bitstring).
+event SecondOpeningCommitted(bitstring).
+event AcceptedUnderSwappedIdentity(bitstring).
+(* Reachability witness for the honest path. The query below is expected
+   to be false: ProVerif finds a trace. It is not a security claim. *)
+event HonestDone().
+
+query m: bitstring; inj-event(Committed(m)) ==> inj-event(Sent(m)).
+query m: bitstring; event(Committed(m)) ==> event(ContactVerified()).
+query p: bitstring; inj-event(PrekeyConsumed(p)) ==> inj-event(PrekeyOffered(p)).
+query m: bitstring; event(SecondOpeningCommitted(m)) ==> false.
+query event(AcceptedOpening(hybrid)) ==> false.
+query event(AcceptedFollowup(hybrid)) ==> false.
+query event(AcceptedOpening(xwing)) ==> false.
+query event(AcceptedFollowup(xwing)) ==> false.
+query m: bitstring; event(AcceptedUnderSwappedIdentity(m)) ==> false.
+query attacker(secretPlain).
+query attacker(followupPlain).
+query event(HonestDone()) ==> false.
+
+letfun suite_at_least(offered: suite, minimum: suite) =
+  if offered = xwing then
+    if minimum = xwing then true else
+    if minimum = triple then true else
+    minimum = hybrid
+  else
+  if offered = triple then
+    if minimum = triple then true else
+    minimum = hybrid
+  else
+  if offered = hybrid then minimum = hybrid else
+  false.
+
+let initiator(mk: key) =
+  event PrekeyOffered(publishedPrekey);
+  event Sent(secretPlain);
+  out(net, (triple, senc(triple, openingCounter, publishedPrekey, secretPlain, mk), publishedPrekey));
+  event Sent(followupPlain);
+  out(net, (triple, senc(triple, followupCounter, noPrekey, followupPlain, mk))).
+
+(* One device. verified is local state, not a network field. The prekey is
+   consumed only after AEAD success. A later opening that names it again is
+   refused before a second commit. *)
+let responder(mk: key, verified: bool) =
+  in(net, (offered: suite, blob: bitstring, prekey: bitstring));
+  if verified = false then
+    0
+  else
+    event ContactVerified();
+    if prekey = publishedPrekey && suite_at_least(offered, triple) then
+      let m = sdec(blob, offered, openingCounter, prekey, mk) in
+      event PrekeyConsumed(prekey);
+      event AcceptedOpening(offered);
+      event Committed(m);
+      in(net, (next: suite, nextblob: bitstring));
+      if next = offered && suite_at_least(next, triple) then
+        let m2 = sdec(nextblob, next, followupCounter, noPrekey, mk) in
+        event AcceptedFollowup(next);
+        event Committed(m2);
+        event HonestDone();
+        in(net, (again: suite, againblob: bitstring, againprekey: bitstring));
+        if againprekey = publishedPrekey then
+          0
+        else
+          let m3 = sdec(againblob, again, openingCounter, againprekey, mk) in
+          event SecondOpeningCommitted(m3);
+          0
+      else
+        0
+    else
+      0.
+
+let swapped(mk: key) =
+  in(net, (offered: suite, blob: bitstring, prekey: bitstring));
+  if offered = triple && prekey = publishedPrekey then
+    let m = sdec(blob, offered, openingCounter, prekey, mk) in
+    event AcceptedUnderSwappedIdentity(m);
+    0
+  else
+    0.
+
+process
+  new ec: key;
+  new pq: key;
+  let mk = bind(combine(ec, pq), initiatorId, responderId) in
+  let mkSwap = bind(combine(ec, pq), responderId, initiatorId) in
+  out(net, ec);
+  (
+    initiator(mk) |
+    responder(mk, true) |
+    responder(mk, false) |
+    swapped(mkSwap)
+  )

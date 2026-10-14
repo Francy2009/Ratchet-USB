@@ -452,7 +452,8 @@ int cmd_migrate(const Options& opts) {
       rollback::validate(*anchor, legacy.store, legacy.vault_digest);
       rollback::store(
           rollback::AnchorRecord{migrated.vault_id, migrated.generation,
-                                 promoted_digest});
+                                 promoted_digest},
+          migrated.seed);
       } else {
         rollback::enroll(migrated, promoted_digest);
       }

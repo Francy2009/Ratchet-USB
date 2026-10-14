@@ -48,7 +48,8 @@ Pair make_established_pair() {
   card.spk_signature = bob_spk.signature;
   contact.card = card;
 
-  x3dh::InitiatorResult init_result = x3dh::initiate(alice.sk, alice.pk, contact);
+  x3dh::InitiatorResult init_result =
+      x3dh::initiate(alice.sk, alice.pk, contact, false);
 
   Pair pair;
   rr::init_sender(pair.alice, init_result.shared_secret,

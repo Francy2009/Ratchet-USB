@@ -28,6 +28,71 @@ Identity make_identity() {
   return id;
 }
 
+void check_xwing_agreement(bool with_classical_otpk, bool with_pq_otpk) {
+  const Identity alice = make_identity();
+  const Identity bob = make_identity();
+  pq::MlDsaPrivateSeed pq_seed;
+  randombytes_buf(pq_seed.data(), pq_seed.size());
+  const pq::MlDsaKeyPair pq_identity = pq::ml_dsa_65_from_seed(pq_seed);
+  const prekey::SignedPrekey spk = prekey::generate_signed_prekey(bob.sk, 1);
+  const std::vector<prekey::OneTimePrekey> otpks =
+      with_classical_otpk ? prekey::generate_one_time_prekeys(1, 1)
+                          : std::vector<prekey::OneTimePrekey>{};
+  store::PqPrekey pq_spk;
+  pq_spk.id = 20;
+  pq_spk.key = pq::generate_ml_kem_768();
+  std::vector<store::PqPrekey> pq_otpks;
+  if (with_pq_otpk) {
+    store::PqPrekey one_time;
+    one_time.id = 21;
+    one_time.key = pq::generate_ml_kem_768();
+    pq_otpks.push_back(std::move(one_time));
+  }
+  const std::string card = x3dh::export_hybrid_card(
+      bob.sk, bob.pk, pq_identity, spk, otpks, pq_spk, pq_otpks);
+  store::Contact contact;
+  contact.identity_pub = bob.pk;
+  contact.card = x3dh::import_card(card).card;
+
+  const x3dh::InitiatorResult init =
+      x3dh::initiate(alice.sk, alice.pk, contact, true);
+  prekey::OneTimePrekey otpk_copy;
+  const prekey::OneTimePrekey* otpk_ptr = nullptr;
+  if (init.otpk_id) {
+    for (const prekey::OneTimePrekey& one_time : otpks) {
+      if (one_time.id == *init.otpk_id) {
+        otpk_copy.id = one_time.id;
+        otpk_copy.pub = one_time.pub;
+        otpk_copy.sk.assign(one_time.sk.data(), one_time.sk.size());
+        otpk_ptr = &otpk_copy;
+      }
+    }
+    CHECK(otpk_ptr != nullptr);
+  } else {
+    CHECK(!with_classical_otpk);
+  }
+  const store::PqPrekey* pq_otpk_ptr = nullptr;
+  if (init.pq_otpk_id) {
+    for (const store::PqPrekey& one_time : pq_otpks) {
+      if (one_time.id == *init.pq_otpk_id) pq_otpk_ptr = &one_time;
+    }
+    CHECK(pq_otpk_ptr != nullptr);
+  } else {
+    CHECK(!with_pq_otpk);
+  }
+  CHECK(init.pq_spk_ciphertext.has_value());
+  const pq::MlKemCiphertext* pq_otpk_ciphertext =
+      init.pq_otpk_ciphertext ? &*init.pq_otpk_ciphertext : nullptr;
+  const SecureBytes<32> agreed = x3dh::respond_hybrid(
+      bob.sk, bob.pk, alice.pk, init.ephemeral_pk, spk, otpk_ptr, pq_spk,
+      *init.pq_spk_ciphertext, pq_otpk_ptr, pq_otpk_ciphertext, true);
+  CHECK(init.shared_secret.equals(agreed));
+  const SecureBytes<32> historical = x3dh::respond_hybrid(
+      bob.sk, bob.pk, alice.pk, init.ephemeral_pk, spk, otpk_ptr, pq_spk,
+      *init.pq_spk_ciphertext, pq_otpk_ptr, pq_otpk_ciphertext, false);
+  CHECK(!init.shared_secret.equals(historical));
+}
+
 }  // namespace
 
 TEST("a card round-trips through export/import and verifies") {
@@ -82,13 +147,13 @@ TEST("a hybrid card requires both identity signatures and authenticates all fiel
   CHECK_EQ(body_reader.str(),
            std::string("Ratchet-USB/v4/hybrid-contact-card"));
   CHECK_EQ(body_reader.u8(),
-           static_cast<uint8_t>(ProtocolSuite::TripleRatchetV1));
+           static_cast<uint8_t>(ProtocolSuite::XWingTripleRatchetV1));
 
   // Even a correctly signed card must not claim a suite this build does not
   // implement.
   std::vector<uint8_t> unsupported_body = signed_body;
   constexpr std::string_view context = "Ratchet-USB/v4/hybrid-contact-card";
-  unsupported_body[4 + context.size()] = 4;
+  unsupported_body[4 + context.size()] = 5;
   Signature ed_signature{};
   pq::MlDsaSignature pq_signature{};
   sign(bob.sk, unsupported_body.data(), unsupported_body.size(), ed_signature);
@@ -121,10 +186,27 @@ TEST("a hybrid card requires both identity signatures and authenticates all fiel
       "CARD", unsupported_card.data(), unsupported_card.size()))
             .card.maximum_suite == ProtocolSuite::HybridPqxdhV1);
 
+  // Suite 3 cards stay importable and keep the previous combiner.
+  unsupported_body[4 + context.size()] =
+      static_cast<uint8_t>(ProtocolSuite::TripleRatchetV1);
+  sign(bob.sk, unsupported_body.data(), unsupported_body.size(), ed_signature);
+  pq::ml_dsa_65_sign(pq_identity.private_seed, unsupported_body.data(),
+                     unsupported_body.size(), pq_signature);
+  unsupported_card.clear();
+  serial::Writer<std::vector<uint8_t>> suite3_writer(unsupported_card);
+  suite3_writer.bytes(magic, sizeof magic);
+  suite3_writer.u8(4);
+  suite3_writer.blob(unsupported_body.data(), unsupported_body.size());
+  suite3_writer.bytes(ed_signature.data(), ed_signature.size());
+  suite3_writer.bytes(pq_signature.data(), pq_signature.size());
+  CHECK(x3dh::import_card(wire::encode_block(
+      "CARD", unsupported_card.data(), unsupported_card.size()))
+            .card.maximum_suite == ProtocolSuite::TripleRatchetV1);
+
   const x3dh::ImportedCard imported = x3dh::import_card(encoded);
   CHECK(imported.identity_pub == bob.pk);
   CHECK(imported.card.pq_identity_pub == pq_identity.public_key);
-  CHECK(imported.card.maximum_suite == ProtocolSuite::TripleRatchetV1);
+  CHECK(imported.card.maximum_suite == ProtocolSuite::XWingTripleRatchetV1);
   CHECK(imported.card.pq_bundle.has_value());
   CHECK_EQ(imported.card.pq_bundle->signed_prekey.id, pq_spk.id);
   CHECK_EQ(imported.card.pq_bundle->one_time_prekeys.size(), std::size_t(1));
@@ -137,6 +219,61 @@ TEST("a hybrid card requires both identity signatures and authenticates all fiel
     CHECK_THROWS(x3dh::import_card(
         wire::encode_block("CARD", tampered.data(), tampered.size())));
   }
+}
+
+TEST("X-Wing combiner matches the published SHA3-256 concatenation") {
+  pq::MlKemSharedSecret ss_m;
+  SecureBytes<32> ss_x;
+  x25519::PublicKey ct_x{};
+  x25519::PublicKey pk_x{};
+  for (std::size_t i = 0; i < 32; ++i) {
+    ss_m[i] = 0x01;
+    ss_x[i] = 0x02;
+    ct_x[i] = 0x03;
+    pk_x[i] = 0x04;
+  }
+  SecureBytes<32> out;
+  x3dh::detail::xwing_combine(ss_m, ss_x, ct_x, pk_x, out);
+  static constexpr uint8_t kExpect[] = {
+      0x5c, 0x6b, 0xfa, 0xf8, 0xc3, 0xec, 0x48, 0xab, 0x3c, 0xee, 0x7c,
+      0x12, 0x12, 0x9b, 0x39, 0x91, 0x3b, 0x8a, 0x7f, 0xa1, 0x23, 0x41,
+      0x15, 0xda, 0x7e, 0x1c, 0x55, 0x60, 0x8a, 0xd1, 0x9f, 0xb6};
+  CHECK(sodium_memcmp(out.data(), kExpect, sizeof kExpect) == 0);
+}
+
+TEST("suite 4 handshake agrees and does not match the historical combiner") {
+  CHECK(uses_xwing_combiner(ProtocolSuite::XWingTripleRatchetV1));
+  CHECK(uses_triple_ratchet(ProtocolSuite::XWingTripleRatchetV1));
+  CHECK(!uses_xwing_combiner(ProtocolSuite::TripleRatchetV1));
+  CHECK(uses_triple_ratchet(ProtocolSuite::TripleRatchetV1));
+  CHECK(!uses_xwing_combiner(ProtocolSuite::HybridPqxdhV1));
+  check_xwing_agreement(true, true);
+  check_xwing_agreement(true, false);
+  check_xwing_agreement(false, false);
+  check_xwing_agreement(false, true);
+}
+
+TEST("X-Wing initiate without an ML-KEM bundle consumes nothing") {
+  const Identity alice = make_identity();
+  const Identity bob = make_identity();
+  pq::MlDsaPrivateSeed pq_seed;
+  randombytes_buf(pq_seed.data(), pq_seed.size());
+  const pq::MlDsaKeyPair pq_identity = pq::ml_dsa_65_from_seed(pq_seed);
+  const prekey::SignedPrekey spk = prekey::generate_signed_prekey(bob.sk, 1);
+  const std::vector<prekey::OneTimePrekey> otpks =
+      prekey::generate_one_time_prekeys(1, 1);
+  store::PqPrekey pq_spk;
+  pq_spk.id = 20;
+  pq_spk.key = pq::generate_ml_kem_768();
+  const std::string card = x3dh::export_hybrid_card(
+      bob.sk, bob.pk, pq_identity, spk, otpks, pq_spk, {});
+  store::Contact contact;
+  contact.identity_pub = bob.pk;
+  contact.card = x3dh::import_card(card).card;
+  contact.card->pq_bundle.reset();
+  const std::size_t before = contact.card->one_time_prekeys.size();
+  CHECK_THROWS(x3dh::initiate(alice.sk, alice.pk, contact, true));
+  CHECK_EQ(contact.card->one_time_prekeys.size(), before);
 }
 
 TEST("import_card rejects a forged signed prekey") {
@@ -176,7 +313,7 @@ TEST("initiate/respond agree on the shared secret, with a one-time prekey") {
   contact.card = imported.card;
 
   const x3dh::InitiatorResult init_result =
-      x3dh::initiate(alice.sk, alice.pk, contact);
+      x3dh::initiate(alice.sk, alice.pk, contact, false);
   CHECK(init_result.otpk_id.has_value());
   // The consumed prekey must be gone from the contact's stored card.
   CHECK_EQ(contact.card->one_time_prekeys.size(), bob_otpks.size() - 1);
@@ -223,7 +360,7 @@ TEST("separate contacts holding the same card do not all pick the same prekey") 
     contact.card = imported.card;
 
     const x3dh::InitiatorResult r =
-        x3dh::initiate(sender.sk, sender.pk, contact);
+        x3dh::initiate(sender.sk, sender.pk, contact, false);
     CHECK(r.otpk_id.has_value());
     // Whatever is picked has to be one Bob actually published, and exactly
     // one has to disappear from this contact's copy of the card.
@@ -257,7 +394,7 @@ TEST("initiate/respond agree without a one-time prekey (exhausted pool)") {
   contact.card = imported.card;
 
   const x3dh::InitiatorResult init_result =
-      x3dh::initiate(alice.sk, alice.pk, contact);
+      x3dh::initiate(alice.sk, alice.pk, contact, false);
   CHECK(!init_result.otpk_id.has_value());
 
   const SecureBytes<32> responder_secret =
@@ -280,13 +417,13 @@ TEST("a different initiator identity yields a different shared secret") {
   contact_for_alice.identity_pub = bob.pk;
   contact_for_alice.card = imported.card;
   const x3dh::InitiatorResult alice_result =
-      x3dh::initiate(alice.sk, alice.pk, contact_for_alice);
+      x3dh::initiate(alice.sk, alice.pk, contact_for_alice, false);
 
   store::Contact contact_for_mallory;
   contact_for_mallory.identity_pub = bob.pk;
   contact_for_mallory.card = imported.card;
   const x3dh::InitiatorResult mallory_result =
-      x3dh::initiate(mallory.sk, mallory.pk, contact_for_mallory);
+      x3dh::initiate(mallory.sk, mallory.pk, contact_for_mallory, false);
 
   CHECK(!alice_result.shared_secret.equals(mallory_result.shared_secret));
 

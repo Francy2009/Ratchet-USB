@@ -1,0 +1,40 @@
+(* Same model as session.pv with the two checks removed: the suite is not
+   bound inside the ciphertext, and the responder does not compare it with
+   the contact minimum. Used only to confirm that ProVerif can see the
+   downgrade when those checks are absent. *)
+
+free net: channel.
+
+type key.
+type suite.
+
+const hybrid: suite [data].
+const triple: suite [data].
+
+fun senc(bitstring, key): bitstring.
+reduc forall m: bitstring, k: key; sdec(senc(m, k), k) = m.
+
+fun combine(key, key): key.
+
+free secretPlain: bitstring [private].
+
+event Sent(bitstring).
+event AcceptedOpening(suite).
+
+query event(AcceptedOpening(hybrid)) ==> false.
+
+let initiator(mk: key) =
+  event Sent(secretPlain);
+  out(net, (triple, senc(secretPlain, mk))).
+
+let responder(mk: key) =
+  in(net, (offered: suite, blob: bitstring));
+  let m = sdec(blob, mk) in
+  event AcceptedOpening(offered);
+  0.
+
+process
+  new ec: key;
+  new pq: key;
+  let mk = combine(ec, pq) in
+  (initiator(mk) | responder(mk))

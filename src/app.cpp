@@ -50,7 +50,8 @@ OpenedVault open_vault(VaultFile file, SecureString passphrase,
     if (result.rollback_status == rollback::Status::AdvancedAfterCrash) {
       rollback::store(rollback::AnchorRecord{result.store.vault_id,
                                               result.store.generation,
-                                              result.vault_digest});
+                                              result.vault_digest},
+                      result.store.seed);
       result.rollback_status = rollback::Status::Protected;
     }
   }
@@ -76,7 +77,8 @@ void save_vault(const fs::path& path, store::VaultStore& store,
           rollback::validate(*anchor, store, previous_digest);
       if (status == rollback::Status::AdvancedAfterCrash) {
         rollback::store(rollback::AnchorRecord{store.vault_id, store.generation,
-                                                previous_digest});
+                                                previous_digest},
+                        store.seed);
       }
     }
     store.previous_digest = previous_digest;
@@ -90,8 +92,9 @@ void save_vault(const fs::path& path, store::VaultStore& store,
   vault::write_file(path, file, /*overwrite=*/true);
   if (anchor) {
     rollback::store(rollback::AnchorRecord{
-        store.vault_id, store.generation,
-        rollback::digest(file.data(), file.size())});
+                        store.vault_id, store.generation,
+                        rollback::digest(file.data(), file.size())},
+                    store.seed);
   }
 }
 

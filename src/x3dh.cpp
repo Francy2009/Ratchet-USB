@@ -1,9 +1,11 @@
 #include "ratchet/x3dh.hpp"
 
+#include <openssl/evp.h>
 #include <sodium.h>
 
 #include <array>
 #include <cstring>
+#include <memory>
 #include <vector>
 
 #include "ratchet/kdf.hpp"
@@ -57,11 +59,37 @@ void derive_shared_secret(const IdentitySigningPublicKey& ik_initiator,
   kdf::expand(out.data(), out.size(), kCombineInfo, prk);
 }
 
+void xwing_combine(const pq::MlKemSharedSecret& ss_m,
+                   const SecureBytes<32>& ss_x, const x25519::PublicKey& ct_x,
+                   const x25519::PublicKey& pk_x, SecureBytes<32>& out) {
+  // draft-connolly-cfrg-xwing-kem, 2026-09-23. The six-byte label is the
+  // ASCII drawing "\.//^\" and the ML-KEM ciphertext is not an input.
+  static constexpr uint8_t kXWingLabel[] = {0x5c, 0x2e, 0x2f, 0x2f, 0x5e, 0x5c};
+  static_assert(sizeof kXWingLabel == 6, "X-Wing label is 6 bytes");
+  SecureBuffer input;
+  input.append(ss_m.data(), ss_m.size());
+  input.append(ss_x.data(), ss_x.size());
+  input.append(ct_x.data(), ct_x.size());
+  input.append(pk_x.data(), pk_x.size());
+  input.append(kXWingLabel, sizeof kXWingLabel);
+
+  using MdCtxPtr = std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)>;
+  MdCtxPtr ctx(EVP_MD_CTX_new(), EVP_MD_CTX_free);
+  unsigned int length = 0;
+  if (!ctx || EVP_DigestInit_ex(ctx.get(), EVP_sha3_256(), nullptr) != 1 ||
+      EVP_DigestUpdate(ctx.get(), input.data(), input.size()) != 1 ||
+      EVP_DigestFinal_ex(ctx.get(), out.data(), &length) != 1 ||
+      length != out.size()) {
+    throw Error("X-Wing shared-secret combiner failed");
+  }
+}
+
 }  // namespace detail
 
 namespace {
 
 using detail::derive_shared_secret;
+using detail::xwing_combine;
 
 void combine_hybrid(const IdentitySigningPublicKey& initiator,
                     const IdentitySigningPublicKey& responder,
@@ -80,6 +108,55 @@ void combine_hybrid(const IdentitySigningPublicKey& initiator,
   kdf::extract(prk, salt.data(), salt.size(), ikm.data(), ikm.size());
   kdf::expand(out.data(), out.size(),
               "Ratchet-USB/v3/PQXDH/X25519+ML-KEM-768", prk);
+}
+
+// Suite 4 only. DH1 and DH2 stay inside `classical`. Each X25519+ML-KEM pair
+// is reduced with xwing_combine, then bound to the identities again.
+void combine_xwing(const IdentitySigningPublicKey& initiator,
+                   const IdentitySigningPublicKey& responder,
+                   const SecureBytes<32>& classical,
+                   const SecureBytes<32>& xwing_static,
+                   const SecureBytes<32>* xwing_one_time,
+                   SecureBytes<32>& out) {
+  SecureBuffer ikm;
+  ikm.append(classical.data(), classical.size());
+  ikm.append(xwing_static.data(), xwing_static.size());
+  if (xwing_one_time != nullptr) {
+    ikm.append(xwing_one_time->data(), xwing_one_time->size());
+  }
+  std::vector<uint8_t> salt;
+  salt.insert(salt.end(), initiator.begin(), initiator.end());
+  salt.insert(salt.end(), responder.begin(), responder.end());
+  kdf::Prk prk;
+  kdf::extract(prk, salt.data(), salt.size(), ikm.data(), ikm.size());
+  kdf::expand(out.data(), out.size(), "Ratchet-USB/v4/PQXDH/X-Wing", prk);
+}
+
+// `dh4` and `otpk_pub` are both null when the handshake has no classical
+// one-time prekey. A one-time ML-KEM secret still has to enter the
+// transcript: it is paired with the signed-prekey X25519 share, which both
+// sides have already computed.
+void fill_xwing_pair(const pq::MlKemSharedSecret& pq_static,
+                     const SecureBytes<32>& dh3,
+                     const x25519::PublicKey& ephemeral_pub,
+                     const x25519::PublicKey& spk_pub,
+                     const pq::MlKemSharedSecret* pq_one_time,
+                     const SecureBytes<32>* dh4,
+                     const x25519::PublicKey* otpk_pub,
+                     SecureBytes<32>& xwing_static,
+                     SecureBytes<32>& xwing_one_time,
+                     const SecureBytes<32>*& xwing_one_time_out) {
+  xwing_combine(pq_static, dh3, ephemeral_pub, spk_pub, xwing_static);
+  xwing_one_time_out = nullptr;
+  if (pq_one_time == nullptr) {
+    return;
+  }
+  if (dh4 != nullptr && otpk_pub != nullptr) {
+    xwing_combine(*pq_one_time, *dh4, ephemeral_pub, *otpk_pub, xwing_one_time);
+  } else {
+    xwing_combine(*pq_one_time, dh3, ephemeral_pub, spk_pub, xwing_one_time);
+  }
+  xwing_one_time_out = &xwing_one_time;
 }
 
 // Everything a card commits to, in one buffer: the identity, the signed
@@ -147,7 +224,7 @@ std::string export_hybrid_card(
   std::vector<uint8_t> signed_body;
   serial::Writer<std::vector<uint8_t>> w(signed_body);
   w.str(kHybridCardContext);
-  w.u8(static_cast<uint8_t>(ProtocolSuite::TripleRatchetV1));
+  w.u8(static_cast<uint8_t>(ProtocolSuite::XWingTripleRatchetV1));
   w.bytes(identity_pk.data(), identity_pk.size());
   w.bytes(pq_identity.public_key.data(), pq_identity.public_key.size());
   w.u32(spk.id); w.bytes(spk.pub.data(), spk.pub.size());
@@ -223,7 +300,8 @@ ImportedCard import_card(std::string_view base64_card) {
   if (version == kHybridCardVersion) {
     const uint8_t suite = br.u8();
     if (suite != static_cast<uint8_t>(ProtocolSuite::HybridPqxdhV1) &&
-        suite != static_cast<uint8_t>(ProtocolSuite::TripleRatchetV1)) {
+        suite != static_cast<uint8_t>(ProtocolSuite::TripleRatchetV1) &&
+        suite != static_cast<uint8_t>(ProtocolSuite::XWingTripleRatchetV1)) {
       throw Error("unsupported hybrid protocol suite");
     }
     out.card.maximum_suite = static_cast<ProtocolSuite>(suite);
@@ -304,7 +382,7 @@ ImportedCard import_card(std::string_view base64_card) {
 
 InitiatorResult initiate(const IdentitySigningSecretKey& my_identity_sk,
                          const IdentitySigningPublicKey& my_identity_pk,
-                         store::Contact& contact) {
+                         store::Contact& contact, bool use_xwing) {
   if (!contact.card) {
     throw Error(
         "no prekey bundle stored for this contact yet; import their card "
@@ -319,6 +397,11 @@ InitiatorResult initiate(const IdentitySigningSecretKey& my_identity_sk,
         "the stored card for this contact does not verify against their "
         "identity key; ask them for a freshly exported card and import it "
         "again (`add-contact`)");
+  }
+  // Before any one-time prekey is taken. A failed X-Wing opening must leave
+  // the stored card unchanged.
+  if (use_xwing && !card.pq_bundle) {
+    throw Error("X-Wing handshake requires an ML-KEM bundle");
   }
 
   IdentityDHSecretKey my_dh_sk;
@@ -345,6 +428,7 @@ InitiatorResult initiate(const IdentitySigningSecretKey& my_identity_sk,
 
   std::vector<const SecureBytes<32>*> parts = {&dh1, &dh2, &dh3};
   SecureBytes<32> dh4;
+  std::optional<x25519::PublicKey> classical_otpk_pub;
   if (!card.one_time_prekeys.empty()) {
     // Picked at random rather than from a fixed position. The same card is
     // handed to everyone, so a fixed choice makes every contact pick the very
@@ -359,6 +443,7 @@ InitiatorResult initiate(const IdentitySigningSecretKey& my_identity_sk,
     card.one_time_prekeys.erase(card.one_time_prekeys.begin() +
                                 static_cast<std::ptrdiff_t>(pick));
     result.otpk_id = otpk.id;
+    classical_otpk_pub = otpk.pub;
     x25519::dh(eph_sk, otpk.pub, dh4);
     parts.push_back(&dh4);
   }
@@ -388,8 +473,20 @@ InitiatorResult initiate(const IdentitySigningSecretKey& my_identity_sk,
       one_time_ptr = &one_time_secret;
     }
     SecureBytes<32> hybrid;
-    combine_hybrid(my_identity_pk, contact.identity_pub, result.shared_secret,
-                   static_secret, one_time_ptr, hybrid);
+    if (use_xwing) {
+      SecureBytes<32> xwing_static;
+      SecureBytes<32> xwing_one_time;
+      const SecureBytes<32>* xwing_one_time_ptr = nullptr;
+      fill_xwing_pair(static_secret, dh3, eph_pk, card.spk_pub, one_time_ptr,
+                      classical_otpk_pub ? &dh4 : nullptr,
+                      classical_otpk_pub ? &*classical_otpk_pub : nullptr,
+                      xwing_static, xwing_one_time, xwing_one_time_ptr);
+      combine_xwing(my_identity_pk, contact.identity_pub, result.shared_secret,
+                    xwing_static, xwing_one_time_ptr, hybrid);
+    } else {
+      combine_hybrid(my_identity_pk, contact.identity_pub, result.shared_secret,
+                     static_secret, one_time_ptr, hybrid);
+    }
     result.shared_secret.assign(hybrid);
   }
   result.ephemeral_sk = std::move(eph_sk);
@@ -406,7 +503,7 @@ SecureBytes<32> respond_hybrid(
     const store::PqPrekey& my_pq_spk,
     const pq::MlKemCiphertext& pq_spk_ciphertext,
     const store::PqPrekey* my_pq_otpk,
-    const pq::MlKemCiphertext* pq_otpk_ciphertext) {
+    const pq::MlKemCiphertext* pq_otpk_ciphertext, bool use_xwing) {
   SecureBytes<32> classical = respond(my_identity_sk, my_identity_pk,
                                       their_identity_pk, their_ephemeral_pub,
                                       my_spk, my_otpk);
@@ -423,8 +520,29 @@ SecureBytes<32> respond_hybrid(
     throw Error("message authentication failed");
   }
   SecureBytes<32> hybrid;
-  combine_hybrid(their_identity_pk, my_identity_pk, classical, pq_static,
-                 pq_one_time_ptr, hybrid);
+  if (use_xwing) {
+    SecureBytes<32> dh3;
+    x25519::dh(my_spk.sk, their_ephemeral_pub, dh3);
+    SecureBytes<32> dh4;
+    const SecureBytes<32>* dh4_ptr = nullptr;
+    const x25519::PublicKey* otpk_pub = nullptr;
+    if (my_otpk != nullptr) {
+      x25519::dh(my_otpk->sk, their_ephemeral_pub, dh4);
+      dh4_ptr = &dh4;
+      otpk_pub = &my_otpk->pub;
+    }
+    SecureBytes<32> xwing_static;
+    SecureBytes<32> xwing_one_time;
+    const SecureBytes<32>* xwing_one_time_ptr = nullptr;
+    fill_xwing_pair(pq_static, dh3, their_ephemeral_pub, my_spk.pub,
+                    pq_one_time_ptr, dh4_ptr, otpk_pub, xwing_static,
+                    xwing_one_time, xwing_one_time_ptr);
+    combine_xwing(their_identity_pk, my_identity_pk, classical, xwing_static,
+                  xwing_one_time_ptr, hybrid);
+  } else {
+    combine_hybrid(their_identity_pk, my_identity_pk, classical, pq_static,
+                   pq_one_time_ptr, hybrid);
+  }
   return hybrid;
 }
 

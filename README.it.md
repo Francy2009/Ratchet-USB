@@ -106,7 +106,9 @@ stato SPQR vengono salvati nel vault cifrato.
 
 Le carte ibride precedenti che dichiarano solo la suite 2 continuano a usare
 il loro formato di messaggio. Una sessione già avviata non cambia protocollo
-mentre è in corso. Le nuove carte dichiarano la suite 3 con Triple Ratchet.
+mentre è in corso. Le nuove carte dichiarano la suite 4: Triple Ratchet con
+il combinatore di handshake X-Wing. Le carte di suite 3 continuano a usare il
+combinatore precedente.
 Questa implementazione non usa il formato dei messaggi di Signal e non può
 scambiare messaggi con l'app Signal. I dettagli dei formati sono in
 [docs/WIRE-V3.md](docs/WIRE-V3.md).
@@ -143,7 +145,9 @@ sviluppo, non versioni approvate per l'uso in produzione.
 | `milestone/triple-ratchet` | Messaggi, sessioni e persistenza Triple Ratchet. |
 | `milestone/pq-migration-docs` | Build Rust fissata e documentazione della migrazione. |
 | `milestone/local-verification` | Correzione del parser e verifiche locali della migrazione. |
-| `v0.5.0-dev` | Istantanea di sviluppo attuale su `main`. |
+| `v0.5.0-dev` | Istantanea di sviluppo della prima pubblicazione delle pre-release. Resta su quel commit. |
+| `milestone/linux-only` | macOS rimosso dal programma, dalla CI e dalla documentazione. |
+| `milestone/suite-4-xwing` | Handshake X-Wing di suite 4 per le carte nuove, HMAC sulle ancore di rollback nuove e modello di sessione ProVerif. |
 
 Puoi esaminare una tappa con `git show milestone/triple-ratchet` o confrontare
 due tappe con `git diff milestone/pq-hybrid milestone/triple-ratchet`. Gli

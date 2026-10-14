@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "ratchet/store.hpp"
 
@@ -17,6 +18,10 @@ struct AnchorRecord {
   store::VaultId vault_id{};
   uint64_t generation = 0;
   Digest vault_digest{};
+  // False for a legacy RANCHOR1 record, which has no tag. store() sets this
+  // and fills mac before writing. The tag is not a secret.
+  bool authenticated = false;
+  std::array<uint8_t, 32> mac{};
 };
 
 enum class Status : uint8_t {
@@ -30,16 +35,29 @@ std::string vault_id_text(const store::VaultId& id);
 
 // Validates the USB state against an already loaded host anchor. This pure
 // function is intentionally public so rollback/crash-recovery invariants can
-// be tested without a desktop keyring.
+// be tested without a desktop keyring. An authenticated record must carry a
+// MAC under the vault seed. A legacy record with authenticated == false keeps
+// the generation checks only.
 Status validate(const AnchorRecord& anchor, const store::VaultStore& usb,
                 const Digest& usb_digest);
+
+// Attaches an HMAC-SHA256 tag derived from the vault master seed. The MAC
+// input is the RANCHOR2 prefix, so a legacy blob cannot be replayed as a
+// signed record.
+void authenticate(AnchorRecord& record, const MasterSeed& seed);
+
+std::string encode(const AnchorRecord& record);
+AnchorRecord decode(std::string_view text);
 
 // The host backend is Secret Service. A missing
 // service is not silently treated as protection: load returns nullopt and the
 // caller must expose USB-only mode to the user.
 bool backend_available();
 std::optional<AnchorRecord> load(const store::VaultId& vault_id);
-void store(const AnchorRecord& record);
+
+// Always writes an authenticated record. `seed` is the vault master seed and
+// does not leave the vault; the host service stores only the tag.
+void store(const AnchorRecord& record, const MasterSeed& seed);
 
 // Explicit first-host enrollment. The vault must already have been unlocked
 // successfully; this never derives trust from unauthenticated file metadata.

@@ -96,7 +96,8 @@ are saved in the encrypted vault.
 
 Earlier hybrid cards that advertise only suite 2 keep their original message
 format. An established session does not change protocol while it is active.
-New cards advertise suite 3 with Triple Ratchet. Ratchet-USB does not use
+New cards advertise suite 4: Triple Ratchet with the X-Wing handshake
+combiner. Suite 3 cards keep the previous combiner. Ratchet-USB does not use
 Signal's message format and cannot exchange messages with the Signal app.
 The formats are described in [docs/WIRE-V3.md](docs/WIRE-V3.md).
 
@@ -131,7 +132,9 @@ They are not production-approved releases.
 | `milestone/triple-ratchet` | Triple Ratchet messages, sessions, and persistence. |
 | `milestone/pq-migration-docs` | Pinned Rust build and migration documentation. |
 | `milestone/local-verification` | Parser fix and local migration checks. |
-| `v0.5.0-dev` | Current development snapshot on `main`. |
+| `v0.5.0-dev` | Development snapshot from the first pre-release publication. It stays on that commit. |
+| `milestone/linux-only` | macOS removed from the program, CI, and documentation. |
+| `milestone/suite-4-xwing` | Suite 4 X-Wing handshakes for new cards, HMAC on new rollback anchors, and a ProVerif session model. |
 
 Inspect a step with `git show milestone/triple-ratchet`, or compare two steps
 with `git diff milestone/pq-hybrid milestone/triple-ratchet`. The same commits

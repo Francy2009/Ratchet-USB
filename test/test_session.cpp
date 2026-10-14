@@ -134,6 +134,27 @@ TEST("an existing hybrid-only card keeps the v2 conversation readable") {
            std::string("reply"));
 }
 
+TEST("an existing suite 3 card keeps Triple Ratchet on the previous combiner") {
+  Party alice = make_party(1);
+  Party bob = make_party(1);
+  introduce(bob, alice, "bob");
+  introduce(alice, bob, "alice");
+  alice.vault.contacts[0].card->maximum_suite = ProtocolSuite::TripleRatchetV1;
+  bob.vault.contacts[0].card->maximum_suite = ProtocolSuite::TripleRatchetV1;
+  const std::string opening =
+      session::send(alice.vault, alice.sk, alice.pk, 0, "suite three");
+  const message::Envelope env = message::decode(opening);
+  CHECK_EQ(env.version, uint8_t(3));
+  CHECK(env.suite == ProtocolSuite::TripleRatchetV1);
+  CHECK(!env.spqr_message.empty());
+  CHECK_EQ(session::receive(bob.vault, bob.sk, bob.pk, opening).plaintext,
+           std::string("suite three"));
+  const std::string reply =
+      session::send(bob.vault, bob.sk, bob.pk, 0, "still three");
+  CHECK_EQ(session::receive(alice.vault, alice.sk, alice.pk, reply).plaintext,
+           std::string("still three"));
+}
+
 TEST("Triple Ratchet state survives vault persistence and rejects forged data atomically") {
   Party alice = make_party(3);
   Party bob = make_party(3);
@@ -144,9 +165,14 @@ TEST("Triple Ratchet state survives vault persistence and rejects forged data at
                                              0, "hello quantum world");
   const message::Envelope first = message::decode(opening);
   CHECK_EQ(first.version, uint8_t(3));
-  CHECK(first.suite == ProtocolSuite::TripleRatchetV1);
+  CHECK(first.suite == ProtocolSuite::XWingTripleRatchetV1);
   CHECK(!first.spqr_message.empty());
   CHECK(!alice.vault.sessions[0].spqr_state.empty());
+  std::vector<uint8_t> relabelled = wire::decode_block("MESSAGE", opening);
+  relabelled[5] = static_cast<uint8_t>(ProtocolSuite::TripleRatchetV1);
+  CHECK_THROWS(session::receive(
+      bob.vault, bob.sk, bob.pk,
+      wire::encode_block("MESSAGE", relabelled.data(), relabelled.size())));
   CHECK_EQ(session::receive(bob.vault, bob.sk, bob.pk, opening).plaintext,
            std::string("hello quantum world"));
 

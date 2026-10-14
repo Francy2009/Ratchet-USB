@@ -111,7 +111,7 @@ PeerCard read_peer_card(serial::Reader& r, uint8_t version) {
   PeerCard card;
   if (version >= 9) {
     const uint8_t suite = r.u8();
-    if (suite < 1 || suite > 3) throw Error("invalid card protocol suite");
+    if (!known_suite(suite)) throw Error("invalid card protocol suite");
     card.maximum_suite = static_cast<ProtocolSuite>(suite);
   } else if (version >= 7) {
     card.maximum_suite = ProtocolSuite::HybridPqxdhV1;
@@ -169,7 +169,7 @@ Contact read_contact(serial::Reader& r, uint8_t version) {
   contact.verified = r.u8() != 0;
   if (version >= 6) {
     const uint8_t suite = r.u8();
-    if (suite < 1 || suite > 3) throw Error("invalid minimum protocol suite");
+    if (!known_suite(suite)) throw Error("invalid minimum protocol suite");
     contact.minimum_suite = static_cast<ProtocolSuite>(suite);
   }
   if (r.u8() != 0) {
@@ -242,7 +242,7 @@ Session read_session(serial::Reader& r, uint8_t version) {
   if (version >= 6) {
     const uint8_t suite = r.u8();
     const uint8_t status = r.u8();
-    if (suite < 1 || suite > 3 || status < 1 || status > 3) {
+    if (!known_suite(suite) || status < 1 || status > 3) {
       throw Error("invalid session protocol state");
     }
     s.suite = static_cast<ProtocolSuite>(suite);

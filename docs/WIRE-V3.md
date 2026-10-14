@@ -13,11 +13,14 @@ truncation, trailing fields, excessive counts and size limits.
   body. Existing suite-2 cards remain importable.
 - Envelope v2: hybrid PQXDH opening, authenticated suite and sender, EC
   ratchet header and ciphertext. Used for existing hybrid-only conversations.
-- Envelope v3: suite `TRIPLE_RATCHET_V1`, authenticated SPQR message in
-  addition to the v2 fields. The canonical prefix containing both ratchet
-  inputs is AEAD AAD; the EC and SPQR message keys are combined before
-  encrypting or decrypting the payload.
+- Envelope v3: suites `TRIPLE_RATCHET_V1` and `XWING_TRIPLE_RATCHET_V1`,
+  authenticated SPQR message in addition to the v2 fields. The canonical
+  prefix containing both ratchet inputs is AEAD AAD; the EC and SPQR message
+  keys are combined before encrypting or decrypting the payload. Suite 4
+  changes the handshake combiner only. The message body stays version 3.
 
 `CLASSIC_V2` is limited to legacy reading and migration. New cards advertise
-`TRIPLE_RATCHET_V1`; cards that advertise `HYBRID_PQXDH_V1` keep using v2.
-An established session never changes suite in place.
+`XWING_TRIPLE_RATCHET_V1`. Cards that advertise `TRIPLE_RATCHET_V1` keep that
+suite and the previous handshake combiner. Cards that advertise
+`HYBRID_PQXDH_V1` keep using v2. An established session never changes suite
+in place.

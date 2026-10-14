@@ -84,6 +84,21 @@ TEST("v3 Triple Ratchet envelope carries an authenticated SPQR message") {
   CHECK(message::envelope_aad_prefix(parsed) == message::envelope_aad_prefix(env));
 }
 
+TEST("v3 X-Wing envelope carries an authenticated SPQR message") {
+  message::Envelope env = make_envelope(/*with_initial=*/true);
+  env.version = 3;
+  env.suite = ProtocolSuite::XWingTripleRatchetV1;
+  env.spqr_message = {9, 8, 7};
+  const std::string block = message::encode(env);
+  const message::Envelope parsed = message::decode(block);
+  CHECK(parsed.suite == ProtocolSuite::XWingTripleRatchetV1);
+  CHECK(parsed.spqr_message == env.spqr_message);
+  CHECK(message::envelope_aad_prefix(parsed) == message::envelope_aad_prefix(env));
+
+  env.spqr_message.clear();
+  CHECK_THROWS(message::encode(env));
+}
+
 TEST("noncanonical envelope flags are rejected before authentication") {
   const std::string block = message::encode(make_envelope(true));
   const std::vector<uint8_t> original = wire::decode_block("MESSAGE", block);

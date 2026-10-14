@@ -70,8 +70,7 @@ std::vector<uint8_t> envelope_aad_prefix(const Envelope& env) {
 std::string encode(const Envelope& env) {
   const bool hybrid = env.version == 2 &&
       env.suite == ProtocolSuite::HybridPqxdhV1 && env.spqr_message.empty();
-  const bool triple = env.version == 3 &&
-      env.suite == ProtocolSuite::TripleRatchetV1 &&
+  const bool triple = env.version == 3 && uses_triple_ratchet(env.suite) &&
       !env.spqr_message.empty() &&
       env.spqr_message.size() <= std::size_t{1024} * 1024u;
   if (!hybrid && !triple) {
@@ -133,7 +132,8 @@ Envelope decode(std::string_view text) {
   const bool hybrid = env.version == 2 &&
       suite == static_cast<uint8_t>(ProtocolSuite::HybridPqxdhV1);
   const bool triple = env.version == 3 &&
-      suite == static_cast<uint8_t>(ProtocolSuite::TripleRatchetV1);
+      (suite == static_cast<uint8_t>(ProtocolSuite::TripleRatchetV1) ||
+       suite == static_cast<uint8_t>(ProtocolSuite::XWingTripleRatchetV1));
   if (!hybrid && !triple) {
     throw Error("unsupported message protocol version or suite");
   }

@@ -44,7 +44,7 @@ std::string send(store::VaultStore& vault, const IdentitySigningSecretKey& my_id
     throw Error("the contact requires an unsupported protocol suite");
   }
   if (selected_suite != ProtocolSuite::HybridPqxdhV1 &&
-      selected_suite != ProtocolSuite::TripleRatchetV1) {
+      !uses_triple_ratchet(selected_suite)) {
     throw Error("the contact card uses an unsupported protocol suite");
   }
   store::Contact candidate_contact = contact;
@@ -62,13 +62,14 @@ std::string send(store::VaultStore& vault, const IdentitySigningSecretKey& my_id
   message::Envelope env;
   env.sender_id = message::sender_id_for(my_identity_pk);
   env.suite = selected_suite;
-  env.version = selected_suite == ProtocolSuite::TripleRatchetV1 ? 3 : 2;
+  env.version = uses_triple_ratchet(selected_suite) ? 3 : 2;
 
   // A session with no sending chain still needs the opening handshake.
   if (!s.has_cks) {
     x3dh::InitiatorResult hs = x3dh::initiate(
-        my_identity_sk, my_identity_pk, candidate_contact);
-    if (selected_suite == ProtocolSuite::TripleRatchetV1) {
+        my_identity_sk, my_identity_pk, candidate_contact,
+        uses_xwing_combiner(selected_suite));
+    if (uses_triple_ratchet(selected_suite)) {
       SecureBytes<32> ec_secret, spqr_secret;
       triple_ratchet::split_initial_secret(hs.shared_secret, ec_secret,
                                            spqr_secret);
@@ -95,7 +96,7 @@ std::string send(store::VaultStore& vault, const IdentitySigningSecretKey& my_id
     throw Error("session is closed; import a fresh card before sending");
   }
 
-  if (selected_suite == ProtocolSuite::TripleRatchetV1) {
+  if (uses_triple_ratchet(selected_suite)) {
     spqr::Sent step = spqr::send(s.spqr_state);
     env.spqr_message = std::move(step.message);
     ratchet::encrypt(s, plaintext, env.header, env.ciphertext,
@@ -212,14 +213,15 @@ ReceiveResult receive(store::VaultStore& vault, const IdentitySigningSecretKey& 
     SecureBytes<32> shared = x3dh::respond_hybrid(
         my_identity_sk, my_identity_pk, f.initiator_identity_pub,
         env.header.dh_pub, *spk, otpk, *pq_spk, *f.pq_spk_ciphertext,
-        pq_otpk, f.pq_otpk_ciphertext ? &*f.pq_otpk_ciphertext : nullptr);
+        pq_otpk, f.pq_otpk_ciphertext ? &*f.pq_otpk_ciphertext : nullptr,
+        uses_xwing_combiner(env.suite));
 
     store::Session fresh;
     fresh.contact_index = contact_index;
     fresh.suite = env.suite;
     fresh.session_id = session_id_for(env);
     fresh.status = store::Session::Status::Confirmed;
-    if (env.suite == ProtocolSuite::TripleRatchetV1) {
+    if (uses_triple_ratchet(env.suite)) {
       SecureBytes<32> ec_secret, spqr_secret;
       triple_ratchet::split_initial_secret(shared, ec_secret, spqr_secret);
       fresh.spqr_state = spqr::initialize(false, spqr_secret);
@@ -238,7 +240,7 @@ ReceiveResult receive(store::VaultStore& vault, const IdentitySigningSecretKey& 
     // conversation, and consuming the one-time prekey would let anyone burn
     // through the pool by pasting nonsense. decrypt throws on a bad tag, which
     // leaves all of it untouched.
-    if (env.suite == ProtocolSuite::TripleRatchetV1) {
+    if (uses_triple_ratchet(env.suite)) {
       spqr::Received step = spqr::receive(fresh.spqr_state, env.spqr_message);
       result.plaintext = ratchet::decrypt(
           fresh, env.header, env.ciphertext,
@@ -314,7 +316,7 @@ ReceiveResult receive(store::VaultStore& vault, const IdentitySigningSecretKey& 
       // checked out, so a forged or repeated message leaves the session
       // untouched. That guarantee used to live here, as a clone this function
       // remembered to make; it belongs to the ratchet, so it moved there.
-      if (env.suite == ProtocolSuite::TripleRatchetV1) {
+      if (uses_triple_ratchet(env.suite)) {
         store::Session candidate = store::clone_session(s);
         spqr::Received step = spqr::receive(candidate.spqr_state,
                                              env.spqr_message);

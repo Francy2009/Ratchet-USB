@@ -68,6 +68,14 @@ void derive_shared_secret(const IdentitySigningPublicKey& ik_initiator,
                           const std::vector<const SecureBytes<32>*>& dhs,
                           SecureBytes<32>& out);
 
+// SHA3-256(ss_M || ss_X || ct_X || pk_X || XWingLabel) from
+// draft-connolly-cfrg-xwing-kem. ss_X, ct_X and pk_X are 32 bytes each.
+// Exposed so a known-answer test can lock the concatenation.
+void xwing_combine(const pq::MlKemSharedSecret& ss_m,
+                   const SecureBytes<32>& ss_x,
+                   const x25519::PublicKey& ct_x,
+                   const x25519::PublicKey& pk_x, SecureBytes<32>& out);
+
 }  // namespace detail
 
 // Builds the base64 card an identity publishes: its own identity key, its
@@ -137,9 +145,13 @@ struct InitiatorResult {
 // the shared secret plus the fields Bob needs to complete his side. Falls
 // back to a 3-DH handshake (no one-time prekey) if the stored card's pool is
 // empty, per the X3DH spec's fallback for exhausted bundles.
+//
+// `use_xwing` is the suite-4 combiner. Suite 2 and 3 pass false and keep the
+// historical concatenation. The flag is an argument so an established session
+// cannot pick up a newer combiner by default.
 InitiatorResult initiate(const IdentitySigningSecretKey& my_identity_sk,
                          const IdentitySigningPublicKey& my_identity_pk,
-                         store::Contact& contact);
+                         store::Contact& contact, bool use_xwing);
 
 // Bob's side, given Alice's identity key and ephemeral key from her initial
 // message, plus which of Bob's own prekeys she used. `my_otpk` is null when
@@ -161,7 +173,7 @@ SecureBytes<32> respond_hybrid(
     const store::PqPrekey& my_pq_spk,
     const pq::MlKemCiphertext& pq_spk_ciphertext,
     const store::PqPrekey* my_pq_otpk,
-    const pq::MlKemCiphertext* pq_otpk_ciphertext);
+    const pq::MlKemCiphertext* pq_otpk_ciphertext, bool use_xwing);
 
 }  // namespace ratchet::x3dh
 
