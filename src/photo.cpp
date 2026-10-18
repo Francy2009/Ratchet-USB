@@ -10,11 +10,11 @@
 
 #include <fcntl.h>
 #include <sys/stat.h>
-#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -69,28 +69,60 @@ bool write_all(int fd, const uint8_t* data, std::size_t size) {
   return true;
 }
 
-// Attempts to create an in-memory anonymous file using memfd_create(2).
-// Returns the fd on success, -1 on failure (caller falls back to /tmp).
-int try_memfd(const std::string& ext) {
-#ifdef __NR_memfd_create
-  // Use the raw syscall so we compile cleanly against older glibc headers
-  // that may not expose memfd_create() as a libc wrapper yet.
-  const int fd = static_cast<int>(
-      syscall(__NR_memfd_create, ("ratchet-photo." + ext).c_str(),
-              static_cast<unsigned int>(0)));  // no MFD_CLOEXEC: child needs it
-  return fd;
-#else
-  (void)ext;
-  return -1;
-#endif
+// Where a decrypted image is staged before the viewer is handed its path.
+//
+// $XDG_RUNTIME_DIR is a per-user tmpfs that the session clears at logout, so
+// the bytes never reach durable storage. /tmp is the fallback when the
+// variable is unset or unusable (a bare ssh session, say).
+std::string staging_directory() {
+  const char* runtime = std::getenv("XDG_RUNTIME_DIR");
+  if (runtime != nullptr && runtime[0] != '\0') {
+    struct stat st{};
+    if (::stat(runtime, &st) == 0 && S_ISDIR(st.st_mode) &&
+        st.st_uid == ::geteuid()) {
+      return std::string(runtime);
+    }
+  }
+  return "/tmp";
 }
 
-// Clears O_CLOEXEC on `fd` so the file descriptor survives exec().
-// Called only inside the child process.
-void clear_cloexec(int fd) {
-  const int flags = ::fcntl(fd, F_GETFD);
-  if (flags >= 0) {
-    (void)::fcntl(fd, F_SETFD, flags & ~FD_CLOEXEC);
+// Removes `path` after `delay_seconds` from a process detached from ours, so
+// the caller never blocks on it and no zombie is left behind.
+//
+// The file cannot be unlinked as soon as xdg-open returns: xdg-open only asks
+// the desktop to open the path and may exit before the viewer has read it, so
+// an immediate unlink races the viewer. The grace period lets the viewer open
+// the file; after that only an already-open descriptor keeps the data alive.
+void schedule_staged_image_cleanup(const std::string& path,
+                                   unsigned delay_seconds) {
+  const pid_t child = ::fork();
+  if (child < 0) {
+    return;  // cannot clean up; the image stays staged
+  }
+  if (child == 0) {
+    (void)::setsid();
+    // Detach from the caller's terminal and pipes. A background sleeper that
+    // keeps their write ends open would make a script waiting on our stdout
+    // hang until the grace period ends.
+    const int devnull = ::open("/dev/null", O_RDWR);
+    if (devnull >= 0) {
+      (void)::dup2(devnull, STDIN_FILENO);
+      (void)::dup2(devnull, STDOUT_FILENO);
+      (void)::dup2(devnull, STDERR_FILENO);
+      if (devnull > STDERR_FILENO) {
+        ::close(devnull);
+      }
+    }
+    // Second fork so the sleeper is reparented to init and reaped there.
+    const pid_t grandchild = ::fork();
+    if (grandchild == 0) {
+      ::sleep(delay_seconds);
+      ::unlink(path.c_str());
+    }
+    _exit(0);
+  }
+  int status = 0;
+  while (::waitpid(child, &status, 0) < 0 && errno == EINTR) {
   }
 }
 
@@ -224,107 +256,68 @@ std::optional<PhotoPayload> decode_photo_payload(const std::string& plaintext) {
 }
 
 void open_photo_in_viewer(const PhotoPayload& photo) {
-  // ── step 1: obtain a writable file descriptor for the image ─────────────
-  // Prefer an anonymous in-memory file (memfd_create) so no directory entry
-  // ever appears on the filesystem.  Fall back to a mkstemp() file in /tmp
-  // that is unlinked immediately after xdg-open launches the viewer.
+  // The viewer is launched by the desktop, usually as a separate -- and often
+  // sandboxed -- process through xdg-desktop-portal. It does not inherit our
+  // file descriptors, so passing it a /proc/self/fd/<N> path (as a memfd-based
+  // earlier version did) only works when the viewer happens to be a direct
+  // child; on GNOME the path resolves to an unrelated descriptor in the viewer
+  // and the image cannot be read. Stage the bytes at a real path on a private
+  // tmpfs and hand that path over instead.
 
-  int img_fd = try_memfd(photo.ext);
-  std::string tmp_path;           // only set when using the /tmp fallback
-  bool use_memfd = (img_fd >= 0);
+  // ── step 1: stage the image at a real path ──────────────────────────────
+  std::string path =
+      staging_directory() + "/ratchet-photo-XXXXXX." + photo.ext;
+  const int suffix_len = static_cast<int>(1 + photo.ext.size());
+  std::vector<char> tmpl(path.begin(), path.end());
+  tmpl.push_back('\0');
 
-  if (!use_memfd) {
-    // Fallback: mkstemp with the correct extension so xdg-open picks the
-    // right MIME type.  mkstemps() accepts a suffix length.
-    tmp_path = "/tmp/ratchet-XXXXXX." + photo.ext;
-    const int suffix_len = static_cast<int>(1 + photo.ext.size());
-    // mkstemps needs a writable char array.
-    std::vector<char> tmpl(tmp_path.begin(), tmp_path.end());
-    tmpl.push_back('\0');
-    img_fd = ::mkstemps(tmpl.data(), suffix_len);
-    if (img_fd < 0) {
-      throw Error(std::string("cannot create temporary image file: ") +
-                  std::strerror(errno));
-    }
-    tmp_path.assign(tmpl.data());  // mkstemps filled in the X's
-    // Tighten permissions: only owner can read/write.
-    (void)::fchmod(img_fd, 0600);
+  // O_CLOEXEC: the viewer opens the path itself and has no business holding
+  // this descriptor. mkostemps creates the file 0600; fchmod makes that
+  // independent of the umask.
+  const int img_fd = ::mkostemps(tmpl.data(), suffix_len, O_CLOEXEC);
+  if (img_fd < 0) {
+    throw Error(std::string("cannot create temporary image file: ") +
+                std::strerror(errno));
   }
+  path.assign(tmpl.data());  // mkostemps filled in the X's
+  (void)::fchmod(img_fd, 0600);
 
   // ── step 2: write image bytes ────────────────────────────────────────────
   if (!write_all(img_fd, photo.bytes.data(), photo.bytes.size())) {
     const std::string msg = std::strerror(errno);
     ::close(img_fd);
-    if (!tmp_path.empty()) ::unlink(tmp_path.c_str());
-    throw Error("cannot write image to temporary fd: " + msg);
+    (void)::unlink(path.c_str());
+    throw Error("cannot write image to temporary file: " + msg);
   }
+  ::close(img_fd);
 
-  // For the memfd path the viewer will read from the beginning; lseek back.
-  if (use_memfd) {
-    (void)::lseek(img_fd, 0, SEEK_SET);
-  }
-
-  // ── step 3: build the path the child will pass to xdg-open ──────────────
-  // For a memfd the path is /proc/self/fd/<N> as seen by the child process
-  // after it has cleared O_CLOEXEC (so the fd survives exec).
-  // For the /tmp fallback the path is the real filesystem path.
-  std::string viewer_path;
-  if (use_memfd) {
-    viewer_path = "/proc/self/fd/" + std::to_string(img_fd);
-  } else {
-    viewer_path = tmp_path;
-  }
-
-  // ── step 4: fork + exec xdg-open ─────────────────────────────────────────
-  // We use a simple single fork.  The child:
-  //   a) clears O_CLOEXEC on img_fd (memfd path only)
-  //   b) exec()s xdg-open
-  // The parent waits for xdg-open to exit (it launches the viewer and exits
-  // quickly, typically in < 300 ms).  Once xdg-open has exited the viewer has
-  // the file open via its own fd, so the directory entry (if any) can be
-  // unlinked safely.
-
+  // ── step 3: fork + exec xdg-open ─────────────────────────────────────────
   const pid_t pid = ::fork();
   if (pid < 0) {
     const std::string msg = std::strerror(errno);
-    ::close(img_fd);
-    if (!tmp_path.empty()) ::unlink(tmp_path.c_str());
+    (void)::unlink(path.c_str());
     throw Error("cannot fork for image viewer: " + msg);
   }
 
   if (pid == 0) {
-    // ── child ────────────────────────────────────────────────────────────────
-    // For the memfd path: clear O_CLOEXEC so the fd survives the exec.
-    if (use_memfd) {
-      clear_cloexec(img_fd);
-    }
-    // Close every fd we don't need in the child.  The image fd stays open;
-    // stdin/stdout/stderr are left for xdg-open (some implementations need
-    // them for error output); everything else is CLOEXEC already.
-
+    // ── child ──────────────────────────────────────────────────────────────
     // Detach from the process group so the viewer does not receive terminal
-    // signals aimed at ratchet-usb.
+    // signals aimed at ratchet-usb, then hand the path to the desktop.
     (void)::setsid();
-
-    ::execlp("xdg-open", "xdg-open", viewer_path.c_str(), nullptr);
-    // exec only returns on failure.
-    _exit(127);
+    ::execlp("xdg-open", "xdg-open", path.c_str(), nullptr);
+    _exit(127);  // exec only returns on failure
   }
 
-  // ── parent ───────────────────────────────────────────────────────────────
-  // Wait for xdg-open.  It exits once the viewer is launched, so this blocks
-  // for at most a few hundred milliseconds.
+  // ── step 4: wait, then schedule the staged file for cleanup ──────────────
   int status = 0;
-  while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
-
-  // The image fd is no longer needed in the parent.
-  ::close(img_fd);
-
-  // Unlink the /tmp file (if used): the viewer already has it open, so the
-  // file data persists until the viewer closes it.
-  if (!tmp_path.empty()) {
-    (void)::unlink(tmp_path.c_str());
+  while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) {
   }
+
+  // xdg-open returns as soon as it has asked the desktop to open the path,
+  // which is not necessarily after the viewer has read it, so the file must
+  // outlive this call. A detached helper removes it once the viewer has had
+  // time to open it.
+  schedule_staged_image_cleanup(path, 300);
 
   // Report failure only when xdg-open could not be found at all (exit 127).
   if (WIFEXITED(status) && WEXITSTATUS(status) == 127) {

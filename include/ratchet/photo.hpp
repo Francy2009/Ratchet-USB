@@ -83,24 +83,21 @@ std::string encode_photo_payload(const std::vector<uint8_t>& raw,
 // invalid (truncated length field, oversized extension, empty body, etc.).
 std::optional<PhotoPayload> decode_photo_payload(const std::string& plaintext);
 
-// Opens `photo` in the system's default image viewer without writing any
-// permanent file to the host filesystem.
+// Opens `photo` in the system's default image viewer without writing the
+// image to durable storage.
 //
 // Implementation (Linux):
-//  1. Creates an anonymous in-memory file with memfd_create().
+//  1. Creates a 0600 file with the correct extension under $XDG_RUNTIME_DIR
+//     (a tmpfs cleared at logout), or /tmp when that is unavailable.
 //  2. Writes the image bytes into it.
-//  3. Forks a child; the child clears O_CLOEXEC on the memfd, then
-//     exec()s "xdg-open /proc/self/fd/<N>".
-//  4. The parent waits for xdg-open (typically < 200 ms, it just launches
-//     the viewer app and exits).
-//  5. The child exits; the parent resumes. The memfd is kept alive by the
-//     viewer's open file descriptor and vanishes once the viewer closes it.
+//  3. Forks a child that detaches and exec()s "xdg-open <real path>".
+//  4. The parent waits for xdg-open, which only asks the desktop to open the
+//     path and exits quickly.
+//  5. A detached helper unlinks the staged file after a short grace period.
 //
-// Fallback (when memfd_create is unavailable):
-//  – mkstemp() in /tmp with mode 0600 and the correct extension suffix.
-//  – The directory entry is unlinked immediately after xdg-open exits so
-//    the file is no longer reachable via the filesystem, only via the
-//    viewer's open fd.
+// The path passed to xdg-open is a real filesystem path: the viewer is usually
+// started as a separate (often sandboxed) process that does not inherit this
+// process's file descriptors, so a memfd or /proc/self/fd path cannot be used.
 //
 // Throws Error if the viewer could not be launched.
 void open_photo_in_viewer(const PhotoPayload& photo);
