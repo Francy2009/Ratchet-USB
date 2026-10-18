@@ -325,8 +325,14 @@ std::size_t decode_key(std::string_view in, bool flush, Key& out) {
     case 0x0C:
       out.code = KeyCode::CtrlL;
       return 1;
+    case 0x10:
+      out.code = KeyCode::CtrlP;
+      return 1;
     case 0x15:
       out.code = KeyCode::CtrlU;
+      return 1;
+    case 0x16:
+      out.code = KeyCode::CtrlV;
       return 1;
     case 0x17:
       out.code = KeyCode::CtrlW;

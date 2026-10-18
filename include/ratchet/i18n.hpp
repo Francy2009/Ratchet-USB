@@ -68,14 +68,17 @@ namespace ratchet::i18n {
   X(WritingTo, "Writing to", "Stai scrivendo a")                               \
   X(ComposeHint, "Type your message. Enter starts a new line.",                \
     "Scrivi il messaggio. Invio va a capo.")                                    \
-  X(KeysCompose, "Ctrl-D send   Esc cancel   Ctrl-C quit",                      \
-    "Ctrl-D invia   Esc annulla   Ctrl-C esci")      \
+  X(KeysCompose,                                                               \
+    "Ctrl-D send   Ctrl-P photo   Esc cancel   Ctrl-C quit",                   \
+    "Ctrl-D invia   Ctrl-P foto   Esc annulla   Ctrl-C esci")                  \
   /* showing a block to copy */                                                \
-  X(CopyBlock, "Select all of this and send it however you like:",             \
-    "Seleziona tutto questo e mandalo come preferisci:")                        \
+  X(CopyBlock, "Press y to copy this whole block, then paste it wherever you " \
+    "like:", "Premi y per copiare tutto il blocco, poi incollalo dove vuoi:")  \
   X(YourCard, "Your contact card", "La tua card")                              \
   X(MessageBlock, "Your encrypted message", "Il tuo messaggio cifrato")         \
-  X(KeysBlock, "up/down scroll   Esc or q back",                               \
+  X(KeysBlock, "y copy   up/down scroll   Esc or q back",                      \
+    "y copia   su/giu' scorri   Esc o q indietro")    \
+  X(KeysMessage, "up/down scroll   Esc or q back",                             \
     "su/giu' scorri   Esc o q indietro")    \
   /* pasting something in */                                                    \
   X(PasteBlock, "Paste the block here, then press Ctrl-D.",                    \
@@ -111,6 +114,8 @@ namespace ratchet::i18n {
     "aggiunto. Controlla la sua impronta prima di fidarti.")                    \
   X(MarkedVerified, "marked as verified.", "segnato come verificato.")          \
   X(MessageReady, "Message encrypted.", "Messaggio cifrato.")                   \
+  X(Copied, "Block copied to the clipboard.",                                  \
+    "Blocco copiato negli appunti.")                                            \
   X(EmptyMessage, "An empty message is not sent.",                             \
     "Un messaggio vuoto non viene inviato.")                                    \
   X(NothingToRead, "Nothing was pasted, so there is nothing to read.",         \
@@ -135,6 +140,7 @@ namespace ratchet::i18n {
   X(MenuNewIdentity, "Set up a new identity", "Crea una nuova identita'")       \
   X(MenuRestore, "Restore from words", "Ripristina dalle parole")              \
   X(MenuBack, "Back", "Indietro")   \
+  X(MenuCopy, "Copy block", "Copia blocco")                                    \
   /* the prompts that run outside the frame */                                 \
   X(PassphrasePrompt, "Vault passphrase: ", "Passphrase del vault: ")          \
   X(PassphraseNew, "Choose a passphrase for the vault: ",                      \
@@ -172,7 +178,28 @@ namespace ratchet::i18n {
   X(VaultCreated, "Vault created. Unlocking it now.",                          \
     "Vault creato. Ora lo apro.")                                               \
   X(DerivingKey, "Deriving the vault key with Argon2id...",                    \
-    "Sto derivando la chiave del vault con Argon2id...")
+    "Sto derivando la chiave del vault con Argon2id...")                        \
+  /* photo attachment */                                                        \
+  X(MenuSendPhoto, "Send photo", "Invia foto")                                 \
+  X(PhotoPathPrompt, "Path to the image file:", "Percorso del file immagine:") \
+  X(PhotoPathHint,                                                              \
+    "Type the full path to a JPEG or PNG file, then press Enter.",             \
+    "Scrivi il percorso completo di un file JPEG o PNG, poi premi Invio.")     \
+  X(KeysPhotoPick, "Enter confirm   Esc cancel   Ctrl-C quit",                  \
+    "Invio conferma   Esc annulla   Ctrl-C esci")                               \
+  X(PhotoReady, "Image encrypted.", "Immagine cifrata.")                        \
+  X(PhotoReceived, "Image received from", "Immagine ricevuta da")              \
+  X(PhotoHint, "An encrypted image arrived.",                                  \
+    "E' arrivata un'immagine cifrata.")                                         \
+  X(MenuOpenPhoto, "Open", "Apri")                                             \
+  X(KeysPhoto, "Enter open   Esc back   Ctrl-C quit",                          \
+    "Invio apri   Esc indietro   Ctrl-C esci")                                  \
+  X(PhotoOpenFailed,                                                            \
+    "Could not open the image viewer (xdg-open not found).",                   \
+    "Non riesco ad aprire il visualizzatore (xdg-open non trovato).")          \
+  X(PhotoPathRequired, "No image path was given.",                             \
+    "Non hai indicato il percorso di nessuna immagine.")
+
 
 enum class Str : std::uint8_t {
 #define RATCHET_I18N_ENUM(id, en, it) id,

@@ -16,8 +16,10 @@
 #include "ratchet/app.hpp"
 #include "ratchet/bip39.hpp"
 #include "ratchet/cli.hpp"
+#include "ratchet/clipboard.hpp"
 #include "ratchet/identity.hpp"
 #include "ratchet/media.hpp"
+#include "ratchet/photo.hpp"
 #include "ratchet/screen.hpp"
 #include "ratchet/session.hpp"
 #include "ratchet/terminal.hpp"
@@ -127,6 +129,10 @@ class Driver {
   void trust_selected();
   void send_message();
   void receive_message();
+  void send_photo();
+  void open_pending_photo();
+  void copy_block();
+  void paste_from_clipboard();
 
   void save();
   void go_home();
@@ -159,6 +165,10 @@ class Driver {
   fs::path drive_;
   fs::path vault_path_;
   std::string fingerprint_;
+  // The image that arrived, held only until the vault is locked or another
+  // message replaces it. It is never written to the host disk: opening it
+  // hands the bytes to the system viewer through an anonymous memfd.
+  std::optional<photo::PhotoPayload> pending_photo_;
   bool running_ = true;
 };
 
@@ -312,9 +322,13 @@ void Driver::go_home() {
 
 void Driver::lock(Str reason) {
   // Dropping the OpenedVault runs the destructors that wipe the seed, the
-  // session keys and the passphrase; forget() takes what they produced off the
-  // screen.
+  // session keys and the passphrase; forgetting the received image takes its
+  // bytes off the heap as well, so locking leaves nothing decrypted behind.
   vault_.reset();
+  if (pending_photo_) {
+    sodium_memzero(pending_photo_->bytes.data(), pending_photo_->bytes.size());
+    pending_photo_.reset();
+  }
   fingerprint_.clear();
   model_.forget();
   refresh_drives();
@@ -551,11 +565,115 @@ void Driver::receive_message() {
     const bool unverified =
         !vault().store.contacts[result.contact_index].verified;
     model_.show_contacts(contact_rows());
-    model_.show_message(result.alias, std::move(result.plaintext),
-                        result.session_established, unverified);
+
+    // The decrypted plaintext is either an ordinary message or an image
+    // payload. A leading 0x02 marks the latter and never begins typed text, so
+    // the two cannot be confused.
+    const std::optional<photo::PhotoPayload> received =
+        photo::decode_photo_payload(result.plaintext);
+    if (received.has_value()) {
+      if (pending_photo_) {
+        sodium_memzero(pending_photo_->bytes.data(),
+                       pending_photo_->bytes.size());
+      }
+      pending_photo_ = *received;
+      model_.show_photo(result.alias, result.session_established, unverified);
+    } else {
+      model_.show_message(result.alias, std::move(result.plaintext),
+                          result.session_established, unverified);
+    }
     wipe_string(result.plaintext);
   } catch (const std::exception& e) {
     wipe_string(block);
+    report(e);
+  }
+}
+
+void Driver::send_photo() {
+  const ContactRow* row = model_.selected_contact();
+  std::string path = model_.text();
+  model_.clear_text();
+  if (row == nullptr || path.empty()) {
+    wipe_string(path);
+    model_.set_status(std::string(t(Str::PhotoPathRequired)),
+                      screen::Style::Warn);
+    return;
+  }
+
+  try {
+    const int index = vault().store.find_contact(row->alias);
+    if (index < 0) {
+      throw Error("no contact named '" + row->alias + "'");
+    }
+
+    // Read and validate the image, frame it, then encrypt it through the very
+    // same ratchet a text message uses. The raw bytes and the framed plaintext
+    // are zeroed as soon as they are no longer needed; only the ciphertext
+    // block survives.
+    std::vector<uint8_t> raw = photo::load_image(fs::path(path));
+    wipe_string(path);
+    const std::string_view ext = photo::extension_for(raw);
+    std::string payload = photo::encode_photo_payload(raw, ext);
+    sodium_memzero(raw.data(), raw.size());
+    raw.clear();
+
+    IdentitySigningSecretKey identity_sk;
+    IdentitySigningPublicKey identity_pk;
+    derive_identity(vault().store.seed, identity_sk, identity_pk);
+    std::string block =
+        session::send(vault().store, identity_sk, identity_pk,
+                      static_cast<std::size_t>(index), payload);
+    identity_sk.wipe();
+    wipe_string(payload);
+
+    save();
+    model_.show_contacts(contact_rows());
+    model_.show_block(t(Str::MessageBlock), std::move(block));
+    model_.set_status(std::string(t(Str::PhotoReady)), screen::Style::Good);
+  } catch (const std::exception& e) {
+    wipe_string(path);
+    report(e);
+  }
+}
+
+void Driver::open_pending_photo() {
+  if (!pending_photo_) {
+    model_.set_status(std::string(t(Str::NothingToRead)), screen::Style::Warn);
+    return;
+  }
+  try {
+    // Never saved: open_photo_in_viewer passes the bytes to the viewer through
+    // an anonymous in-memory file and unlinks any fallback immediately.
+    photo::open_photo_in_viewer(*pending_photo_);
+  } catch (const std::exception& e) {
+    report(e);
+  }
+}
+
+void Driver::copy_block() {
+  // The screen only offers this for the armoured card or message block. The
+  // text is public, but it is still wiped as soon as the clipboard has it.
+  std::string text = model_.pager_text();
+  if (text.empty()) {
+    model_.set_status(std::string(t(Str::NothingToRead)), screen::Style::Warn);
+    return;
+  }
+  try {
+    clipboard::copy(text);
+    wipe_string(text);
+    model_.set_status(std::string(t(Str::Copied)), screen::Style::Good);
+  } catch (const std::exception& e) {
+    wipe_string(text);
+    report(e);
+  }
+}
+
+void Driver::paste_from_clipboard() {
+  try {
+    std::string text = clipboard::paste();
+    model_.paste_text(text);
+    wipe_string(text);
+  } catch (const std::exception& e) {
     report(e);
   }
 }
@@ -652,7 +770,8 @@ void Driver::loop() {
           action != ActionKind::Lock && action != ActionKind::UseDrive &&
           action != ActionKind::UseTypedPath &&
           action != ActionKind::CreateIdentity &&
-          action != ActionKind::RestoreIdentity;
+          action != ActionKind::RestoreIdentity &&
+          action != ActionKind::PasteClipboard;
       if (needs_vault && !vault_) {
         continue;
       }
@@ -698,6 +817,18 @@ void Driver::loop() {
         case ActionKind::Receive:
           receive_message();
           break;
+        case ActionKind::SendPhoto:
+          send_photo();
+          break;
+        case ActionKind::OpenPhoto:
+          open_pending_photo();
+          break;
+        case ActionKind::CopyBlock:
+          copy_block();
+          break;
+        case ActionKind::PasteClipboard:
+          paste_from_clipboard();
+          break;
       }
       if (!running_) {
         break;
@@ -720,6 +851,10 @@ int Driver::run() {
   // Explicit rather than left to the destructor: the vault is wiped before the
   // terminal is handed back, not somewhere in between.
   vault_.reset();
+  if (pending_photo_) {
+    sodium_memzero(pending_photo_->bytes.data(), pending_photo_->bytes.size());
+    pending_photo_.reset();
+  }
   model_.forget();
   return 0;
 }

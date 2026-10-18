@@ -23,6 +23,7 @@
 #include "ratchet/i18n.hpp"
 #include "ratchet/identity.hpp"
 #include "ratchet/media.hpp"
+#include "ratchet/photo.hpp"
 #include "ratchet/ratchet.hpp"
 #include "ratchet/secure.hpp"
 #include "ratchet/session.hpp"
@@ -729,11 +730,8 @@ int cmd_send(const Options& opts) {
       require_value(opts.to, "Send to (contact alias): ", "a recipient alias is required");
   const fs::path path = vault::vault_path(usb);
 
-  const std::string plaintext =
-      read_text_arg_or_stdin(opts.message, "Message (end with Ctrl-D): ",
-                             message::kMaxPlaintextBytes);
-  if (plaintext.empty()) {
-    throw Error("message must not be empty");
+  if (!opts.photo_file.empty() && opts.message.has_value()) {
+    throw Error("--photo and a message cannot be combined");
   }
 
   OpenedVault opened = unlock_vault(path);
@@ -745,6 +743,24 @@ int cmd_send(const Options& opts) {
   }
   const std::size_t contact_index = static_cast<std::size_t>(idx);
 
+  // With --photo the message is the framed image; otherwise it is the text the
+  // user typed. Either way the same session::send call does the encryption, so
+  // an image is protected by exactly the keys a message is.
+  std::string plaintext;
+  std::vector<uint8_t> raw;
+  if (!opts.photo_file.empty()) {
+    raw = photo::load_image(fs::path(opts.photo_file));
+    const std::string_view ext = photo::extension_for(raw);
+    plaintext = photo::encode_photo_payload(raw, ext);
+    sodium_memzero(raw.data(), raw.size());
+  } else {
+    plaintext = read_text_arg_or_stdin(opts.message, "Message (end with Ctrl-D): ",
+                                       message::kMaxPlaintextBytes);
+    if (plaintext.empty()) {
+      throw Error("message must not be empty");
+    }
+  }
+
   IdentitySigningSecretKey identity_sk;
   IdentitySigningPublicKey identity_pk;
   derive_identity(store.seed, identity_sk, identity_pk);
@@ -752,6 +768,7 @@ int cmd_send(const Options& opts) {
   const std::string block =
       session::send(store, identity_sk, identity_pk, contact_index, plaintext);
   identity_sk.wipe();
+  wipe_string(plaintext);
 
   app::save_vault(path, store, opened.params, opened.passphrase);
 
@@ -791,10 +808,30 @@ int cmd_recv(const Options& opts) {
     std::cerr << "warning: '" << alias
               << "' has not been marked as trusted.\n";
   }
-  // The message body is whatever the sender chose to put in it. Escaped when
-  // it is going to a terminal, verbatim when it is going to a file or a pipe.
-  std::cout << alias << ": " << terminal::escape_if_tty(result.plaintext)
-            << "\n";
+
+  // A decrypted image is not text: printing it would dump binary to the
+  // terminal. Detect the framing byte and, on an interactive terminal, offer
+  // to hand the bytes straight to the system viewer -- never to a file.
+  std::optional<photo::PhotoPayload> received =
+      photo::decode_photo_payload(result.plaintext);
+  if (received.has_value()) {
+    std::cerr << alias << ": [encrypted image received]\n";
+    if (terminal::stdin_is_tty()) {
+      const std::string answer =
+          terminal::read_line("Open it in the image viewer? [y/N] ");
+      if (answer == "y" || answer == "Y" || answer == "yes") {
+        photo::open_photo_in_viewer(*received);
+      }
+    } else {
+      std::cerr << "not opening it: standard input is not a terminal\n";
+    }
+    sodium_memzero(received->bytes.data(), received->bytes.size());
+  } else {
+    // The message body is whatever the sender chose to put in it. Escaped when
+    // it is going to a terminal, verbatim when it is going to a file or a pipe.
+    std::cout << alias << ": " << terminal::escape_if_tty(result.plaintext)
+              << "\n";
+  }
   return 0;
 }
 

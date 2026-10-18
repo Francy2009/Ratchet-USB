@@ -26,8 +26,13 @@
 //     running, and it shows up in the taskbar, the window switcher, a
 //     screenshot and a screen share. This is a tool for keeping data private
 //     on a machine; announcing itself there would undo that for free.
-//   * It never touches the clipboard, in either direction, and in particular
-//     never emits OSC 52.
+//   * It never emits OSC 52. Copying -- an armoured card or message block,
+//     never decrypted text -- and Ctrl-V reading the clipboard back both go
+//     through an external tool (wl-copy/wl-paste, xclip or xsel) exec'd
+//     directly, so the selection is handled by a program the user already
+//     trusts with it rather than by an escape sequence this process writes to
+//     the terminal. When no tool is installed Ctrl-V reports so; the terminal's
+//     own paste (Ctrl-Shift-V, middle click) keeps working regardless.
 //   * It never enables mouse reporting. Keyboard only: fewer escape sequences
 //     to decode, and the terminal's own selection keeps working, which is how
 //     a user copies a message block out.
@@ -94,7 +99,9 @@ enum class KeyCode : uint8_t {
   CtrlC,
   CtrlD,
   CtrlL,
+  CtrlP,
   CtrlU,
+  CtrlV,
   CtrlW,
   PasteBegin,  // the terminal is about to send pasted bytes
   PasteEnd,    // the pasted bytes are done

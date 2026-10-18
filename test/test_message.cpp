@@ -153,3 +153,19 @@ TEST("wire encode_block/decode_block round-trip and reject a label mismatch") {
   CHECK_THROWS(wire::decode_block("OTHER", block));
   CHECK_THROWS(wire::decode_block("TEST", "no markers here"));
 }
+
+TEST("wire reports a block whose dashes an editor has changed") {
+  // LibreOffice and chat apps turn "--" into an en dash. The label is still
+  // there, so the error has to say what actually happened rather than "BEGIN
+  // marker not found".
+  const std::string mangled =
+      "\u2013\u2013\u2013\u2013\u2013BEGIN RATCHET TEST\u2013\u2013\u2013\u2013\u2013\n"
+      "AAAA\n\u2013\u2013\u2013\u2013\u2013END RATCHET TEST\u2013\u2013\u2013\u2013\u2013\n";
+  bool specific = false;
+  try {
+    (void)wire::decode_block("TEST", mangled);
+  } catch (const Error& e) {
+    specific = std::string(e.what()).find("altered dashes") != std::string::npos;
+  }
+  CHECK(specific);
+}

@@ -96,6 +96,25 @@ void Model::show_message(const std::string& from, std::string body, bool session
   go(Screen::Message);
 }
 
+void Model::show_photo(const std::string& from, bool session_opened,
+                       bool unverified) {
+  // Reuse pager_heading_ and pager_notes_ for the sender and warnings; the
+  // pager_ body is left empty because the Photo screen renders its own fixed
+  // hint line rather than scrollable text.
+  pager_heading_ = std::string(i18n::t(lang_, Str::PhotoReceived)) + " " + from;
+  pager_notes_.clear();
+  if (session_opened) {
+    pager_notes_.emplace_back(i18n::t(lang_, Str::SessionOpened));
+  }
+  if (unverified) {
+    pager_notes_.emplace_back(i18n::t(lang_, Str::WarnUnverified));
+  }
+  pager_.clear();
+  pager_top_ = 0;
+  go(Screen::Photo);
+}
+
+
 void Model::set_status(std::string text, screen::Style style) {
   status_ = std::move(text);
   status_style_ = style;
@@ -132,6 +151,19 @@ void Model::forget() {
 
 void Model::clear_text() { wipe_string(text_); }
 
+void Model::paste_text(std::string_view utf8) { insert(utf8); }
+
+std::string Model::pager_text() const {
+  std::string out;
+  for (std::size_t i = 0; i < pager_.size(); ++i) {
+    if (i != 0) {
+      out.push_back('\n');
+    }
+    out += pager_[i];
+  }
+  return out;
+}
+
 const DriveEntry* Model::selected_drive() const {
   if (screen_ != Screen::Drive || selected_ >= drives_.size()) {
     return nullptr;
@@ -157,7 +189,8 @@ void Model::go(Screen next) {
   focus_ = Focus::Body;
   menu_index_ = 0;
   if (next == Screen::Alias || next == Screen::Compose ||
-      next == Screen::Paste || next == Screen::DrivePath) {
+      next == Screen::Paste || next == Screen::DrivePath ||
+      next == Screen::PhotoPick) {
     wipe_string(text_);
   }
   in_paste_ = false;
@@ -268,6 +301,10 @@ ActionKind Model::key_in_text(const screen::Key& key) {
     case screen::KeyCode::CtrlU:
       clear_text();
       return ActionKind::None;
+    case screen::KeyCode::CtrlV:
+      // The driver reads the system clipboard and hands the text back; the
+      // model never touches the outside world itself.
+      return ActionKind::PasteClipboard;
     default:
       break;
   }
@@ -277,6 +314,9 @@ ActionKind Model::key_in_text(const screen::Key& key) {
     // a line break, and Ctrl-D is what confirms.
     if (screen_ == Screen::DrivePath) {
       return text_.empty() ? ActionKind::None : ActionKind::UseTypedPath;
+    }
+    if (screen_ == Screen::PhotoPick) {
+      return text_.empty() ? ActionKind::None : ActionKind::SendPhoto;
     }
     if (screen_ == Screen::Alias) {
       if (text_.empty()) {
@@ -291,6 +331,14 @@ ActionKind Model::key_in_text(const screen::Key& key) {
     return ActionKind::None;
   }
 
+  if (key.code == screen::KeyCode::CtrlP && screen_ == Screen::Compose) {
+    // Ctrl-P is a control character, never text, so binding photo attachment
+    // to it leaves every printable key -- including 'f' -- free for the
+    // message itself.
+    go(Screen::PhotoPick);
+    return ActionKind::None;
+  }
+
   if (key.code == screen::KeyCode::CtrlD) {
     if (screen_ == Screen::Compose) {
       return ActionKind::Send;
@@ -302,7 +350,12 @@ ActionKind Model::key_in_text(const screen::Key& key) {
 
   if (key.code == screen::KeyCode::Escape) {
     clear_text();
-    go(unlocked_ ? Screen::Home : Screen::Drive);
+    if (screen_ == Screen::PhotoPick) {
+      // Cancelling photo pick goes back to Compose, not Home.
+      go(Screen::Compose);
+    } else {
+      go(unlocked_ ? Screen::Home : Screen::Drive);
+    }
   }
   return ActionKind::None;
 }
@@ -331,6 +384,11 @@ ActionKind Model::key_in_pager(const screen::Key& key) {
       close_pager();
       return ActionKind::None;
     case screen::KeyCode::Char:
+      // `y` copies the whole block, but only the armoured block -- a decrypted
+      // message body is not offered for copying.
+      if (screen_ == Screen::Block && key.text == "y") {
+        return ActionKind::CopyBlock;
+      }
       // `q` closes a pager here as it does in every pager. Without it the
       // only way off this screen is Escape, and a block long enough to scroll
       // is exactly where somebody reaches for `q`.
@@ -396,21 +454,40 @@ std::vector<MenuEntry> Model::menu() const {
       if (contact != nullptr && !contact->verified) {
         items.push_back(ch(Str::MenuVerify, 't'));
       }
+      // Ctrl-P, not a letter: a letter here would be one the alias screen and
+      // the message body would then have to give up.
+      items.push_back(code(Str::MenuSendPhoto, screen::KeyCode::CtrlP));
       items.push_back(code(Str::MenuBack, screen::KeyCode::Escape));
       return items;
     }
 
+    // The card and the encrypted block can be copied whole. A decrypted
+    // message cannot: it is the one thing on these screens that is not meant
+    // to end up on a clipboard, so Message keeps only Back.
     case Screen::Block:
+      return {ch(Str::MenuCopy, 'y'),
+              code(Str::MenuBack, screen::KeyCode::Escape)};
+
     case Screen::Message:
       return {code(Str::MenuBack, screen::KeyCode::Escape)};
 
-    // The text screens get no menu: every key there is a character, so a row
-    // of actions would be something the arrow keys fight over while somebody
-    // is trying to type.
+    case Screen::Photo:
+      return {code(Str::MenuOpenPhoto, screen::KeyCode::Enter),
+              code(Str::MenuBack, screen::KeyCode::Escape)};
+
+    // Writing a message keeps the usual bottom bar, with the photo action on
+    // it. Arrow keys only steer the menu, so typing is unaffected.
+    case Screen::Compose:
+      return {code(Str::MenuSendPhoto, screen::KeyCode::CtrlP),
+              code(Str::MenuBack, screen::KeyCode::Escape)};
+
+    // The remaining text screens get no menu: every key there is a character,
+    // so a row of actions would be something the arrow keys fight over while
+    // somebody is trying to type.
     case Screen::DrivePath:
     case Screen::Alias:
-    case Screen::Compose:
     case Screen::Paste:
+    case Screen::PhotoPick:
       return {};
   }
   return {};
@@ -507,11 +584,25 @@ ActionKind Model::dispatch(const screen::Key& key) {
     case Screen::Alias:
     case Screen::Compose:
     case Screen::Paste:
+    case Screen::PhotoPick:
       return key_in_text(key);
 
     case Screen::Block:
     case Screen::Message:
       return key_in_pager(key);
+
+    case Screen::Photo:
+      // A received image is not scrollable text: Enter opens it in the system
+      // viewer, Escape (or q) leaves the notification. The viewer is launched
+      // by the driver; the model only reports the action.
+      if (key.code == screen::KeyCode::Enter) {
+        return ActionKind::OpenPhoto;
+      }
+      if (key.code == screen::KeyCode::Escape ||
+          (key.code == screen::KeyCode::Char && key.text == "q")) {
+        go(Screen::Home);
+      }
+      return ActionKind::None;
 
     case Screen::Setup:
       if (key.code == screen::KeyCode::Escape) {
@@ -533,6 +624,10 @@ ActionKind Model::dispatch(const screen::Key& key) {
       }
       if (key.code == screen::KeyCode::Char && key.text == "w") {
         go(Screen::Compose);
+        return ActionKind::None;
+      }
+      if (key.code == screen::KeyCode::CtrlP) {
+        go(Screen::PhotoPick);
         return ActionKind::None;
       }
       if (key.code == screen::KeyCode::Char && key.text == "t") {
@@ -563,8 +658,13 @@ std::string_view Model::footer_keys() const {
     case Screen::Paste:
       return i18n::t(lang_, Str::KeysPaste);
     case Screen::Block:
-    case Screen::Message:
       return i18n::t(lang_, Str::KeysBlock);
+    case Screen::Message:
+      return i18n::t(lang_, Str::KeysMessage);
+    case Screen::PhotoPick:
+      return i18n::t(lang_, Str::KeysPhotoPick);
+    case Screen::Photo:
+      return i18n::t(lang_, Str::KeysPhoto);
   }
   return {};
 }
@@ -804,13 +904,41 @@ void Model::render_body(screen::Frame& frame, std::size_t rows) const {
       }
       break;
     }
-  }
+
+    case Screen::PhotoPick:
+      // Path input: identical layout to DrivePath.
+      frame.line(indent(i18n::t(lang_, Str::PhotoPathPrompt)),
+                 screen::Style::Accent);
+      frame.blank();
+      frame.line(indent(i18n::t(lang_, Str::PhotoPathHint)),
+                 screen::Style::Dim);
+      frame.blank();
+      frame.line(indent("> " + text_));
+      break;
+
+    case Screen::Photo: {
+      // Notification screen for a received image.
+      // Shows sender, any session/trust warnings, and a fixed hint line.
+      // The [Open] and [Back] actions live in the menu row below.
+      frame.line(indent(pager_heading_), screen::Style::Accent);
+      for (const std::string& note : pager_notes_) {
+        const bool warning = note == i18n::t(lang_, Str::WarnUnverified);
+        frame.line(indent(note),
+                   warning ? screen::Style::Bad : screen::Style::Dim);
+      }
+      frame.blank();
+      frame.line(indent(i18n::t(lang_, Str::PhotoHint)));
+      break;
+    }
+
+  }  // switch (screen_)
 
   // Pad out to the promised height so the footer always lands on the same row.
   for (std::size_t i = frame.lines().size() - before; i < rows; ++i) {
     frame.blank();
   }
 }
+
 
 std::vector<std::vector<screen::Span>> Model::menu_rows(std::size_t width) const {
   std::vector<std::vector<screen::Span>> rows;

@@ -65,6 +65,17 @@ std::vector<uint8_t> decode_block(std::string_view expected_label,
 
   const std::size_t begin_pos = text.find(begin_marker);
   if (begin_pos == std::string_view::npos) {
+    // A very common way to lose a block is to round-trip it through an editor
+    // or a chat app that "improves" the punctuation, turning the ASCII hyphens
+    // of the marker into typographic dashes. The label survives, the marker
+    // does not, and the generic message below would send somebody hunting for
+    // the wrong bug.
+    if (text.find(std::string("BEGIN RATCHET ") + std::string(expected_label)) !=
+        std::string_view::npos) {
+      throw Error("the '" + std::string(expected_label) +
+                  "' block has altered dashes or line breaks (an editor or chat "
+                  "app changed the '-' characters); paste it exactly as produced");
+    }
     throw Error("expected a '" + std::string(expected_label) +
                "' block (BEGIN marker not found)");
   }

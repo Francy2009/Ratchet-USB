@@ -37,6 +37,7 @@ struct Options {
   std::string name;
   std::string to;
   std::string card_file;
+  std::string photo_file;  // send --photo: encrypt an image instead of text
   std::optional<std::string> message;
   // Terminal interface only.
   std::string lang;  // empty means "work it out from the locale"

@@ -36,7 +36,7 @@ const std::vector<CommandSpec>& specs() {
       {"contacts", {"--usb-path"}, 0},
       {"trust", {"--usb-path"}, 1},
       {"reset-session", {"--usb-path"}, 1},
-      {"send", {"--usb-path"}, 2},
+      {"send", {"--usb-path", "--photo"}, 2},
       {"recv", {"--usb-path"}, 1},
       {"ui", {"--usb-path", "--lang", "--idle-lock"}, 0},
   };
@@ -110,7 +110,7 @@ void print_usage(std::ostream& os) {
      << "  " << kProgram << " trust    --usb-path <dir> <alias>\n"
      << "  " << kProgram << " reset-session --usb-path <dir> <alias>\n"
      << "  " << kProgram
-     << " send     --usb-path <dir> <alias> [message]\n"
+     << " send     --usb-path <dir> <alias> [message|--photo <file>]\n"
      << "  " << kProgram << " recv     --usb-path <dir> [message]\n"
      << "  " << kProgram
      << " ui       [--usb-path <dir>] [--lang en|it] [--idle-lock <s>]\n"
@@ -140,7 +140,9 @@ void print_usage(std::ostream& os) {
      << "  send      Encrypt a message for <alias> (running the initial\n"
      << "            handshake automatically if needed) and print the block\n"
      << "            to paste into the chat. [message] falls back to standard\n"
-     << "            input, or a prompt, when omitted.\n"
+     << "            input, or a prompt, when omitted. With --photo, encrypt a\n"
+     << "            JPEG or PNG file through the same ratchet instead; the\n"
+     << "            image file itself is never modified or copied elsewhere.\n"
      << "  recv      Decrypt a pasted message block (establishing the\n"
      << "            session automatically if it is the first one). [message]\n"
      << "            falls back to standard input, or a prompt, when omitted.\n"
@@ -165,6 +167,8 @@ void print_usage(std::ostream& os) {
      << "                       of generating a new one (init only).\n"
      << "  --fingerprint        Print only the identity fingerprint (card only).\n"
      << "  --card <file>        Read a contact card from a file (add only).\n"
+     << "  --photo <file>       Encrypt a JPEG or PNG file instead of text\n"
+     << "                       (send only).\n"
      << "  --lang en|it         Language of the interface (ui only). Without\n"
      << "                       it, an Italian locale gets Italian and\n"
      << "                       anything else gets English.\n"
@@ -280,6 +284,9 @@ Options parse_args(const std::vector<std::string_view>& args) {
     } else if (arg == "--card") {
       opts.card_file = std::string(next("--card"));
       note("--card");
+    } else if (arg == "--photo") {
+      opts.photo_file = std::string(next("--photo"));
+      note("--photo");
     } else if (arg.starts_with("-") && arg != "-") {
       throw Error("unknown argument: " + std::string(arg));
     } else {

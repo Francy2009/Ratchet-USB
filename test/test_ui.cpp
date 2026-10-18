@@ -3,6 +3,7 @@
 
 #include "ratchet/screen.hpp"
 #include "ratchet/ui.hpp"
+#include "ratchet/wire.hpp"
 #include "test_support.hpp"
 
 using namespace ratchet;
@@ -144,6 +145,102 @@ TEST("Enter is a line break while writing, not a send") {
   CHECK_EQ(model.text(), std::string("a\nb"));
 }
 
+// --- attaching and receiving an image ----------------------------------------
+
+TEST("Ctrl-P while writing opens the photo path screen") {
+  Model model = unlocked_model({contact("alice")});
+  model.handle_key(code(screen::KeyCode::Enter));  // open the contact
+  model.handle_key(ch("w"));                        // start writing
+  model.handle_key(code(screen::KeyCode::CtrlP));
+  CHECK(model.screen() == Screen::PhotoPick);
+  for (const char* c : {"/", "t", "m", "p", "/", "a", ".", "p", "n", "g"}) {
+    model.handle_key(ch(c));
+  }
+  CHECK(model.handle_key(code(screen::KeyCode::Enter)) == ActionKind::SendPhoto);
+  CHECK_EQ(model.text(), std::string("/tmp/a.png"));
+}
+
+TEST("the letter f is still text while writing") {
+  // The photo action is bound to a control character precisely so no printable
+  // key is taken away from the message body.
+  Model model = unlocked_model({contact("alice")});
+  model.handle_key(code(screen::KeyCode::Enter));
+  model.handle_key(ch("w"));
+  model.handle_key(ch("f"));
+  CHECK_EQ(model.text(), std::string("f"));
+}
+
+TEST("Escape from the photo path goes back to writing") {
+  Model model = unlocked_model({contact("alice")});
+  model.handle_key(code(screen::KeyCode::Enter));
+  model.handle_key(ch("w"));
+  model.handle_key(code(screen::KeyCode::CtrlP));
+  CHECK(model.screen() == Screen::PhotoPick);
+  model.handle_key(code(screen::KeyCode::Escape));
+  CHECK(model.screen() == Screen::Compose);
+}
+
+TEST("an empty photo path does not send") {
+  Model model = unlocked_model({contact("alice")});
+  model.handle_key(code(screen::KeyCode::Enter));
+  model.handle_key(ch("w"));
+  model.handle_key(code(screen::KeyCode::CtrlP));
+  CHECK(model.handle_key(code(screen::KeyCode::Enter)) == ActionKind::None);
+  CHECK(model.screen() == Screen::PhotoPick);
+}
+
+TEST("Ctrl-V asks the driver to paste the clipboard") {
+  // The model never reads the clipboard itself; it only reports the intent so
+  // the driver can do the I/O and hand the text back.
+  Model model = unlocked_model({contact("alice")});
+  model.handle_key(ch("r"));  // the paste screen
+  CHECK(model.screen() == Screen::Paste);
+  CHECK(model.handle_key(code(screen::KeyCode::CtrlV)) ==
+        ActionKind::PasteClipboard);
+  model.paste_text("-----BEGIN RATCHET CARD-----\n");
+  CHECK(model.text().find("BEGIN RATCHET CARD") != std::string::npos);
+}
+
+TEST("a received image is announced and opens on request") {
+  Model model = unlocked_model({contact("alice", true)});
+  model.show_photo("alice", false, false);
+  CHECK(model.screen() == Screen::Photo);
+  const std::string frame = draw(model);
+  CHECK(frame.find("alice") != std::string::npos);
+  CHECK(frame.find("[ Open ]") != std::string::npos);
+  // Enter asks the driver to hand the bytes to the system viewer.
+  CHECK(model.handle_key(code(screen::KeyCode::Enter)) == ActionKind::OpenPhoto);
+  CHECK(model.screen() == Screen::Photo);
+  model.handle_key(code(screen::KeyCode::Escape));
+  CHECK(model.screen() == Screen::Home);
+}
+
+TEST("a block copied from the screen survives the paste parser") {
+  // A card produced by the real armouring, shown on the Block screen and read
+  // back the way the copy action does, must still parse. This is the path a
+  // whole card takes when somebody presses y and pastes it to a contact.
+  const char payload[] = "not-really-a-card-but-valid-armour";
+  const std::string card = ratchet::wire::encode_block(
+      "CARD", reinterpret_cast<const uint8_t*>(payload), sizeof(payload) - 1);
+
+  Model model = unlocked_model({contact("alice")});
+  model.show_block("card", card);
+  const std::string copied = model.pager_text();
+
+  CHECK(copied.find("-----BEGIN RATCHET CARD-----") != std::string::npos);
+  const std::vector<uint8_t> decoded =
+      ratchet::wire::decode_block("CARD", copied, 4096);
+  CHECK_EQ(decoded.size(), sizeof(payload) - 1);
+}
+
+TEST("a received image from an unverified contact still warns") {
+  Model model = unlocked_model({contact("alice", false)});
+  model.show_photo("alice", true, true);
+  const std::string frame = draw(model);
+  CHECK(frame.find("NOT verified") != std::string::npos);
+  CHECK(frame.find("opened a new session") != std::string::npos);
+}
+
 TEST("adding a contact asks for a name before the card") {
   Model model = unlocked_model({});
   model.handle_key(ch("a"));
@@ -228,6 +325,32 @@ TEST("a pager closes on q as well as Escape") {
   CHECK(model.screen() == Screen::Block);
   model.handle_key(ch("q"));
   CHECK(model.screen() == Screen::Home);
+}
+
+TEST("a block can be copied whole, a decrypted message cannot") {
+  Model block = unlocked_model({contact("alice")});
+  block.show_block("card", "-----BEGIN-----\nAAAA\n-----END-----");
+  CHECK(block.screen() == Screen::Block);
+  // The block comes back exactly as it went in, ready for the clipboard.
+  CHECK_EQ(block.pager_text(),
+           std::string("-----BEGIN-----\nAAAA\n-----END-----"));
+  CHECK(block.handle_key(ch("y")) == ActionKind::CopyBlock);
+  bool has_copy = false;
+  for (const ui::MenuEntry& item : block.menu()) {
+    if (item.label == i18n::Str::MenuCopy) {
+      has_copy = true;
+    }
+  }
+  CHECK(has_copy);
+
+  // A decrypted message body is never offered for copying.
+  Model message = unlocked_model({contact("alice")});
+  message.show_message("alice", "a secret", false, false);
+  CHECK(message.screen() == Screen::Message);
+  CHECK(message.handle_key(ch("y")) == ActionKind::None);
+  for (const ui::MenuEntry& item : message.menu()) {
+    CHECK(item.label != i18n::Str::MenuCopy);
+  }
 }
 
 TEST("locking is reachable from the contact list") {
@@ -360,16 +483,21 @@ TEST("no screen draws outside the frame, however small it is") {
 
 // --- the menu ------------------------------------------------------------------
 
-TEST("the list screens carry a menu and the typing screens do not") {
+TEST("the list screens carry a menu and the writing screen keeps the photo action") {
   Model model = unlocked_model({contact("alice")});
   CHECK(!model.menu().empty());          // Home
   model.handle_key(code(screen::KeyCode::Enter));
   CHECK(!model.menu().empty());          // Contact
   model.handle_key(ch("w"));
   CHECK(model.screen() == Screen::Compose);
-  // Every key here is a character; a row of actions would be something the
-  // arrow keys fight over while somebody is trying to type.
-  CHECK(model.menu().empty());
+  // The bottom bar stays put while writing, with the photo attachment on it.
+  bool has_photo = false;
+  for (const ui::MenuEntry& item : model.menu()) {
+    if (item.label == i18n::Str::MenuSendPhoto) {
+      has_photo = true;
+    }
+  }
+  CHECK(has_photo);
 }
 
 TEST("left and right steer the menu, up and down the list") {

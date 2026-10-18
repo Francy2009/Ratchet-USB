@@ -33,6 +33,8 @@ enum class Screen : uint8_t {
   Alias,      // name a contact being added
   Paste,      // take a pasted block in
   Message,    // show a message that was decrypted
+  PhotoPick,  // type the path of an image to attach
+  Photo,      // show a received image notification
 };
 
 // What the model wants done. The payload is read back off the model, so this
@@ -50,6 +52,10 @@ enum class ActionKind : uint8_t {
   Trust,       // selected_contact()
   Send,        // selected_contact() and text()
   Receive,     // text()
+  SendPhoto,   // selected_contact() and text() as image path
+  OpenPhoto,   // open the pending received photo in the system viewer
+  CopyBlock,   // put the armoured block on screen on the system clipboard
+  PasteClipboard,  // insert the system clipboard into the text buffer
 };
 
 struct DriveEntry {
@@ -94,6 +100,10 @@ class Model {
   void show_block(std::string_view heading, std::string block);
   void show_message(const std::string& from, std::string body, bool session_opened,
                     bool unverified);
+  // Called when the decrypted plaintext is an image payload. Transitions to
+  // Screen::Photo. The Driver keeps the PhotoPayload; the Model only knows
+  // whether an image arrived and who sent it.
+  void show_photo(const std::string& from, bool session_opened, bool unverified);
   void set_status(std::string text, screen::Style style = screen::Style::Normal);
   void set_status(i18n::Str id, screen::Style style = screen::Style::Normal);
 
@@ -111,6 +121,10 @@ class Model {
   const std::string& text() const { return text_; }
   const std::string& alias() const { return alias_; }
   const std::string& drive_path() const { return drive_path_; }
+  // The whole content of the Block pager as one string, for the driver to copy.
+  // Reconstructed from the stored lines only; the original block was wiped
+  // after it was split.
+  std::string pager_text() const;
   std::size_t selected() const { return selected_; }
   const DriveEntry* selected_drive() const;
   const ContactRow* selected_contact() const;
@@ -127,6 +141,10 @@ class Model {
   // text off the model, so a message body or a pasted block does not sit on
   // the heap for the rest of the session.
   void clear_text();
+
+  // Appends text read from the system clipboard to the editable buffer, on the
+  // screens that have one. The model stays pure: the driver does the reading.
+  void paste_text(std::string_view utf8);
 
  private:
   void go(Screen next);
