@@ -1,12 +1,12 @@
-// photo.cpp — encrypted image support for Ratchet-USB.
+// file.cpp — encrypted file sharing for Ratchet-USB.
 //
-// Images are encrypted by exactly the same Double/Triple Ratchet pipeline
-// that protects text messages; this module only frames the raw bytes so the
-// receiver can tell them apart from text before presenting the correct UI.
+// Files are encrypted by exactly the same Double/Triple Ratchet pipeline that
+// protects text messages; this module only frames the raw bytes so the receiver
+// can tell them apart from text before presenting the correct UI.
 //
-// See include/ratchet/photo.hpp for the wire contract.
+// See include/ratchet/file.hpp for the wire contract.
 
-#include "ratchet/photo.hpp"
+#include "ratchet/file.hpp"
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -20,7 +20,7 @@
 
 #include "ratchet/secure.hpp"
 
-namespace ratchet::photo {
+namespace ratchet::file {
 namespace {
 
 // ── magic-byte tables ────────────────────────────────────────────────────────
@@ -30,10 +30,42 @@ constexpr uint8_t kJpegMagic[] = {0xFF, 0xD8, 0xFF};
 // PNG:  89 50 4E 47 0D 0A 1A 0A (all 8 bytes)
 constexpr uint8_t kPngMagic[]  = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
 
+// The longest extension the wire format carries (encode and decode both refuse
+// more). Kept here so sanitising and framing agree on one number.
+constexpr std::size_t kMaxExtensionLength = 16;
+
 bool starts_with(const std::vector<uint8_t>& buf,
                  const uint8_t* magic, std::size_t len) {
   if (buf.size() < len) return false;
   return std::memcmp(buf.data(), magic, len) == 0;
+}
+
+// Reduces an extension to the safe alphabet the wire format allows: a leading
+// dot is dropped, letters are lowercased, anything outside [a-z0-9] is removed,
+// and the result is capped at kMaxExtensionLength. An empty result means the
+// caller should fall back to "bin".
+//
+// This is not only cosmetic. decode_file_payload() feeds the extension into a
+// temporary file name, so an unsanitised value such as "../../x" from a hostile
+// sender would otherwise escape the staging directory.
+std::string sanitized_extension(std::string_view ext) {
+  if (!ext.empty() && ext.front() == '.') {
+    ext.remove_prefix(1);
+  }
+  std::string out;
+  out.reserve(ext.size());
+  for (char c : ext) {
+    if (c >= 'A' && c <= 'Z') {
+      c = static_cast<char>(c - 'A' + 'a');
+    }
+    if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
+      out.push_back(c);
+    }
+    if (out.size() == kMaxExtensionLength) {
+      break;
+    }
+  }
+  return out;
 }
 
 // ── serialisation helpers ────────────────────────────────────────────────────
@@ -69,7 +101,7 @@ bool write_all(int fd, const uint8_t* data, std::size_t size) {
   return true;
 }
 
-// Where a decrypted image is staged before the viewer is handed its path.
+// Where a decrypted file is staged before the viewer is handed its path.
 //
 // $XDG_RUNTIME_DIR is a per-user tmpfs that the session clears at logout, so
 // the bytes never reach durable storage. /tmp is the fallback when the
@@ -90,14 +122,14 @@ std::string staging_directory() {
 // the caller never blocks on it and no zombie is left behind.
 //
 // The file cannot be unlinked as soon as xdg-open returns: xdg-open only asks
-// the desktop to open the path and may exit before the viewer has read it, so
-// an immediate unlink races the viewer. The grace period lets the viewer open
+// the desktop to open the path and may exit before the application has read it,
+// so an immediate unlink races it. The grace period lets the application open
 // the file; after that only an already-open descriptor keeps the data alive.
-void schedule_staged_image_cleanup(const std::string& path,
-                                   unsigned delay_seconds) {
+void schedule_staged_file_cleanup(const std::string& path,
+                                  unsigned delay_seconds) {
   const pid_t child = ::fork();
   if (child < 0) {
-    return;  // cannot clean up; the image stays staged
+    return;  // cannot clean up; the file stays staged
   }
   if (child == 0) {
     (void)::setsid();
@@ -130,13 +162,13 @@ void schedule_staged_image_cleanup(const std::string& path,
 
 // ── public API ───────────────────────────────────────────────────────────────
 
-std::vector<uint8_t> load_image(const std::filesystem::path& path) {
+std::vector<uint8_t> load_file(const std::filesystem::path& path) {
   // Open via openat on the parent directory so symlink attacks cannot redirect
   // the read to a different file between stat and open.
   const int dir_fd = ::open(path.parent_path().c_str(),
                              O_RDONLY | O_DIRECTORY | O_CLOEXEC);
   if (dir_fd < 0) {
-    throw Error("cannot open image directory: " +
+    throw Error("cannot open file directory: " +
                 std::string(std::strerror(errno)));
   }
 
@@ -147,7 +179,7 @@ std::vector<uint8_t> load_image(const std::filesystem::path& path) {
   ::close(dir_fd);
   if (fd < 0) {
     errno = saved_errno;
-    throw Error("cannot open image file '" + path.string() + "': " +
+    throw Error("cannot open file '" + path.string() + "': " +
                 std::strerror(errno));
   }
 
@@ -155,25 +187,25 @@ std::vector<uint8_t> load_image(const std::filesystem::path& path) {
   if (::fstat(fd, &st) != 0) {
     const std::string msg = std::strerror(errno);
     ::close(fd);
-    throw Error("cannot stat image file: " + msg);
+    throw Error("cannot stat file: " + msg);
   }
   if (!S_ISREG(st.st_mode)) {
     ::close(fd);
-    throw Error("image path is not a regular file");
+    throw Error("file path is not a regular file");
   }
   if (st.st_uid != ::geteuid()) {
     ::close(fd);
-    throw Error("image file is not owned by the current user");
+    throw Error("file is not owned by the current user");
   }
 
   const auto size = static_cast<std::size_t>(st.st_size);
   if (size == 0) {
     ::close(fd);
-    throw Error("image file is empty");
+    throw Error("file is empty");
   }
-  if (size > kMaxImageBytes) {
+  if (size > kMaxFileBytes) {
     ::close(fd);
-    throw Error("image file exceeds the 4 MiB limit");
+    throw Error("file exceeds the 4 MiB limit");
   }
 
   std::vector<uint8_t> buf(size);
@@ -183,52 +215,55 @@ std::vector<uint8_t> load_image(const std::filesystem::path& path) {
     if (n < 0 && errno == EINTR) continue;
     if (n <= 0) {
       ::close(fd);
-      throw Error("short read on image file");
+      throw Error("short read on file");
     }
     got += static_cast<std::size_t>(n);
   }
   ::close(fd);
-
-  // Validate magic bytes before returning.
-  (void)extension_for(buf);  // throws Error on unknown format
   return buf;
 }
 
-std::string_view extension_for(const std::vector<uint8_t>& raw) {
+std::string extension_for(const std::filesystem::path& path,
+                          const std::vector<uint8_t>& raw) {
+  // An image is trusted over the name: a JPEG saved as "photo.dat" should still
+  // open in the image viewer.
   if (starts_with(raw, kJpegMagic, sizeof kJpegMagic)) return "jpg";
   if (starts_with(raw, kPngMagic,  sizeof kPngMagic))  return "png";
-  throw Error(
-      "unsupported image format: only JPEG (FF D8 FF) and PNG "
-      "(89 50 4E 47 0D 0A 1A 0A) are accepted");
+
+  std::string ext = sanitized_extension(path.extension().string());
+  if (ext.empty()) {
+    ext = "bin";
+  }
+  return ext;
 }
 
-std::string encode_photo_payload(const std::vector<uint8_t>& raw,
-                                 std::string_view ext) {
-  if (ext.empty() || ext.size() > 16) {
-    throw Error("internal: invalid extension in encode_photo_payload");
+std::string encode_file_payload(const std::vector<uint8_t>& raw,
+                                std::string_view ext) {
+  if (ext.empty() || ext.size() > kMaxExtensionLength) {
+    throw Error("internal: invalid extension in encode_file_payload");
   }
   if (raw.empty()) {
-    throw Error("internal: empty image in encode_photo_payload");
+    throw Error("internal: empty file in encode_file_payload");
   }
 
   std::string payload;
   payload.reserve(1 + 4 + ext.size() + raw.size());
 
   // Type byte
-  payload.push_back(static_cast<char>(kPayloadTypeImage));
+  payload.push_back(static_cast<char>(kPayloadTypeFile));
   // Extension length (u32 LE)
   put_u32_le(payload, static_cast<uint32_t>(ext.size()));
   // Extension characters
   payload.append(ext.data(), ext.size());
-  // Raw image bytes
+  // Raw file bytes
   payload.append(reinterpret_cast<const char*>(raw.data()), raw.size());
 
   return payload;
 }
 
-std::optional<PhotoPayload> decode_photo_payload(const std::string& plaintext) {
+std::optional<FilePayload> decode_file_payload(const std::string& plaintext) {
   if (plaintext.empty() ||
-      static_cast<uint8_t>(plaintext[0]) != kPayloadTypeImage) {
+      static_cast<uint8_t>(plaintext[0]) != kPayloadTypeFile) {
     return std::nullopt;
   }
 
@@ -237,72 +272,77 @@ std::optional<PhotoPayload> decode_photo_payload(const std::string& plaintext) {
   const std::size_t total = plaintext.size();
 
   if (total < 7) {
-    throw Error("image payload is too short to be valid");
+    throw Error("file payload is too short to be valid");
   }
 
   const uint32_t ext_len = get_u32_le(p + 1);
-  if (ext_len == 0 || ext_len > 16) {
-    throw Error("image payload has an invalid extension length");
+  if (ext_len == 0 || ext_len > kMaxExtensionLength) {
+    throw Error("file payload has an invalid extension length");
   }
   if (total < 1u + 4u + ext_len + 1u) {
-    throw Error("image payload is truncated (extension or body missing)");
+    throw Error("file payload is truncated (extension or body missing)");
   }
 
-  PhotoPayload out;
-  out.ext.assign(reinterpret_cast<const char*>(p + 5), ext_len);
+  FilePayload out;
+  // Sanitise the sender's extension before it is ever used in a file name.
+  out.ext = sanitized_extension(
+      std::string_view(reinterpret_cast<const char*>(p + 5), ext_len));
+  if (out.ext.empty()) {
+    out.ext = "bin";
+  }
   const std::size_t body_start = 5 + ext_len;
   out.bytes.assign(p + body_start, p + total);
   return out;
 }
 
-void open_photo_in_viewer(const PhotoPayload& photo) {
-  // The viewer is launched by the desktop, usually as a separate -- and often
-  // sandboxed -- process through xdg-desktop-portal. It does not inherit our
-  // file descriptors, so passing it a /proc/self/fd/<N> path (as a memfd-based
-  // earlier version did) only works when the viewer happens to be a direct
-  // child; on GNOME the path resolves to an unrelated descriptor in the viewer
-  // and the image cannot be read. Stage the bytes at a real path on a private
-  // tmpfs and hand that path over instead.
+void open_in_default_app(const FilePayload& file) {
+  // The application is launched by the desktop, usually as a separate -- and
+  // often sandboxed -- process through xdg-desktop-portal. It does not inherit
+  // our file descriptors, so passing it a /proc/self/fd/<N> path (as a
+  // memfd-based earlier version did) only works when the application happens to
+  // be a direct child; on GNOME the path resolves to an unrelated descriptor and
+  // the file cannot be read. Stage the bytes at a real path on a private tmpfs
+  // and hand that path over instead.
 
-  // ── step 1: stage the image at a real path ──────────────────────────────
+  // ── step 1: stage the file at a real path ───────────────────────────────
   std::string path =
-      staging_directory() + "/ratchet-photo-XXXXXX." + photo.ext;
-  const int suffix_len = static_cast<int>(1 + photo.ext.size());
+      staging_directory() + "/ratchet-file-XXXXXX." + file.ext;
+  const int suffix_len = static_cast<int>(1 + file.ext.size());
   std::vector<char> tmpl(path.begin(), path.end());
   tmpl.push_back('\0');
 
-  // O_CLOEXEC: the viewer opens the path itself and has no business holding
-  // this descriptor. mkostemps creates the file 0600; fchmod makes that
+  // O_CLOEXEC: the application opens the path itself and has no business
+  // holding this descriptor. mkostemps creates the file 0600; fchmod makes that
   // independent of the umask.
-  const int img_fd = ::mkostemps(tmpl.data(), suffix_len, O_CLOEXEC);
-  if (img_fd < 0) {
-    throw Error(std::string("cannot create temporary image file: ") +
+  const int file_fd = ::mkostemps(tmpl.data(), suffix_len, O_CLOEXEC);
+  if (file_fd < 0) {
+    throw Error(std::string("cannot create temporary file: ") +
                 std::strerror(errno));
   }
   path.assign(tmpl.data());  // mkostemps filled in the X's
-  (void)::fchmod(img_fd, 0600);
+  (void)::fchmod(file_fd, 0600);
 
-  // ── step 2: write image bytes ────────────────────────────────────────────
-  if (!write_all(img_fd, photo.bytes.data(), photo.bytes.size())) {
+  // ── step 2: write file bytes ────────────────────────────────────────────
+  if (!write_all(file_fd, file.bytes.data(), file.bytes.size())) {
     const std::string msg = std::strerror(errno);
-    ::close(img_fd);
+    ::close(file_fd);
     (void)::unlink(path.c_str());
-    throw Error("cannot write image to temporary file: " + msg);
+    throw Error("cannot write file to temporary file: " + msg);
   }
-  ::close(img_fd);
+  ::close(file_fd);
 
   // ── step 3: fork + exec xdg-open ─────────────────────────────────────────
   const pid_t pid = ::fork();
   if (pid < 0) {
     const std::string msg = std::strerror(errno);
     (void)::unlink(path.c_str());
-    throw Error("cannot fork for image viewer: " + msg);
+    throw Error("cannot fork for the file's application: " + msg);
   }
 
   if (pid == 0) {
     // ── child ──────────────────────────────────────────────────────────────
-    // Detach from the process group so the viewer does not receive terminal
-    // signals aimed at ratchet-usb, then hand the path to the desktop.
+    // Detach from the process group so the application does not receive
+    // terminal signals aimed at ratchet-usb, then hand the path to the desktop.
     (void)::setsid();
     ::execlp("xdg-open", "xdg-open", path.c_str(), nullptr);
     _exit(127);  // exec only returns on failure
@@ -314,17 +354,17 @@ void open_photo_in_viewer(const PhotoPayload& photo) {
   }
 
   // xdg-open returns as soon as it has asked the desktop to open the path,
-  // which is not necessarily after the viewer has read it, so the file must
-  // outlive this call. A detached helper removes it once the viewer has had
-  // time to open it.
-  schedule_staged_image_cleanup(path, 300);
+  // which is not necessarily after the application has read it, so the file
+  // must outlive this call. A detached helper removes it once the application
+  // has had time to open it.
+  schedule_staged_file_cleanup(path, 300);
 
   // Report failure only when xdg-open could not be found at all (exit 127).
   if (WIFEXITED(status) && WEXITSTATUS(status) == 127) {
     throw Error(
-        "image viewer could not be launched (xdg-open not found); "
-        "install xdg-utils or open the image manually");
+        "the file could not be opened (xdg-open not found); "
+        "install xdg-utils or open it manually");
   }
 }
 
-}  // namespace ratchet::photo
+}  // namespace ratchet::file

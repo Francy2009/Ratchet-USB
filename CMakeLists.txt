@@ -140,7 +140,7 @@ add_library(ratchet_core
             src/vault.cpp
             src/terminal.cpp
             src/media.cpp
-            src/photo.cpp
+            src/file.cpp
             src/clipboard.cpp
             src/cli.cpp
             src/app.cpp

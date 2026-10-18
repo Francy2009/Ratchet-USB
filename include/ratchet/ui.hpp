@@ -33,8 +33,8 @@ enum class Screen : uint8_t {
   Alias,      // name a contact being added
   Paste,      // take a pasted block in
   Message,    // show a message that was decrypted
-  PhotoPick,  // type the path of an image to attach
-  Photo,      // show a received image notification
+  FilePick,   // type the path of a file to attach
+  File,       // show a received file notification
 };
 
 // What the model wants done. The payload is read back off the model, so this
@@ -52,8 +52,8 @@ enum class ActionKind : uint8_t {
   Trust,       // selected_contact()
   Send,        // selected_contact() and text()
   Receive,     // text()
-  SendPhoto,   // selected_contact() and text() as image path
-  OpenPhoto,   // open the pending received photo in the system viewer
+  SendFile,    // selected_contact() and text() as file path
+  OpenFile,    // open the pending received file in the default application
   CopyBlock,   // put the armoured block on screen on the system clipboard
   PasteClipboard,  // insert the system clipboard into the text buffer
 };
@@ -100,10 +100,10 @@ class Model {
   void show_block(std::string_view heading, std::string block);
   void show_message(const std::string& from, std::string body, bool session_opened,
                     bool unverified);
-  // Called when the decrypted plaintext is an image payload. Transitions to
-  // Screen::Photo. The Driver keeps the PhotoPayload; the Model only knows
-  // whether an image arrived and who sent it.
-  void show_photo(const std::string& from, bool session_opened, bool unverified);
+  // Called when the decrypted plaintext is a file payload. Transitions to
+  // Screen::File. The Driver keeps the FilePayload; the Model only knows
+  // whether a file arrived and who sent it.
+  void show_file(const std::string& from, bool session_opened, bool unverified);
   void set_status(std::string text, screen::Style style = screen::Style::Normal);
   void set_status(i18n::Str id, screen::Style style = screen::Style::Normal);
 

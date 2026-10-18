@@ -14,7 +14,7 @@ add_executable(ratchet_tests
                test_message.cpp
                test_cli.cpp
                test_media.cpp
-               test_photo.cpp
+               test_file.cpp
                test_secure.cpp
                test_terminal.cpp
                test_screen.cpp

@@ -96,12 +96,12 @@ void Model::show_message(const std::string& from, std::string body, bool session
   go(Screen::Message);
 }
 
-void Model::show_photo(const std::string& from, bool session_opened,
-                       bool unverified) {
+void Model::show_file(const std::string& from, bool session_opened,
+                      bool unverified) {
   // Reuse pager_heading_ and pager_notes_ for the sender and warnings; the
-  // pager_ body is left empty because the Photo screen renders its own fixed
+  // pager_ body is left empty because the File screen renders its own fixed
   // hint line rather than scrollable text.
-  pager_heading_ = std::string(i18n::t(lang_, Str::PhotoReceived)) + " " + from;
+  pager_heading_ = std::string(i18n::t(lang_, Str::FileReceived)) + " " + from;
   pager_notes_.clear();
   if (session_opened) {
     pager_notes_.emplace_back(i18n::t(lang_, Str::SessionOpened));
@@ -111,7 +111,7 @@ void Model::show_photo(const std::string& from, bool session_opened,
   }
   pager_.clear();
   pager_top_ = 0;
-  go(Screen::Photo);
+  go(Screen::File);
 }
 
 
@@ -190,7 +190,7 @@ void Model::go(Screen next) {
   menu_index_ = 0;
   if (next == Screen::Alias || next == Screen::Compose ||
       next == Screen::Paste || next == Screen::DrivePath ||
-      next == Screen::PhotoPick) {
+      next == Screen::FilePick) {
     wipe_string(text_);
   }
   in_paste_ = false;
@@ -315,8 +315,8 @@ ActionKind Model::key_in_text(const screen::Key& key) {
     if (screen_ == Screen::DrivePath) {
       return text_.empty() ? ActionKind::None : ActionKind::UseTypedPath;
     }
-    if (screen_ == Screen::PhotoPick) {
-      return text_.empty() ? ActionKind::None : ActionKind::SendPhoto;
+    if (screen_ == Screen::FilePick) {
+      return text_.empty() ? ActionKind::None : ActionKind::SendFile;
     }
     if (screen_ == Screen::Alias) {
       if (text_.empty()) {
@@ -332,10 +332,10 @@ ActionKind Model::key_in_text(const screen::Key& key) {
   }
 
   if (key.code == screen::KeyCode::CtrlP && screen_ == Screen::Compose) {
-    // Ctrl-P is a control character, never text, so binding photo attachment
+    // Ctrl-P is a control character, never text, so binding file attachment
     // to it leaves every printable key -- including 'f' -- free for the
     // message itself.
-    go(Screen::PhotoPick);
+    go(Screen::FilePick);
     return ActionKind::None;
   }
 
@@ -350,8 +350,8 @@ ActionKind Model::key_in_text(const screen::Key& key) {
 
   if (key.code == screen::KeyCode::Escape) {
     clear_text();
-    if (screen_ == Screen::PhotoPick) {
-      // Cancelling photo pick goes back to Compose, not Home.
+    if (screen_ == Screen::FilePick) {
+      // Cancelling file pick goes back to Compose, not Home.
       go(Screen::Compose);
     } else {
       go(unlocked_ ? Screen::Home : Screen::Drive);
@@ -456,7 +456,7 @@ std::vector<MenuEntry> Model::menu() const {
       }
       // Ctrl-P, not a letter: a letter here would be one the alias screen and
       // the message body would then have to give up.
-      items.push_back(code(Str::MenuSendPhoto, screen::KeyCode::CtrlP));
+      items.push_back(code(Str::MenuSendFile, screen::KeyCode::CtrlP));
       items.push_back(code(Str::MenuBack, screen::KeyCode::Escape));
       return items;
     }
@@ -471,14 +471,14 @@ std::vector<MenuEntry> Model::menu() const {
     case Screen::Message:
       return {code(Str::MenuBack, screen::KeyCode::Escape)};
 
-    case Screen::Photo:
-      return {code(Str::MenuOpenPhoto, screen::KeyCode::Enter),
+    case Screen::File:
+      return {code(Str::MenuOpenFile, screen::KeyCode::Enter),
               code(Str::MenuBack, screen::KeyCode::Escape)};
 
-    // Writing a message keeps the usual bottom bar, with the photo action on
+    // Writing a message keeps the usual bottom bar, with the file action on
     // it. Arrow keys only steer the menu, so typing is unaffected.
     case Screen::Compose:
-      return {code(Str::MenuSendPhoto, screen::KeyCode::CtrlP),
+      return {code(Str::MenuSendFile, screen::KeyCode::CtrlP),
               code(Str::MenuBack, screen::KeyCode::Escape)};
 
     // The remaining text screens get no menu: every key there is a character,
@@ -487,7 +487,7 @@ std::vector<MenuEntry> Model::menu() const {
     case Screen::DrivePath:
     case Screen::Alias:
     case Screen::Paste:
-    case Screen::PhotoPick:
+    case Screen::FilePick:
       return {};
   }
   return {};
@@ -584,19 +584,19 @@ ActionKind Model::dispatch(const screen::Key& key) {
     case Screen::Alias:
     case Screen::Compose:
     case Screen::Paste:
-    case Screen::PhotoPick:
+    case Screen::FilePick:
       return key_in_text(key);
 
     case Screen::Block:
     case Screen::Message:
       return key_in_pager(key);
 
-    case Screen::Photo:
-      // A received image is not scrollable text: Enter opens it in the system
-      // viewer, Escape (or q) leaves the notification. The viewer is launched
-      // by the driver; the model only reports the action.
+    case Screen::File:
+      // A received file is not scrollable text: Enter opens it in the default
+      // application, Escape (or q) leaves the notification. The application is
+      // launched by the driver; the model only reports the action.
       if (key.code == screen::KeyCode::Enter) {
-        return ActionKind::OpenPhoto;
+        return ActionKind::OpenFile;
       }
       if (key.code == screen::KeyCode::Escape ||
           (key.code == screen::KeyCode::Char && key.text == "q")) {
@@ -627,7 +627,7 @@ ActionKind Model::dispatch(const screen::Key& key) {
         return ActionKind::None;
       }
       if (key.code == screen::KeyCode::CtrlP) {
-        go(Screen::PhotoPick);
+        go(Screen::FilePick);
         return ActionKind::None;
       }
       if (key.code == screen::KeyCode::Char && key.text == "t") {
@@ -661,10 +661,10 @@ std::string_view Model::footer_keys() const {
       return i18n::t(lang_, Str::KeysBlock);
     case Screen::Message:
       return i18n::t(lang_, Str::KeysMessage);
-    case Screen::PhotoPick:
-      return i18n::t(lang_, Str::KeysPhotoPick);
-    case Screen::Photo:
-      return i18n::t(lang_, Str::KeysPhoto);
+    case Screen::FilePick:
+      return i18n::t(lang_, Str::KeysFilePick);
+    case Screen::File:
+      return i18n::t(lang_, Str::KeysFile);
   }
   return {};
 }
@@ -905,19 +905,19 @@ void Model::render_body(screen::Frame& frame, std::size_t rows) const {
       break;
     }
 
-    case Screen::PhotoPick:
+    case Screen::FilePick:
       // Path input: identical layout to DrivePath.
-      frame.line(indent(i18n::t(lang_, Str::PhotoPathPrompt)),
+      frame.line(indent(i18n::t(lang_, Str::FilePathPrompt)),
                  screen::Style::Accent);
       frame.blank();
-      frame.line(indent(i18n::t(lang_, Str::PhotoPathHint)),
+      frame.line(indent(i18n::t(lang_, Str::FilePathHint)),
                  screen::Style::Dim);
       frame.blank();
       frame.line(indent("> " + text_));
       break;
 
-    case Screen::Photo: {
-      // Notification screen for a received image.
+    case Screen::File: {
+      // Notification screen for a received file.
       // Shows sender, any session/trust warnings, and a fixed hint line.
       // The [Open] and [Back] actions live in the menu row below.
       frame.line(indent(pager_heading_), screen::Style::Accent);
@@ -927,7 +927,7 @@ void Model::render_body(screen::Frame& frame, std::size_t rows) const {
                    warning ? screen::Style::Bad : screen::Style::Dim);
       }
       frame.blank();
-      frame.line(indent(i18n::t(lang_, Str::PhotoHint)));
+      frame.line(indent(i18n::t(lang_, Str::FileHint)));
       break;
     }
 

@@ -69,8 +69,8 @@ namespace ratchet::i18n {
   X(ComposeHint, "Type your message. Enter starts a new line.",                \
     "Scrivi il messaggio. Invio va a capo.")                                    \
   X(KeysCompose,                                                               \
-    "Ctrl-D send   Ctrl-P photo   Esc cancel   Ctrl-C quit",                   \
-    "Ctrl-D invia   Ctrl-P foto   Esc annulla   Ctrl-C esci")                  \
+    "Ctrl-D send   Ctrl-P file   Esc cancel   Ctrl-C quit",                   \
+    "Ctrl-D invia   Ctrl-P file   Esc annulla   Ctrl-C esci")                  \
   /* showing a block to copy */                                                \
   X(CopyBlock, "Press y to copy this whole block, then paste it wherever you " \
     "like:", "Premi y per copiare tutto il blocco, poi incollalo dove vuoi:")  \
@@ -179,26 +179,28 @@ namespace ratchet::i18n {
     "Vault creato. Ora lo apro.")                                               \
   X(DerivingKey, "Deriving the vault key with Argon2id...",                    \
     "Sto derivando la chiave del vault con Argon2id...")                        \
-  /* photo attachment */                                                        \
-  X(MenuSendPhoto, "Send photo", "Invia foto")                                 \
-  X(PhotoPathPrompt, "Path to the image file:", "Percorso del file immagine:") \
-  X(PhotoPathHint,                                                              \
-    "Type the full path to a JPEG or PNG file, then press Enter.",             \
-    "Scrivi il percorso completo di un file JPEG o PNG, poi premi Invio.")     \
-  X(KeysPhotoPick, "Enter confirm   Esc cancel   Ctrl-C quit",                  \
+  /* file attachment */                                                         \
+  X(MenuSendFile, "Send file", "Invia file")                                   \
+  X(FilePathPrompt, "Path to the file:", "Percorso del file:")                 \
+  X(FilePathHint,                                                              \
+    "Type the full path to the file -- an image, a document, anything -- then " \
+    "press Enter.",                                                            \
+    "Scrivi il percorso completo del file -- un'immagine, un documento, "       \
+    "qualsiasi cosa -- poi premi Invio.")                                       \
+  X(KeysFilePick, "Enter confirm   Esc cancel   Ctrl-C quit",                  \
     "Invio conferma   Esc annulla   Ctrl-C esci")                               \
-  X(PhotoReady, "Image encrypted.", "Immagine cifrata.")                        \
-  X(PhotoReceived, "Image received from", "Immagine ricevuta da")              \
-  X(PhotoHint, "An encrypted image arrived.",                                  \
-    "E' arrivata un'immagine cifrata.")                                         \
-  X(MenuOpenPhoto, "Open", "Apri")                                             \
-  X(KeysPhoto, "Enter open   Esc back   Ctrl-C quit",                          \
+  X(FileReady, "File encrypted.", "File cifrato.")                             \
+  X(FileReceived, "File received from", "File ricevuto da")                    \
+  X(FileHint, "An encrypted file arrived.",                                    \
+    "E' arrivato un file cifrato.")                                             \
+  X(MenuOpenFile, "Open", "Apri")                                             \
+  X(KeysFile, "Enter open   Esc back   Ctrl-C quit",                           \
     "Invio apri   Esc indietro   Ctrl-C esci")                                  \
-  X(PhotoOpenFailed,                                                            \
-    "Could not open the image viewer (xdg-open not found).",                   \
-    "Non riesco ad aprire il visualizzatore (xdg-open non trovato).")          \
-  X(PhotoPathRequired, "No image path was given.",                             \
-    "Non hai indicato il percorso di nessuna immagine.")
+  X(FileOpenFailed,                                                            \
+    "Could not open the file (xdg-open not found).",                          \
+    "Non riesco ad aprire il file (xdg-open non trovato).")                     \
+  X(FilePathRequired, "No file path was given.",                              \
+    "Non hai indicato il percorso di nessun file.")
 
 
 enum class Str : std::uint8_t {

@@ -145,23 +145,23 @@ TEST("Enter is a line break while writing, not a send") {
   CHECK_EQ(model.text(), std::string("a\nb"));
 }
 
-// --- attaching and receiving an image ----------------------------------------
+// --- attaching and receiving a file ------------------------------------------
 
-TEST("Ctrl-P while writing opens the photo path screen") {
+TEST("Ctrl-P while writing opens the file path screen") {
   Model model = unlocked_model({contact("alice")});
   model.handle_key(code(screen::KeyCode::Enter));  // open the contact
   model.handle_key(ch("w"));                        // start writing
   model.handle_key(code(screen::KeyCode::CtrlP));
-  CHECK(model.screen() == Screen::PhotoPick);
+  CHECK(model.screen() == Screen::FilePick);
   for (const char* c : {"/", "t", "m", "p", "/", "a", ".", "p", "n", "g"}) {
     model.handle_key(ch(c));
   }
-  CHECK(model.handle_key(code(screen::KeyCode::Enter)) == ActionKind::SendPhoto);
+  CHECK(model.handle_key(code(screen::KeyCode::Enter)) == ActionKind::SendFile);
   CHECK_EQ(model.text(), std::string("/tmp/a.png"));
 }
 
 TEST("the letter f is still text while writing") {
-  // The photo action is bound to a control character precisely so no printable
+  // The file action is bound to a control character precisely so no printable
   // key is taken away from the message body.
   Model model = unlocked_model({contact("alice")});
   model.handle_key(code(screen::KeyCode::Enter));
@@ -170,23 +170,23 @@ TEST("the letter f is still text while writing") {
   CHECK_EQ(model.text(), std::string("f"));
 }
 
-TEST("Escape from the photo path goes back to writing") {
+TEST("Escape from the file path goes back to writing") {
   Model model = unlocked_model({contact("alice")});
   model.handle_key(code(screen::KeyCode::Enter));
   model.handle_key(ch("w"));
   model.handle_key(code(screen::KeyCode::CtrlP));
-  CHECK(model.screen() == Screen::PhotoPick);
+  CHECK(model.screen() == Screen::FilePick);
   model.handle_key(code(screen::KeyCode::Escape));
   CHECK(model.screen() == Screen::Compose);
 }
 
-TEST("an empty photo path does not send") {
+TEST("an empty file path does not send") {
   Model model = unlocked_model({contact("alice")});
   model.handle_key(code(screen::KeyCode::Enter));
   model.handle_key(ch("w"));
   model.handle_key(code(screen::KeyCode::CtrlP));
   CHECK(model.handle_key(code(screen::KeyCode::Enter)) == ActionKind::None);
-  CHECK(model.screen() == Screen::PhotoPick);
+  CHECK(model.screen() == Screen::FilePick);
 }
 
 TEST("Ctrl-V asks the driver to paste the clipboard") {
@@ -201,16 +201,16 @@ TEST("Ctrl-V asks the driver to paste the clipboard") {
   CHECK(model.text().find("BEGIN RATCHET CARD") != std::string::npos);
 }
 
-TEST("a received image is announced and opens on request") {
+TEST("a received file is announced and opens on request") {
   Model model = unlocked_model({contact("alice", true)});
-  model.show_photo("alice", false, false);
-  CHECK(model.screen() == Screen::Photo);
+  model.show_file("alice", false, false);
+  CHECK(model.screen() == Screen::File);
   const std::string frame = draw(model);
   CHECK(frame.find("alice") != std::string::npos);
   CHECK(frame.find("[ Open ]") != std::string::npos);
   // Enter asks the driver to hand the bytes to the system viewer.
-  CHECK(model.handle_key(code(screen::KeyCode::Enter)) == ActionKind::OpenPhoto);
-  CHECK(model.screen() == Screen::Photo);
+  CHECK(model.handle_key(code(screen::KeyCode::Enter)) == ActionKind::OpenFile);
+  CHECK(model.screen() == Screen::File);
   model.handle_key(code(screen::KeyCode::Escape));
   CHECK(model.screen() == Screen::Home);
 }
@@ -233,9 +233,9 @@ TEST("a block copied from the screen survives the paste parser") {
   CHECK_EQ(decoded.size(), sizeof(payload) - 1);
 }
 
-TEST("a received image from an unverified contact still warns") {
+TEST("a received file from an unverified contact still warns") {
   Model model = unlocked_model({contact("alice", false)});
-  model.show_photo("alice", true, true);
+  model.show_file("alice", true, true);
   const std::string frame = draw(model);
   CHECK(frame.find("NOT verified") != std::string::npos);
   CHECK(frame.find("opened a new session") != std::string::npos);
@@ -483,21 +483,21 @@ TEST("no screen draws outside the frame, however small it is") {
 
 // --- the menu ------------------------------------------------------------------
 
-TEST("the list screens carry a menu and the writing screen keeps the photo action") {
+TEST("the list screens carry a menu and the writing screen keeps the file action") {
   Model model = unlocked_model({contact("alice")});
   CHECK(!model.menu().empty());          // Home
   model.handle_key(code(screen::KeyCode::Enter));
   CHECK(!model.menu().empty());          // Contact
   model.handle_key(ch("w"));
   CHECK(model.screen() == Screen::Compose);
-  // The bottom bar stays put while writing, with the photo attachment on it.
-  bool has_photo = false;
+  // The bottom bar stays put while writing, with the file attachment on it.
+  bool has_file = false;
   for (const ui::MenuEntry& item : model.menu()) {
-    if (item.label == i18n::Str::MenuSendPhoto) {
-      has_photo = true;
+    if (item.label == i18n::Str::MenuSendFile) {
+      has_file = true;
     }
   }
-  CHECK(has_photo);
+  CHECK(has_file);
 }
 
 TEST("left and right steer the menu, up and down the list") {

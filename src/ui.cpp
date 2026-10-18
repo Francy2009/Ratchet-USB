@@ -19,7 +19,7 @@
 #include "ratchet/clipboard.hpp"
 #include "ratchet/identity.hpp"
 #include "ratchet/media.hpp"
-#include "ratchet/photo.hpp"
+#include "ratchet/file.hpp"
 #include "ratchet/screen.hpp"
 #include "ratchet/session.hpp"
 #include "ratchet/terminal.hpp"
@@ -129,8 +129,8 @@ class Driver {
   void trust_selected();
   void send_message();
   void receive_message();
-  void send_photo();
-  void open_pending_photo();
+  void send_file();
+  void open_pending_file();
   void copy_block();
   void paste_from_clipboard();
 
@@ -165,10 +165,10 @@ class Driver {
   fs::path drive_;
   fs::path vault_path_;
   std::string fingerprint_;
-  // The image that arrived, held only until the vault is locked or another
+  // The file that arrived, held only until the vault is locked or another
   // message replaces it. It is never written to the host disk: opening it
-  // hands the bytes to the system viewer through an anonymous memfd.
-  std::optional<photo::PhotoPayload> pending_photo_;
+  // stages the bytes on a private tmpfs for the default application.
+  std::optional<file::FilePayload> pending_file_;
   bool running_ = true;
 };
 
@@ -322,12 +322,12 @@ void Driver::go_home() {
 
 void Driver::lock(Str reason) {
   // Dropping the OpenedVault runs the destructors that wipe the seed, the
-  // session keys and the passphrase; forgetting the received image takes its
+  // session keys and the passphrase; forgetting the received file takes its
   // bytes off the heap as well, so locking leaves nothing decrypted behind.
   vault_.reset();
-  if (pending_photo_) {
-    sodium_memzero(pending_photo_->bytes.data(), pending_photo_->bytes.size());
-    pending_photo_.reset();
+  if (pending_file_) {
+    sodium_memzero(pending_file_->bytes.data(), pending_file_->bytes.size());
+    pending_file_.reset();
   }
   fingerprint_.clear();
   model_.forget();
@@ -566,18 +566,18 @@ void Driver::receive_message() {
         !vault().store.contacts[result.contact_index].verified;
     model_.show_contacts(contact_rows());
 
-    // The decrypted plaintext is either an ordinary message or an image
+    // The decrypted plaintext is either an ordinary message or a file
     // payload. A leading 0x02 marks the latter and never begins typed text, so
     // the two cannot be confused.
-    const std::optional<photo::PhotoPayload> received =
-        photo::decode_photo_payload(result.plaintext);
+    const std::optional<file::FilePayload> received =
+        file::decode_file_payload(result.plaintext);
     if (received.has_value()) {
-      if (pending_photo_) {
-        sodium_memzero(pending_photo_->bytes.data(),
-                       pending_photo_->bytes.size());
+      if (pending_file_) {
+        sodium_memzero(pending_file_->bytes.data(),
+                       pending_file_->bytes.size());
       }
-      pending_photo_ = *received;
-      model_.show_photo(result.alias, result.session_established, unverified);
+      pending_file_ = *received;
+      model_.show_file(result.alias, result.session_established, unverified);
     } else {
       model_.show_message(result.alias, std::move(result.plaintext),
                           result.session_established, unverified);
@@ -589,13 +589,13 @@ void Driver::receive_message() {
   }
 }
 
-void Driver::send_photo() {
+void Driver::send_file() {
   const ContactRow* row = model_.selected_contact();
   std::string path = model_.text();
   model_.clear_text();
   if (row == nullptr || path.empty()) {
     wipe_string(path);
-    model_.set_status(std::string(t(Str::PhotoPathRequired)),
+    model_.set_status(std::string(t(Str::FilePathRequired)),
                       screen::Style::Warn);
     return;
   }
@@ -606,14 +606,13 @@ void Driver::send_photo() {
       throw Error("no contact named '" + row->alias + "'");
     }
 
-    // Read and validate the image, frame it, then encrypt it through the very
-    // same ratchet a text message uses. The raw bytes and the framed plaintext
-    // are zeroed as soon as they are no longer needed; only the ciphertext
-    // block survives.
-    std::vector<uint8_t> raw = photo::load_image(fs::path(path));
+    // Read the file, frame it, then encrypt it through the very same ratchet a
+    // text message uses. The raw bytes and the framed plaintext are zeroed as
+    // soon as they are no longer needed; only the ciphertext block survives.
+    std::vector<uint8_t> raw = file::load_file(fs::path(path));
+    const std::string ext = file::extension_for(fs::path(path), raw);
     wipe_string(path);
-    const std::string_view ext = photo::extension_for(raw);
-    std::string payload = photo::encode_photo_payload(raw, ext);
+    std::string payload = file::encode_file_payload(raw, ext);
     sodium_memzero(raw.data(), raw.size());
     raw.clear();
 
@@ -629,22 +628,22 @@ void Driver::send_photo() {
     save();
     model_.show_contacts(contact_rows());
     model_.show_block(t(Str::MessageBlock), std::move(block));
-    model_.set_status(std::string(t(Str::PhotoReady)), screen::Style::Good);
+    model_.set_status(std::string(t(Str::FileReady)), screen::Style::Good);
   } catch (const std::exception& e) {
     wipe_string(path);
     report(e);
   }
 }
 
-void Driver::open_pending_photo() {
-  if (!pending_photo_) {
+void Driver::open_pending_file() {
+  if (!pending_file_) {
     model_.set_status(std::string(t(Str::NothingToRead)), screen::Style::Warn);
     return;
   }
   try {
-    // Never saved: open_photo_in_viewer passes the bytes to the viewer through
-    // an anonymous in-memory file and unlinks any fallback immediately.
-    photo::open_photo_in_viewer(*pending_photo_);
+    // Never saved: open_in_default_app stages the bytes on a private tmpfs for
+    // the default application, which removes them again shortly after.
+    file::open_in_default_app(*pending_file_);
   } catch (const std::exception& e) {
     report(e);
   }
@@ -817,11 +816,11 @@ void Driver::loop() {
         case ActionKind::Receive:
           receive_message();
           break;
-        case ActionKind::SendPhoto:
-          send_photo();
+        case ActionKind::SendFile:
+          send_file();
           break;
-        case ActionKind::OpenPhoto:
-          open_pending_photo();
+        case ActionKind::OpenFile:
+          open_pending_file();
           break;
         case ActionKind::CopyBlock:
           copy_block();
@@ -851,9 +850,9 @@ int Driver::run() {
   // Explicit rather than left to the destructor: the vault is wiped before the
   // terminal is handed back, not somewhere in between.
   vault_.reset();
-  if (pending_photo_) {
-    sodium_memzero(pending_photo_->bytes.data(), pending_photo_->bytes.size());
-    pending_photo_.reset();
+  if (pending_file_) {
+    sodium_memzero(pending_file_->bytes.data(), pending_file_->bytes.size());
+    pending_file_.reset();
   }
   model_.forget();
   return 0;
