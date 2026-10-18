@@ -18,8 +18,10 @@ struct AnchorRecord {
   store::VaultId vault_id{};
   uint64_t generation = 0;
   Digest vault_digest{};
-  // False for a legacy RANCHOR1 record, which has no tag. store() sets this
-  // and fills mac before writing. The tag is not a secret.
+  // False only for a legacy RANCHOR1 record, which has no tag. store() sets
+  // this and fills mac before writing. The tag is not a secret. load() never
+  // returns an unauthenticated record and validate() refuses one, so a legacy
+  // anchor can never be trusted by accident.
   bool authenticated = false;
   std::array<uint8_t, 32> mac{};
 };
@@ -35,9 +37,9 @@ std::string vault_id_text(const store::VaultId& id);
 
 // Validates the USB state against an already loaded host anchor. This pure
 // function is intentionally public so rollback/crash-recovery invariants can
-// be tested without a desktop keyring. An authenticated record must carry a
-// MAC under the vault seed. A legacy record with authenticated == false keeps
-// the generation checks only.
+// be tested without a desktop keyring. The record must be authenticated: an
+// unauthenticated (legacy) record is refused, because generation-only checks
+// are forgeable by anyone able to write the host anchor store.
 Status validate(const AnchorRecord& anchor, const store::VaultStore& usb,
                 const Digest& usb_digest);
 
@@ -51,7 +53,8 @@ AnchorRecord decode(std::string_view text);
 
 // The host backend is Secret Service. A missing
 // service is not silently treated as protection: load returns nullopt and the
-// caller must expose USB-only mode to the user.
+// caller must expose USB-only mode to the user. A legacy, unauthenticated
+// record is returned as nullopt too, so it is never trusted.
 bool backend_available();
 std::optional<AnchorRecord> load(const store::VaultId& vault_id);
 

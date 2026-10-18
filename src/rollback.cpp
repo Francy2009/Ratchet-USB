@@ -136,18 +136,27 @@ AnchorRecord decode(std::string_view text) {
 
 Status validate(const AnchorRecord& anchor, const store::VaultStore& usb,
                 const Digest& usb_digest) {
+  // An unauthenticated anchor is a legacy RANCHOR1 record: it carries no tag,
+  // so nothing in it can be trusted, not even the vault id it names. It is
+  // refused outright rather than downgraded to generation-only checks -- which
+  // is exactly what would let anyone able to write the host anchor store
+  // bypass rollback detection by replacing the signed record with a forged
+  // legacy one. The fix for an old anchor is to re-enroll it.
+  if (!anchor.authenticated) {
+    throw Error(
+        "rollback anchor is not authenticated; re-enroll it with "
+        "`ratchet-usb anchor`");
+  }
   if (sodium_memcmp(anchor.vault_id.data(), usb.vault_id.data(),
                     usb.vault_id.size()) != 0) {
     throw Error("rollback anchor belongs to a different vault");
   }
-  if (anchor.authenticated) {
-    SecureBytes<32> key;
-    derive_mac_key(usb.seed, key);
-    const std::vector<uint8_t> message = mac_message(anchor);
-    if (crypto_auth_hmacsha256_verify(anchor.mac.data(), message.data(),
-                                      message.size(), key.data()) != 0) {
-      throw Error("rollback anchor authentication failed");
-    }
+  SecureBytes<32> key;
+  derive_mac_key(usb.seed, key);
+  const std::vector<uint8_t> message = mac_message(anchor);
+  if (crypto_auth_hmacsha256_verify(anchor.mac.data(), message.data(),
+                                    message.size(), key.data()) != 0) {
+    throw Error("rollback anchor authentication failed");
   }
   if (usb.generation < anchor.generation) {
     throw Error("vault rollback detected: USB generation is older than host anchor");
@@ -190,6 +199,13 @@ std::optional<AnchorRecord> load(const store::VaultId& vault_id) {
   if (password == nullptr) return std::nullopt;
   const AnchorRecord record = decode(password);
   secret_password_free(password);
+  // A legacy RANCHOR1 record carries no tag, so it cannot be told apart from
+  // one an attacker wrote. It is reported as "no anchor" rather than returned:
+  // trusting it would defeat the authenticated format, and returning it would
+  // only invite a caller to. The user sees USB-only mode and can re-enroll.
+  if (!record.authenticated) {
+    return std::nullopt;
+  }
   return record;
 #else
   (void)id;
