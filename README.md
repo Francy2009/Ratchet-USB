@@ -51,6 +51,15 @@ your shareable card. `unlock` opens the vault and refreshes prekeys when needed.
 older vault copy; you must enable it explicitly. `migrate` prepares a format
 migration, and `migrate --commit` confirms it after checks.
 
+Besides text, `send` can carry a file. `ratchet-usb send alice --file
+documento.odt` encrypts the file through the same ratchet and prints the same
+kind of block; in the terminal interface, press Ctrl-P while writing to type the
+path. Any format works — a photo, a document, a spreadsheet — and the file is
+never modified or copied elsewhere. On the other side, `recv` recognises the
+block and offers to open the file with the default application. The whole file
+travels inside the block, so the block grows with the file (about a third larger
+once armoured), and one file may not exceed 4 MiB.
+
 The program tries to find a removable drive. If detection is unsuitable for
 your setup, pass `--usb-path <directory>` to commands or set `RATCHET_USB_PATH`.
 

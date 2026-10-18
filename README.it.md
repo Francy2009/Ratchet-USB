@@ -57,6 +57,16 @@ riferimento per rilevare il ripristino di una vecchia copia del vault; questa
 protezione richiede un'attivazione esplicita. `migrate` prepara una migrazione
 di formato e `migrate --commit` la conferma dopo le verifiche.
 
+Oltre al testo, `send` può portare con sé un file. `ratchet-usb send alice
+--file documento.odt` cifra il file con lo stesso ratchet e stampa un blocco
+dello stesso tipo; nell'interfaccia, premi Ctrl-P mentre scrivi per indicarne il
+percorso. Va bene qualsiasi formato — una foto, un documento, un foglio di
+calcolo — e il file non viene mai modificato né copiato altrove. Dall'altra
+parte `recv` riconosce il blocco e propone di aprire il file con l'applicazione
+predefinita. Il file viaggia interamente dentro il blocco, quindi il blocco
+cresce con il file (circa un terzo in più con l'armatura) e un singolo file non
+può superare i 4 MiB.
+
 Il programma prova a individuare un'unità rimovibile. Se la rilevazione non è
 adatta al tuo caso, passa `--usb-path <cartella>` ai comandi o imposta
 `RATCHET_USB_PATH`.
