@@ -184,8 +184,11 @@ struct VaultStore {
 // Maximum number of accepted handshakes stored in a vault.
 //
 // Each entry is 72 bytes, so the whole list is a few tens of kilobytes at this
-// Reaching this ceiling requires explicit session maintenance; records are
-// never silently evicted because that would make an old opening replayable.
+// ceiling. Reaching it takes hundreds of genuine openings from the same peer;
+// the list is never silently evicted because that would make an old opening
+// replayable again. Past the ceiling the vault refuses new handshakes rather
+// than forgetting an authenticated one -- a deliberate availability limit, not
+// a security boundary.
 inline constexpr std::size_t kMaxAcceptedHandshakes = 512;
 
 // A deliberate, deep copy of a session, key material and all.

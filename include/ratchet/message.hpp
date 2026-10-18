@@ -27,6 +27,12 @@ using SenderId = std::array<uint8_t, kSenderIdBytes>;
 // Truncated SHA-256 of an identity public key, carried in every envelope so
 // the recipient can tell which contact (and which session) a message belongs
 // to without the user having to say so on every `recv`.
+//
+// It is only a routing hint: truncated to 8 bytes, so a collision is
+// conceivable. It is not a security boundary -- the envelope is authenticated
+// under a key derived for one specific session and the id is part of the AAD,
+// so a forged or colliding id fails the tag rather than reaching the wrong
+// contact.
 SenderId sender_id_for(const IdentitySigningPublicKey& identity_pub);
 
 struct InitialFields {

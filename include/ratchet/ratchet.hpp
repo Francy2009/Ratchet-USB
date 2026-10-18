@@ -38,6 +38,12 @@ inline constexpr std::size_t kMaxSkip = 1000;
 // gap can be tolerated at all. A week is long enough for any delivery this is
 // meant to survive -- a message handed over on a USB stick, not one waiting on
 // a server.
+//
+// The age is measured against the system clock, so a clock rolled back keeps a
+// skipped key past its TTL -- a delay in forward secrecy, not a break -- and a
+// clock that jumps forward drops a key that is still live. Both are accepted:
+// with no trusted time source and delivery by hand, there is nothing better to
+// expire against.
 inline constexpr uint64_t kSkippedKeyMaxAgeDays = 7;
 inline constexpr uint64_t kSkippedKeyMaxAgeSeconds =
     kSkippedKeyMaxAgeDays * 24 * 60 * 60;

@@ -141,6 +141,11 @@ void ml_kem_768_encapsulate(const MlKemPublicKey& public_key,
   }
 }
 
+// ML-KEM uses implicit rejection: a ciphertext that does not re-encrypt to
+// itself does not make decapsulation fail, it yields a pseudorandom secret
+// derived from the failure. The wrong secret is caught downstream, where the
+// AEAD tag over the combined key does not verify -- which is why this function
+// cannot, and does not, report a bad ciphertext on its own.
 void ml_kem_768_decapsulate(const MlKemPrivateSeed& private_seed,
                             const MlKemCiphertext& ciphertext,
                             MlKemSharedSecret& shared_secret) {

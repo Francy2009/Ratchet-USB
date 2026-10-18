@@ -35,6 +35,11 @@ void derive_identity(const MasterSeed& seed, IdentitySigningSecretKey& sk,
 }
 
 pq::MlDsaKeyPair derive_pq_identity(const MasterSeed& seed) {
+  // The master seed is already an HKDF-Extract output, so this is a second
+  // extraction rather than a stylistic choice. It is deliberate domain
+  // separation: the Ed25519 identity expands the master seed directly, while
+  // the ML-DSA identity is derived through a visibly different construction.
+  // Both are deterministic from the same seed.
   kdf::Prk prk;
   kdf::extract(prk, nullptr, 0, seed.data(), seed.size());
   pq::MlDsaPrivateSeed pq_seed;
