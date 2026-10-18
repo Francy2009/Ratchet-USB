@@ -5,6 +5,7 @@ cmake-build-*/
 *.a
 compile_commands.json
 .cache/
+__pycache__/
 rust/spqr_bridge/target/
 third_party/spqr/target/
 
