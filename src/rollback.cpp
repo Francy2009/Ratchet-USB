@@ -94,6 +94,21 @@ void authenticate(AnchorRecord& record, const MasterSeed& seed) {
   record.authenticated = true;
 }
 
+bool authentic_for(const AnchorRecord& anchor, const store::VaultStore& usb) {
+  if (!anchor.authenticated) {
+    return false;
+  }
+  if (sodium_memcmp(anchor.vault_id.data(), usb.vault_id.data(),
+                    usb.vault_id.size()) != 0) {
+    return false;
+  }
+  SecureBytes<32> key;
+  derive_mac_key(usb.seed, key);
+  const std::vector<uint8_t> message = mac_message(anchor);
+  return crypto_auth_hmacsha256_verify(anchor.mac.data(), message.data(),
+                                       message.size(), key.data()) == 0;
+}
+
 std::string encode(const AnchorRecord& record) {
   std::vector<uint8_t> raw;
   if (record.authenticated) {
@@ -192,9 +207,13 @@ std::optional<AnchorRecord> load(const store::VaultId& vault_id) {
   gchar* password = secret_password_lookup_sync(&kSchema, nullptr, &error,
                                                  "vault-id", id.c_str(), nullptr);
   if (error != nullptr) {
-    const std::string message = error->message;
+    // A keyring that is locked, unavailable, or simply refusing the lookup must
+    // not take the vault down with it. Rollback protection is optional, so the
+    // caller is told there is no anchor and exposes USB-only mode instead of
+    // being locked out of the drive by a Secret Service hiccup.
     g_error_free(error);
-    throw Error("cannot read rollback anchor from Secret Service: " + message);
+    if (password != nullptr) secret_password_free(password);
+    return std::nullopt;
   }
   if (password == nullptr) return std::nullopt;
   const AnchorRecord record = decode(password);
@@ -239,8 +258,14 @@ void enroll(const store::VaultStore& usb, const Digest& usb_digest) {
   if (!backend_available()) {
     throw Error("no supported host rollback-anchor service is available");
   }
-  if (load(usb.vault_id)) {
-    throw Error("this vault already has a rollback anchor on this host");
+  if (const auto existing = load(usb.vault_id)) {
+    // An anchor at or ahead of the drive is one that is doing its job: refuse
+    // to overwrite it. An anchor *behind* the drive is one whose update never
+    // landed (a keyring outage, a crash between the vault write and the anchor
+    // write); re-enrolling it is the recovery path, so it is allowed.
+    if (existing->generation >= usb.generation) {
+      throw Error("this vault already has a rollback anchor on this host");
+    }
   }
   store(AnchorRecord{usb.vault_id, usb.generation, usb_digest}, usb.seed);
 }

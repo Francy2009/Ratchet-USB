@@ -56,9 +56,15 @@ documento.odt` encrypts the file through the same ratchet and prints the same
 kind of block; in the terminal interface, press Ctrl-P while writing to type the
 path. Any format works — a photo, a document, a spreadsheet — and the file is
 never modified or copied elsewhere. On the other side, `recv` recognises the
-block and offers to open the file with the default application. The whole file
-travels inside the block, so the block grows with the file (about a third larger
-once armoured), and one file may not exceed 4 MiB.
+block and offers to show the file in a temporary folder; the folder is opened in
+your file manager and removed when ratchet-usb closes. A file whose extension
+names something a desktop might run, such as `.desktop` or `.sh`, is refused.
+The whole file travels inside the block, so the block grows with the file (about
+a third larger once armoured), and one file may not exceed 4 MiB.
+
+The interface also works with the system clipboard: press `y` on a card or a
+message block to copy it, and `Ctrl-V` to paste the clipboard into a text field.
+Neither has to pass through a terminal selection.
 
 The program tries to find a removable drive. If detection is unsuitable for
 your setup, pass `--usb-path <directory>` to commands or set `RATCHET_USB_PATH`.
@@ -126,6 +132,10 @@ altered data, and compatibility with the earlier suite. An independent
 cryptographic review and longer fuzzing are still needed. Do not use this
 development version as the sole protection for high-risk communications.
 
+Opening a received file writes its decrypted bytes to a private folder on the
+host and removes that folder when the program closes, but the file is plaintext
+on the host until then.
+
 See [SECURITY.md](SECURITY.md) for vulnerability reporting and detailed limits.
 
 ## Project history
@@ -144,6 +154,7 @@ They are not production-approved releases.
 | `v0.5.0-dev` | Development snapshot from the first pre-release publication. It stays on that commit. |
 | `milestone/linux-only` | macOS removed from the program, CI, and documentation. |
 | `milestone/suite-4-xwing` | Suite 4 X-Wing handshakes for new cards, HMAC on new rollback anchors, and a ProVerif session model. |
+| `milestone/file-sharing` | Encrypted file sharing, the system clipboard, and received files opened in a temporary folder that is removed on exit. |
 
 Inspect a step with `git show milestone/triple-ratchet`, or compare two steps
 with `git diff milestone/pq-hybrid milestone/triple-ratchet`. The same commits

@@ -191,9 +191,15 @@ namespace ratchet::i18n {
     "Invio conferma   Esc annulla   Ctrl-C esci")                               \
   X(FileReady, "File encrypted.", "File cifrato.")                             \
   X(FileReceived, "File received from", "File ricevuto da")                    \
-  X(FileHint, "An encrypted file arrived.",                                    \
-    "E' arrivato un file cifrato.")                                             \
-  X(MenuOpenFile, "Open", "Apri")                                             \
+  X(FileHint, "Opens a temporary folder, removed when ratchet-usb closes.",    \
+    "Apre una cartella temporanea, rimossa alla chiusura di ratchet-usb.")      \
+  X(FileType, "File type:", "Tipo di file:")                                   \
+  X(FileDangerous,                                                             \
+    "This file type can run code, so it is not opened. Inspect it yourself "   \
+    "if you trust the sender.",                                                \
+    "Questo tipo di file puo' eseguire codice, quindi non viene aperto. "      \
+    "Controllalo tu stesso se ti fidi del mittente.")                           \
+  X(MenuOpenFile, "Open folder", "Apri cartella")                              \
   X(KeysFile, "Enter open   Esc back   Ctrl-C quit",                           \
     "Invio apri   Esc indietro   Ctrl-C esci")                                  \
   X(FileOpenFailed,                                                            \

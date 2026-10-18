@@ -62,10 +62,17 @@ Oltre al testo, `send` può portare con sé un file. `ratchet-usb send alice
 dello stesso tipo; nell'interfaccia, premi Ctrl-P mentre scrivi per indicarne il
 percorso. Va bene qualsiasi formato — una foto, un documento, un foglio di
 calcolo — e il file non viene mai modificato né copiato altrove. Dall'altra
-parte `recv` riconosce il blocco e propone di aprire il file con l'applicazione
-predefinita. Il file viaggia interamente dentro il blocco, quindi il blocco
-cresce con il file (circa un terzo in più con l'armatura) e un singolo file non
-può superare i 4 MiB.
+parte `recv` riconosce il blocco e propone di mostrare il file in una cartella
+temporanea; la cartella si apre nel gestore di file e viene rimossa alla
+chiusura di ratchet-usb. Un file la cui estensione indica qualcosa che il
+desktop potrebbe eseguire, come `.desktop` o `.sh`, viene rifiutato. Il file
+viaggia interamente dentro il blocco, quindi il blocco cresce con il file
+(circa un terzo in più con l'armatura) e un singolo file non può superare i
+4 MiB.
+
+L'interfaccia usa anche gli appunti di sistema: premi `y` su una carta o su un
+blocco di messaggio per copiarlo, e `Ctrl-V` per incollare gli appunti in un
+campo di testo. Così non devono passare dalla selezione del terminale.
 
 Il programma prova a individuare un'unità rimovibile. Se la rilevazione non è
 adatta al tuo caso, passa `--usb-path <cartella>` ai comandi o imposta
@@ -139,6 +146,10 @@ alterati e compatibilità con la suite precedente. Restano necessari una
 revisione crittografica indipendente e test di fuzzing più lunghi. Non usare
 questa versione come unica protezione per comunicazioni ad alto rischio.
 
+Aprire un file ricevuto ne scrive i byte decifrati in una cartella privata sul
+computer e la rimuove alla chiusura del programma, ma fino ad allora il file è
+in chiaro sul computer.
+
 Per segnalare una vulnerabilità e leggere i limiti nel dettaglio, vedi
 [SECURITY.md](SECURITY.md).
 
@@ -158,6 +169,7 @@ sviluppo, non versioni approvate per l'uso in produzione.
 | `v0.5.0-dev` | Istantanea di sviluppo della prima pubblicazione delle pre-release. Resta su quel commit. |
 | `milestone/linux-only` | macOS rimosso dal programma, dalla CI e dalla documentazione. |
 | `milestone/suite-4-xwing` | Handshake X-Wing di suite 4 per le carte nuove, HMAC sulle ancore di rollback nuove e modello di sessione ProVerif. |
+| `milestone/file-sharing` | Invio di file cifrati, appunti di sistema e file ricevuti aperti in una cartella temporanea rimossa all'uscita. |
 
 Puoi esaminare una tappa con `git show milestone/triple-ratchet` o confrontare
 due tappe con `git diff milestone/pq-hybrid milestone/triple-ratchet`. Gli

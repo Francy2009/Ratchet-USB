@@ -28,7 +28,7 @@
 // image-only version, so images sent by an older build still decode.
 //
 // Nothing in this header touches the ratchet state, the vault or the disk.
-// open_in_default_app() is the only function with OS side-effects.
+// open_in_file_manager() is the only function with OS side-effects.
 
 #ifndef RATCHET_FILE_HPP
 #define RATCHET_FILE_HPP
@@ -80,6 +80,16 @@ std::vector<uint8_t> load_file(const std::filesystem::path& path);
 std::string extension_for(const std::filesystem::path& path,
                           const std::vector<uint8_t>& raw);
 
+// Whether `ext` names a type a desktop may run rather than display. The
+// default-application dispatch is by extension, so a verified but hostile
+// sender could otherwise hand over a ".desktop" or a shell script and have the
+// desktop execute it when the receiver presses "open". open_in_file_manager()
+// refuses these; the bytes can still be saved and inspected by hand.
+//
+// `ext` is expected in the sanitised form FilePayload::ext carries (lowercase,
+// [a-z0-9], no leading dot).
+bool is_dangerous_extension(std::string_view ext);
+
 // Packs raw file bytes and their extension into the payload format that
 // session::send() will encrypt:
 //   [0x02][u32-LE ext_len][ext bytes][file bytes]
@@ -97,26 +107,50 @@ std::string encode_file_payload(const std::vector<uint8_t>& raw,
 // invalid (truncated length field, oversized extension, empty body, etc.).
 std::optional<FilePayload> decode_file_payload(const std::string& plaintext);
 
-// Opens `file` in the system's default application without writing the file to
-// durable storage.
+// Creates the private staging folder and the detached helper that removes it,
+// if they do not exist yet. Idempotent.
+//
+// A front end calls this before it opens the vault, so the long-lived helper
+// is forked from a process that holds no key material: after the fork the two
+// share no secret pages, and the helper can outlive the session without
+// keeping a copy of the keys. open_in_file_manager() calls it too, so the
+// order is a hardening measure rather than a correctness requirement.
+void prepare_staging();
+
+// Removes the staging folder now, if it exists. Idempotent.
+//
+// A front end calls this as it exits so the decrypted file is gone the moment
+// ratchet-usb closes, rather than waiting for the detached helper -- which a
+// session teardown can kill, and which deliberately keeps a one-shot `recv`
+// folder alive for a short grace period. Safe to call when nothing was staged.
+void cleanup_staging();
+
+// Stages `file` in a private temporary folder and opens that folder in the
+// system's file manager, without writing the file to durable storage.
 //
 // Implementation (Linux):
-//  1. Creates a 0600 file with the correct extension under $XDG_RUNTIME_DIR
-//     (a tmpfs cleared at logout), or /tmp when that is unavailable.
+//  1. Creates a private directory under $XDG_RUNTIME_DIR (a per-user tmpfs
+//     cleared at logout), or a 0700 directory created with mkdtemp() under
+//     $TMPDIR (or /tmp) when that is unavailable, and a 0600 file with the
+//     correct extension inside it.
 //  2. Writes the file bytes into it.
-//  3. Forks a child that detaches and exec()s "xdg-open <real path>".
+//  3. Forks a child that detaches and exec()s "xdg-open <folder>".
 //  4. The parent waits for xdg-open, which only asks the desktop to open the
-//     path and exits quickly.
-//  5. A detached helper unlinks the staged file after a short grace period.
+//     folder and exits quickly.
+//  5. A detached helper removes the folder when ratchet-usb exits, so the
+//     plaintext does not outlive the session. A caller that exits at once (the
+//     `recv` command) still keeps the folder for a short minimum so the
+//     desktop can draw it. If no helper can be forked, the folder is removed
+//     on the ordinary exit paths instead.
 //
-// The path passed to xdg-open is a real filesystem path: the application is
+// The path passed to xdg-open is a real filesystem path: the file manager is
 // usually started as a separate (often sandboxed) process that does not inherit
 // this process's file descriptors, so a memfd or /proc/self/fd path cannot be
 // used.
 //
-// Throws Error if the application could not be launched.
-
-void open_in_default_app(const FilePayload& file);
+// Throws Error if the folder could not be opened, or if `file.ext` names a type
+// the desktop may execute (see is_dangerous_extension()).
+void open_in_file_manager(const FilePayload& file);
 
 }  // namespace ratchet::file
 

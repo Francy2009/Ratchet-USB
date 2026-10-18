@@ -96,8 +96,8 @@ void Model::show_message(const std::string& from, std::string body, bool session
   go(Screen::Message);
 }
 
-void Model::show_file(const std::string& from, bool session_opened,
-                      bool unverified) {
+void Model::show_file(const std::string& from, std::string ext, bool dangerous,
+                      bool session_opened, bool unverified) {
   // Reuse pager_heading_ and pager_notes_ for the sender and warnings; the
   // pager_ body is left empty because the File screen renders its own fixed
   // hint line rather than scrollable text.
@@ -109,6 +109,8 @@ void Model::show_file(const std::string& from, bool session_opened,
   if (unverified) {
     pager_notes_.emplace_back(i18n::t(lang_, Str::WarnUnverified));
   }
+  file_ext_ = std::move(ext);
+  file_dangerous_ = dangerous;
   pager_.clear();
   pager_top_ = 0;
   go(Screen::File);
@@ -137,6 +139,8 @@ void Model::forget() {
   pager_notes_.clear();
   pager_heading_.clear();
   pager_top_ = 0;
+  file_ext_.clear();
+  file_dangerous_ = false;
   contacts_.clear();
   fingerprint_.clear();
   alias_.clear();
@@ -918,13 +922,20 @@ void Model::render_body(screen::Frame& frame, std::size_t rows) const {
 
     case Screen::File: {
       // Notification screen for a received file.
-      // Shows sender, any session/trust warnings, and a fixed hint line.
-      // The [Open] and [Back] actions live in the menu row below.
+      // Shows sender, any session/trust warnings, the file's type, and a fixed
+      // hint line. The [Open] and [Back] actions live in the menu row below.
       frame.line(indent(pager_heading_), screen::Style::Accent);
       for (const std::string& note : pager_notes_) {
         const bool warning = note == i18n::t(lang_, Str::WarnUnverified);
         frame.line(indent(note),
                    warning ? screen::Style::Bad : screen::Style::Dim);
+      }
+      frame.blank();
+      frame.line(indent(std::string(i18n::t(lang_, Str::FileType)) + " ." +
+                        file_ext_));
+      if (file_dangerous_) {
+        frame.line(indent(i18n::t(lang_, Str::FileDangerous)),
+                   screen::Style::Bad);
       }
       frame.blank();
       frame.line(indent(i18n::t(lang_, Str::FileHint)));

@@ -1,3 +1,4 @@
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <cstdint>
@@ -216,4 +217,45 @@ TEST("file: a file past the size limit is refused") {
   raw.resize(file::kMaxFileBytes + 1, 0);
   file.write(raw);
   CHECK_THROWS(file::load_file(file.path()));
+}
+
+TEST("file: a bare relative name is read from the current directory") {
+  // "foo.txt" has an empty parent_path(); load_file must not try to open("").
+  const fs::path name =
+      fs::path("ratchet_rel_" + std::to_string(::getpid()) + ".txt");
+  const std::vector<uint8_t> raw = text_bytes("relative");
+  {
+    std::ofstream out(name, std::ios::binary | std::ios::trunc);
+    out.write(reinterpret_cast<const char*>(raw.data()),
+              static_cast<std::streamsize>(raw.size()));
+  }
+  const std::vector<uint8_t> loaded = file::load_file(name);
+  CHECK(loaded == raw);
+  std::error_code ec;
+  fs::remove(name, ec);
+}
+
+TEST("file: a FIFO is refused instead of blocking") {
+  // Opening a FIFO read-only without O_NONBLOCK blocks until a writer appears;
+  // load_file must reject it as a non-regular file straight away instead.
+  const fs::path fifo =
+      fs::temp_directory_path() / ("ratchet_fifo_" + std::to_string(::getpid()));
+  std::error_code ec;
+  fs::remove(fifo, ec);
+  if (::mkfifo(fifo.c_str(), 0600) != 0) {
+    return;  // a filesystem without FIFOs; nothing to check
+  }
+  CHECK_THROWS(file::load_file(fifo));
+  fs::remove(fifo, ec);
+}
+
+TEST("file: a type a desktop may execute is flagged") {
+  CHECK(file::is_dangerous_extension("desktop"));
+  CHECK(file::is_dangerous_extension("sh"));
+  CHECK(file::is_dangerous_extension("exe"));
+  CHECK(file::is_dangerous_extension("py"));
+  // Ordinary documents and the unknown-type fallback are still openable.
+  CHECK(!file::is_dangerous_extension("png"));
+  CHECK(!file::is_dangerous_extension("pdf"));
+  CHECK(!file::is_dangerous_extension("bin"));
 }

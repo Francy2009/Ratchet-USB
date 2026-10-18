@@ -783,6 +783,10 @@ int cmd_recv(const Options& opts) {
   const fs::path usb = require_usb_path(opts);
   const fs::path path = vault::vault_path(usb);
 
+  // Fork the staging reaper before the vault is opened, so the long-lived
+  // helper never inherits key material.
+  file::prepare_staging();
+
   const std::string block =
       read_text_arg_or_stdin(opts.message, "Paste the message block, then Ctrl-D: ",
                              std::size_t{12} * 1024u * 1024u);
@@ -794,7 +798,7 @@ int cmd_recv(const Options& opts) {
   IdentitySigningPublicKey identity_pk;
   derive_identity(store.seed, identity_sk, identity_pk);
 
-  const session::ReceiveResult result =
+  session::ReceiveResult result =
       session::receive(store, identity_sk, identity_pk, block);
   identity_sk.wipe();
 
@@ -810,18 +814,26 @@ int cmd_recv(const Options& opts) {
   }
 
   // A decrypted file is not text: printing it would dump binary to the
-  // terminal. Detect the framing byte and, on an interactive terminal, offer
-  // to hand the bytes straight to the system's default application -- never to
-  // a file.
+  // terminal. Detect the framing byte and, on an interactive terminal, offer to
+  // stage the bytes in a private temporary folder and open that folder in the
+  // file manager -- never to open the file itself. The extension is always
+  // shown first, and a type the desktop might execute is never staged at all.
   std::optional<file::FilePayload> received =
       file::decode_file_payload(result.plaintext);
   if (received.has_value()) {
-    std::cerr << alias << ": [encrypted file received]\n";
-    if (terminal::stdin_is_tty()) {
-      const std::string answer =
-          terminal::read_line("Open it in the default application? [y/N] ");
+    std::cerr << alias << ": [encrypted file received: ." << received->ext
+              << "]\n";
+    if (file::is_dangerous_extension(received->ext)) {
+      std::cerr << "not opening it: a '." << received->ext
+                << "' file can run code; save it and inspect it yourself if "
+                   "you trust the sender\n";
+    } else if (terminal::stdin_is_tty()) {
+      const std::string answer = terminal::read_line(
+          "Show the ." + received->ext +
+          " file in a temporary folder (removed when ratchet-usb closes)? "
+          "[y/N] ");
       if (answer == "y" || answer == "Y" || answer == "yes") {
-        file::open_in_default_app(*received);
+        file::open_in_file_manager(*received);
       }
     } else {
       std::cerr << "not opening it: standard input is not a terminal\n";
@@ -833,6 +845,9 @@ int cmd_recv(const Options& opts) {
     std::cout << alias << ": " << terminal::escape_if_tty(result.plaintext)
               << "\n";
   }
+  // `plaintext` still holds the decrypted body (and, for a file, a second copy
+  // of its bytes); it is wiped here whether it was a message or a file.
+  wipe_string(result.plaintext);
   return 0;
 }
 
@@ -857,6 +872,9 @@ int cmd_ui(const Options& opts) {
   config.usb_path = opts.usb_path.string();
   config.lang = i18n::detect(opts.lang);
   config.idle_lock_seconds = opts.idle_lock_seconds;
+  // The reaper is forked before the interface can unlock a vault, so the
+  // long-lived helper never inherits key material.
+  file::prepare_staging();
   return ui::run(config);
 }
 

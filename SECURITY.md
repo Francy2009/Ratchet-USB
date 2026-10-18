@@ -62,13 +62,29 @@ What it does not add:
   publish message text to a desktop accessibility bus. On Linux, the optional
   rollback anchor uses libsecret and may communicate with Secret Service over
   D-Bus; its record contains no message or key material.
-- **No application-created secret files on the host.** The interface does not
-  write config, history, cache, theme or layout files. The optional rollback
-  anchor is a non-secret generation/digest record in Secret Service and is
-  created only by the `anchor` command. The operating system
-  may still write process memory to swap or a crash dump.
-- **No clipboard or editor handoff.** The interface does not use OSC 52,
-  `$EDITOR`, a helper program, `fork` or `exec` for messages.
+- **No config, history, cache, theme or layout files.** The interface keeps
+  nothing of its own on the host. The optional rollback anchor is a non-secret
+  generation/digest record in Secret Service and is created only by the
+  `anchor` command. The operating system may still write process memory to swap
+  or a crash dump.
+- **A received file is staged, in the clear, on a private tmpfs.** When the
+  user chooses to open an arriving file, its decrypted bytes are written to a
+  `0600` file inside a private `0700` directory under `$XDG_RUNTIME_DIR` (or
+  under `$TMPDIR`, falling back to `/tmp`, when that is unset), and that folder
+  is opened in the file manager rather than the file being handed straight to
+  an application. The interface removes the folder synchronously as it exits;
+  a detached helper is the fallback if the process dies before reaching that
+  point, and holds a one-shot `recv` folder for a short minimum so the desktop
+  can draw it. If no helper can be forked, the folder is removed on the
+  ordinary exit paths. The staging file is never on the USB drive, but it is
+  plaintext on the host until the folder is removed.
+- **Clipboard and default-application handoff are explicit and opt-in.**
+  Copying a block shells out to the session's clipboard helper (`wl-copy`,
+  `xclip` or `xsel`), and opening a received file runs `xdg-open`. Both happen
+  only when the user asks; nothing is copied or opened automatically. A file
+  whose type a desktop might *execute* rather than display (`.desktop`, `.sh`,
+  `.py`, executables and the like) is refused outright, and the file's
+  extension is shown before any open is offered.
 - **No window title**, ever. A title naming the tool would appear in the
   taskbar, the window switcher, and any screenshot or screen share.
 - **No mouse reporting**, which keeps the escape sequences it has to decode

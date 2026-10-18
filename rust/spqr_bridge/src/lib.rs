@@ -24,18 +24,25 @@ impl Default for RatchetSpqrBuffer {
     }
 }
 
-fn input<'a>(ptr: *const u8, len: usize, max: usize) -> Result<&'a [u8], ()> {
+// Copies the caller's buffer into an owned, zeroizing vector.
+//
+// Returning a borrowed slice would need a lifetime the caller cannot justify
+// from a raw pointer: a safe function must not hand out a reference whose
+// lifetime it does not control. An owned copy keeps the signature honest, and
+// the state and message arguments were already copied by their callers anyway.
+fn input(ptr: *const u8, len: usize, max: usize) -> Result<Zeroizing<Vec<u8>>, ()> {
     if len > max {
         return Err(());
     }
     if len == 0 {
-        return Ok(&[]);
+        return Ok(Zeroizing::new(Vec::new()));
     }
     if ptr.is_null() {
         return Err(());
     }
     // SAFETY: the C++ caller promises the input remains live for this call.
-    Ok(unsafe { std::slice::from_raw_parts(ptr, len) })
+    let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
+    Ok(Zeroizing::new(slice.to_vec()))
 }
 
 unsafe fn output(ptr: *mut RatchetSpqrBuffer, bytes: Vec<u8>) {
@@ -72,7 +79,7 @@ pub extern "C" fn ratchet_spqr_init(
             },
             version: spqr::Version::V1,
             min_version: spqr::Version::V1,
-            auth_key: key,
+            auth_key: key.as_slice(),
             chain_params: spqr::ChainParams {
                 max_jump: 1000,
                 max_ooo_keys: 1000,
@@ -105,7 +112,7 @@ pub extern "C" fn ratchet_spqr_send(
         *out_key = RatchetSpqrBuffer::default();
     }
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let state = Zeroizing::new(input(state_ptr, state_len, MAX_STATE)?.to_vec());
+        let state = input(state_ptr, state_len, MAX_STATE)?;
         let sent = spqr::send(&state, &mut rand::rng()).map_err(|_| ())?;
         let key = sent.key.ok_or(())?;
         if key.len() != 32 || sent.state.len() > MAX_STATE || sent.msg.len() > MAX_MESSAGE {
@@ -138,8 +145,8 @@ pub extern "C" fn ratchet_spqr_recv(
         *out_key = RatchetSpqrBuffer::default();
     }
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let state = Zeroizing::new(input(state_ptr, state_len, MAX_STATE)?.to_vec());
-        let message = input(message_ptr, message_len, MAX_MESSAGE)?.to_vec();
+        let state = input(state_ptr, state_len, MAX_STATE)?;
+        let message = input(message_ptr, message_len, MAX_MESSAGE)?;
         let received = spqr::recv(&state, &message).map_err(|_| ())?;
         let key = received.key.ok_or(())?;
         if key.len() != 32 || received.state.len() > MAX_STATE {

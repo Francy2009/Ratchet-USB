@@ -569,7 +569,7 @@ void Driver::receive_message() {
     // The decrypted plaintext is either an ordinary message or a file
     // payload. A leading 0x02 marks the latter and never begins typed text, so
     // the two cannot be confused.
-    const std::optional<file::FilePayload> received =
+    std::optional<file::FilePayload> received =
         file::decode_file_payload(result.plaintext);
     if (received.has_value()) {
       if (pending_file_) {
@@ -577,7 +577,13 @@ void Driver::receive_message() {
                        pending_file_->bytes.size());
       }
       pending_file_ = *received;
-      model_.show_file(result.alias, result.session_established, unverified);
+      // The local copy was only made to reach this branch; wipe the second
+      // decrypted copy now instead of leaving it on the heap.
+      sodium_memzero(received->bytes.data(), received->bytes.size());
+      received->bytes.clear();
+      model_.show_file(result.alias, pending_file_->ext,
+                       file::is_dangerous_extension(pending_file_->ext),
+                       result.session_established, unverified);
     } else {
       model_.show_message(result.alias, std::move(result.plaintext),
                           result.session_established, unverified);
@@ -640,10 +646,15 @@ void Driver::open_pending_file() {
     model_.set_status(std::string(t(Str::NothingToRead)), screen::Style::Warn);
     return;
   }
+  if (file::is_dangerous_extension(pending_file_->ext)) {
+    model_.set_status(std::string(t(Str::FileDangerous)), screen::Style::Bad);
+    return;
+  }
   try {
-    // Never saved: open_in_default_app stages the bytes on a private tmpfs for
-    // the default application, which removes them again shortly after.
-    file::open_in_default_app(*pending_file_);
+    // Never saved: open_in_file_manager stages the bytes on a private tmpfs
+    // and opens the folder in the file manager, which ratchet-usb removes again
+    // when it closes.
+    file::open_in_file_manager(*pending_file_);
   } catch (const std::exception& e) {
     report(e);
   }
@@ -855,6 +866,10 @@ int Driver::run() {
     pending_file_.reset();
   }
   model_.forget();
+  // The folder holding a received file is removed here, synchronously, so it is
+  // gone the moment the interface closes rather than when a detached helper
+  // eventually gets to it.
+  file::cleanup_staging();
   return 0;
 }
 

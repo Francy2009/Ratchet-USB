@@ -44,15 +44,41 @@ OpenedVault open_vault(VaultFile file, SecureString passphrase,
   result.passphrase = std::move(passphrase);
   result.vault_digest = file.digest;
   result.vault_version = file.header.version;
-  if (const auto anchor = rollback::load(result.store.vault_id)) {
-    result.rollback_status =
-        rollback::validate(*anchor, result.store, result.vault_digest);
-    if (result.rollback_status == rollback::Status::AdvancedAfterCrash) {
-      rollback::store(rollback::AnchorRecord{result.store.vault_id,
-                                              result.store.generation,
-                                              result.vault_digest},
-                      result.store.seed);
-      result.rollback_status = rollback::Status::Protected;
+  const std::optional<rollback::AnchorRecord> anchor =
+      rollback::load(result.store.vault_id);
+  if (anchor) {
+    bool validated = false;
+    try {
+      result.rollback_status =
+          rollback::validate(*anchor, result.store, result.vault_digest);
+      validated = true;
+    } catch (const Error&) {
+      // The drive is ahead of the host anchor. That is what a run of anchor
+      // updates which never landed leaves behind -- a keyring outage, or a
+      // crash between the vault write and the anchor write. Being *ahead* is
+      // not the rollback the anchor exists to catch (that is the drive being
+      // older than the anchor), so the anchor is advanced to the state in hand
+      // instead of locking the vault out. Only an anchor that is genuinely ours
+      // and behind the drive may be advanced: a failed tag or a foreign vault
+      // still stands, so a forged anchor cannot be laundered into a valid one.
+      if (!rollback::authentic_for(*anchor, result.store) ||
+          result.store.generation <= anchor->generation) {
+        throw;
+      }
+    }
+    if (!validated ||
+        result.rollback_status == rollback::Status::AdvancedAfterCrash) {
+      // Refresh the anchor to the current drive. A keyring that can be read but
+      // not written degrades to USB-only mode rather than failing the open.
+      try {
+        rollback::store(rollback::AnchorRecord{result.store.vault_id,
+                                                result.store.generation,
+                                                result.vault_digest},
+                        result.store.seed);
+        result.rollback_status = rollback::Status::Protected;
+      } catch (const Error&) {
+        result.rollback_status = rollback::Status::Unprotected;
+      }
     }
   }
   return result;
@@ -73,12 +99,23 @@ void save_vault(const fs::path& path, store::VaultStore& store,
     previous_digest = rollback::digest(previous.data(), previous.size());
     anchor = rollback::load(store.vault_id);
     if (anchor) {
-      const rollback::Status status =
-          rollback::validate(*anchor, store, previous_digest);
-      if (status == rollback::Status::AdvancedAfterCrash) {
-        rollback::store(rollback::AnchorRecord{store.vault_id, store.generation,
-                                                previous_digest},
-                        store.seed);
+      try {
+        const rollback::Status status =
+            rollback::validate(*anchor, store, previous_digest);
+        if (status == rollback::Status::AdvancedAfterCrash) {
+          rollback::store(rollback::AnchorRecord{store.vault_id, store.generation,
+                                                  previous_digest},
+                          store.seed);
+        }
+      } catch (const Error&) {
+        // A drive ahead of an anchor that is genuinely ours is a lagging
+        // anchor, not a rollback; the write below re-anchors to the new
+        // generation, so there is nothing to correct here. A failed tag, a
+        // foreign vault, or a drive that is behind or forked still stands.
+        if (!rollback::authentic_for(*anchor, store) ||
+            store.generation <= anchor->generation) {
+          throw;
+        }
       }
     }
     store.previous_digest = previous_digest;

@@ -48,13 +48,23 @@ Status validate(const AnchorRecord& anchor, const store::VaultStore& usb,
 // signed record.
 void authenticate(AnchorRecord& record, const MasterSeed& seed);
 
+// True when `anchor` is an authenticated record for `usb`'s vault under its
+// seed: the vault id matches and the tag verifies in constant time. The
+// recovery paths use this to be sure a lagging anchor is genuinely theirs
+// before advancing it, so a forged or foreign anchor cannot be laundered into
+// a valid one by the drive merely being ahead of it.
+bool authentic_for(const AnchorRecord& anchor, const store::VaultStore& usb);
+
 std::string encode(const AnchorRecord& record);
 AnchorRecord decode(std::string_view text);
 
 // The host backend is Secret Service. A missing
 // service is not silently treated as protection: load returns nullopt and the
-// caller must expose USB-only mode to the user. A legacy, unauthenticated
-// record is returned as nullopt too, so it is never trusted.
+// caller must expose USB-only mode to the user. A keyring that is unavailable,
+// locked or otherwise fails the lookup yields nullopt too, so a Secret Service
+// outage degrades to USB-only rather than locking the vault out. A legacy,
+// unauthenticated record is returned as nullopt as well, so it is never
+// trusted.
 bool backend_available();
 std::optional<AnchorRecord> load(const store::VaultId& vault_id);
 

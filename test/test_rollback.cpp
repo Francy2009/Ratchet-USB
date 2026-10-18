@@ -129,3 +129,25 @@ TEST("rollback anchor cannot be substituted between vault identities") {
   anchor.vault_id[0] ^= 1;  // tampered after it was signed
   CHECK_THROWS(rollback::validate(anchor, usb, bytes(0x31)));
 }
+
+TEST("only a genuine anchor may be advanced by the recovery path") {
+  store::VaultStore usb = state(7);
+  usb.seed = mac_seed(0x10);
+  const rollback::AnchorRecord good = signed_anchor(usb, bytes(0x31));
+  CHECK(rollback::authentic_for(good, usb));
+
+  // A flipped tag is not ours, so a drive merely being ahead of it must not
+  // let it be laundered into a valid anchor.
+  rollback::AnchorRecord flipped = good;
+  flipped.mac[0] ^= 1;
+  CHECK(!rollback::authentic_for(flipped, usb));
+
+  // A legacy record carries no tag and is never authentic.
+  const rollback::AnchorRecord legacy{usb.vault_id, 7, bytes(0x31)};
+  CHECK(!rollback::authentic_for(legacy, usb));
+
+  // An anchor signed under a different vault seed is foreign.
+  store::VaultStore other = state(7);
+  other.seed = mac_seed(0x20);
+  CHECK(!rollback::authentic_for(good, other));
+}

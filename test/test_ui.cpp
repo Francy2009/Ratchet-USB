@@ -203,16 +203,25 @@ TEST("Ctrl-V asks the driver to paste the clipboard") {
 
 TEST("a received file is announced and opens on request") {
   Model model = unlocked_model({contact("alice", true)});
-  model.show_file("alice", false, false);
+  model.show_file("alice", "jpg", false, false, false);
   CHECK(model.screen() == Screen::File);
   const std::string frame = draw(model);
   CHECK(frame.find("alice") != std::string::npos);
-  CHECK(frame.find("[ Open ]") != std::string::npos);
+  CHECK(frame.find(".jpg") != std::string::npos);
+  CHECK(frame.find("[ Open folder ]") != std::string::npos);
   // Enter asks the driver to hand the bytes to the system viewer.
   CHECK(model.handle_key(code(screen::KeyCode::Enter)) == ActionKind::OpenFile);
   CHECK(model.screen() == Screen::File);
   model.handle_key(code(screen::KeyCode::Escape));
   CHECK(model.screen() == Screen::Home);
+}
+
+TEST("a received file with a runnable type is flagged on screen") {
+  Model model = unlocked_model({contact("alice", true)});
+  model.show_file("alice", "sh", true, false, false);
+  const std::string frame = draw(model);
+  CHECK(frame.find(".sh") != std::string::npos);
+  CHECK(frame.find("run code") != std::string::npos);
 }
 
 TEST("a block copied from the screen survives the paste parser") {
@@ -235,7 +244,7 @@ TEST("a block copied from the screen survives the paste parser") {
 
 TEST("a received file from an unverified contact still warns") {
   Model model = unlocked_model({contact("alice", false)});
-  model.show_file("alice", true, true);
+  model.show_file("alice", "pdf", false, true, true);
   const std::string frame = draw(model);
   CHECK(frame.find("NOT verified") != std::string::npos);
   CHECK(frame.find("opened a new session") != std::string::npos);

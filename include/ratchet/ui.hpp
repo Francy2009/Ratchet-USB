@@ -102,8 +102,10 @@ class Model {
                     bool unverified);
   // Called when the decrypted plaintext is a file payload. Transitions to
   // Screen::File. The Driver keeps the FilePayload; the Model only knows
-  // whether a file arrived and who sent it.
-  void show_file(const std::string& from, bool session_opened, bool unverified);
+  // whether a file arrived, who sent it, its (already sanitised) extension and
+  // whether that extension is one the desktop might execute.
+  void show_file(const std::string& from, std::string ext, bool dangerous,
+                 bool session_opened, bool unverified);
   void set_status(std::string text, screen::Style style = screen::Style::Normal);
   void set_status(i18n::Str id, screen::Style style = screen::Style::Normal);
 
@@ -196,6 +198,11 @@ class Model {
   std::string pager_heading_;
   std::size_t pager_top_ = 0;
   std::vector<std::string> pager_notes_;  // warnings shown above a message
+
+  // The extension of the file on the File screen, and whether it is a type the
+  // desktop might execute. Shown to the user before anything is opened.
+  std::string file_ext_;
+  bool file_dangerous_ = false;
 };
 
 // Runs the interface until the user leaves it. Returns the process exit code.
