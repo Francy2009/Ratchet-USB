@@ -74,6 +74,12 @@ class TempDir {
   fs::path path_;
 };
 
+// The fork helpers below deliberately ignore the odd short write or read: the
+// pipes are local and the payloads tiny. Passing the result through this keeps
+// glibc's warn_unused_result (enabled by _FORTIFY_SOURCE) from becoming a
+// -Werror failure, which a bare (void) cast does not suppress there.
+void ignore_io_result(ssize_t) noexcept {}
+
 // Runs terminal::read_word_phrase in a child process with `input` on its stdin,
 // and returns what it read. `refused` is set when the reader threw (empty
 // input). A child is used because the reader consumes the process's stdin, and
@@ -103,11 +109,11 @@ std::string read_word_phrase_from(const std::string& input, bool* refused) {
     try {
       SecureString phrase = terminal::read_word_phrase("");
       const char status = 'O';
-      (void)write(out_pipe[1], &status, 1);
-      (void)write(out_pipe[1], phrase.data(), phrase.size());
+      ignore_io_result(write(out_pipe[1], &status, 1));
+      ignore_io_result(write(out_pipe[1], phrase.data(), phrase.size()));
     } catch (const Error&) {
       const char status = 'E';
-      (void)write(out_pipe[1], &status, 1);
+      ignore_io_result(write(out_pipe[1], &status, 1));
     }
     close(out_pipe[1]);
     _exit(0);
@@ -168,7 +174,7 @@ bool confirm_from(const std::string& input) {
       close(devnull);
     }
     const char result = terminal::confirm_enter_or_escape("") ? '1' : '0';
-    (void)write(out_pipe[1], &result, 1);
+    ignore_io_result(write(out_pipe[1], &result, 1));
     close(out_pipe[1]);
     _exit(0);
   }
@@ -185,7 +191,7 @@ bool confirm_from(const std::string& input) {
   close(in_pipe[1]);
 
   char result = '0';
-  (void)read(out_pipe[0], &result, 1);
+  ignore_io_result(read(out_pipe[0], &result, 1));
   close(out_pipe[0]);
   int status = 0;
   (void)waitpid(pid, &status, 0);
