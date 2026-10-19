@@ -41,7 +41,14 @@ What the design does aim at:
   drive. An explicitly enrolled host keyring record stores only vault id,
   generation and ciphertext digest.
 - The vault uses Argon2id and ChaCha20-Poly1305. A stolen copy permits an
-  offline passphrase-guessing attack, so passphrase strength matters.
+  offline passphrase-guessing attack, so passphrase strength matters. The vault
+  passphrase is a random word phrase the program generates (six words by
+  default, 66 bits of entropy, and `--passphrase-words` allows up to twelve);
+  it is shown once, entered one word per line, and kept out of argv and the
+  shell history. It is not the 12-word recovery phrase. The vault's
+  authenticated version byte records whether the passphrase is such a word
+  phrase (v4) or a legacy one-line password (v3), so the right prompt is shown
+  without guessing; the byte cannot be changed without breaking decryption.
 
 ## The terminal interface
 
@@ -104,9 +111,15 @@ session. Against the threat model this changes little — a compromised host is
 already out of scope, and C++ secret buffers are locked against swap — but
 the window is wider, so it is narrowed deliberately:
 
-The integrated Rust SPQR code temporarily holds its working state in ordinary
-heap allocations. Those allocations are not guaranteed to be locked or wiped
-on release. This is a remaining memory-hardening limitation of this build.
+The integrated Rust SPQR bridge reduces the number and lifetime of secret
+copies that cross the language boundary: inputs are copied once into a
+zeroizing buffer, outputs are copied into an exact-size allocation and the
+source is wiped, and those output buffers are best-effort locked into RAM with
+mlock and zeroized on release. mlock can fail (RLIMIT_MEMLOCK, containers,
+missing capabilities) and the failure is non-fatal. The vendored SPQR crate
+still works in ordinary heap allocations while it runs, and this bridge does not
+claim that no copy of a secret ever escapes. This remains a memory-hardening
+limitation of this build.
 
 - The vault closes on its own after three minutes with no key pressed
   (`--idle-lock <seconds>`, `0` to switch it off), and immediately if the
@@ -142,8 +155,9 @@ to defend against it:
 - **Traffic analysis.** The transport sees a base64 block at a certain time,
   addressed to somebody. While payload lengths are masked into discrete buckets
   via ISO/IEC 7816-4 padding, transmission timing and metadata are not hidden.
-- **A forgotten passphrase.** There is no recovery path, by design. The BIP-39
-  phrase restores the identity, not the vault's contacts or history.
+- **A forgotten passphrase.** There is no recovery path, by design. The
+  generated vault passphrase cannot be reprinted or reset, and the 12-word
+  BIP-39 phrase restores the identity, not the vault's contacts or history.
 - **Physical coercion.** There is no duress passphrase and no deniable volume.
 - **Multiple devices sharing one identity**, group chats, and a key directory.
   These are not implemented in this version.

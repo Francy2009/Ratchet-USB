@@ -10,8 +10,10 @@ block and the time of the exchange, but not the message text.
 
 Your identity, contacts, and sessions live in an encrypted vault on a USB drive
 or in a directory you choose. The drive itself is not a cryptographic key. The
-vault file is protected by its passphrase. Someone who copies the file can try
-to guess that passphrase without having the drive.
+vault file is protected by its passphrase, a random word phrase the program
+generates and shows once when the vault is created. Someone who copies the file
+can try to guess that passphrase without having the drive, so keep the words
+safe and separate from the drive.
 
 This is still a development version (`0.5.0-dev`). The post-quantum migration is
 implemented, but it has not had an independent security review. See the
@@ -37,11 +39,19 @@ ratchet-usb send alice
 ratchet-usb recv
 ```
 
-After `init`, the program shows a 12-word recovery phrase once. Keep it separate
-from the drive. The phrase can reconstruct your identity, but not your contacts,
-prekeys, or conversations. `add` imports a contact card. Before running `trust`,
-compare Alice's fingerprint by phone, in person, or through another independent
-channel. The program requires verification before sending or receiving messages.
+After `init`, the program shows two different things, once each. The first is a
+12-word recovery phrase; keep it separate from the drive. The phrase can
+reconstruct your identity, but not your contacts, prekeys, or conversations.
+The second is the vault passphrase, a random six-word phrase (66 bits of
+entropy) that keys Argon2id. Write it down and type it back one word per line
+when the vault asks; it is not the recovery phrase and cannot restore anything.
+`passphrase` generates a new one and re-encrypts the same vault, keeping the
+identity, contacts and sessions; the old passphrase stops working immediately.
+A vault written by an earlier version is marked as password-protected and keeps
+its original one-line prompt until you run `passphrase`, which moves it to the
+word format. `add` imports a contact card. Before running `trust`, compare
+Alice's fingerprint by phone, in person, or through another independent channel.
+The program requires verification before sending or receiving messages.
 
 With no text argument, `send` asks for a message or reads standard input. This
 keeps the message out of your shell history. `recv` accepts a pasted encrypted
@@ -122,10 +132,11 @@ You must verify a contact's fingerprint. A signed card proves that its fields
 belong to one identity; it does not prove that the identity belongs to the
 person you intend to reach. A compromised computer can read passphrases and
 messages while the program is open. The transport channel can observe timing
-and the parties communicating. Rust's internal SPQR working state is not
-always locked against swap, and immediate erasure of every copy is not
-guaranteed. Older copies of the vault may also remain on the physical storage
-of a USB drive after a save.
+and the parties communicating. The Rust SPQR bridge wipes and best-effort locks
+the secret buffers it hands back to C++, but the vendored crate still works in
+ordinary heap allocations while it runs, so immediate erasure of every copy is
+not guaranteed. Older copies of the vault may also remain on the physical
+storage of a USB drive after a save.
 
 Local tests cover complete conversations, out-of-order messages, replays,
 altered data, and compatibility with the earlier suite. An independent

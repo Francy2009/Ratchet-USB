@@ -10,9 +10,11 @@ vede il blocco e l'ora dello scambio, ma non il testo del messaggio.
 
 Identità, contatti e sessioni sono conservati in un vault cifrato su una chiavetta
 USB o in una cartella scelta dall'utente. La chiavetta non è una chiave
-crittografica: la protezione del file dipende dalla passphrase del vault. Se
-qualcuno copia il file, può tentare di indovinare la passphrase senza avere la
-chiavetta.
+crittografica: la protezione del file dipende dalla passphrase del vault, una
+frase di parole casuali che il programma genera e mostra una sola volta alla
+creazione. Se qualcuno copia il file, può tentare di indovinare la passphrase
+senza avere la chiavetta, quindi conserva le parole al sicuro e separatamente
+dalla chiavetta.
 
 Il progetto è ancora in sviluppo (`0.5.0-dev`). La migrazione post quantum è
 implementata in questa versione, ma non è stata sottoposta a una revisione
@@ -40,13 +42,20 @@ ratchet-usb send alice
 ratchet-usb recv
 ```
 
-Dopo `init`, il programma mostra una frase di recupero di 12 parole una sola
-volta. Conservala separatamente dalla chiavetta. La frase permette di
-ricostruire l'identità, ma non ripristina contatti, prekey o conversazioni.
-`add` importa la carta ricevuta. Prima di usare `trust`, confronta l'impronta
-con Alice al telefono, di persona o tramite un altro canale affidabile. Il
-programma richiede che il contatto sia verificato prima di inviare o ricevere
-messaggi.
+Dopo `init`, il programma mostra due cose diverse, una volta ciascuna. La prima
+è una frase di recupero di 12 parole; conservala separatamente dalla chiavetta.
+La frase permette di ricostruire l'identità, ma non ripristina contatti, prekey
+o conversazioni. La seconda è la passphrase del vault, una frase casuale di sei
+parole (66 bit di entropia) con cui si deriva la chiave Argon2id. Scrivila e
+riscrivila una parola per riga quando il vault la chiede; non è la frase di
+recupero e non ripristina nulla. `passphrase` ne genera una nuova e ricifra lo
+stesso vault, conservando identità, contatti e sessioni; la vecchia passphrase
+smette subito di funzionare. Un vault scritto da una versione precedente è
+marcato come protetto da password e mantiene il suo prompt a una riga finché non
+esegui `passphrase`, che lo porta al formato a parole. `add` importa la carta
+ricevuta. Prima di usare `trust`, confronta l'impronta con Alice al telefono,
+di persona o tramite un altro canale affidabile. Il programma richiede che il
+contatto sia verificato prima di inviare o ricevere messaggi.
 
 `send` senza testo lo chiede in modo interattivo o lo legge da standard input.
 Questo evita di lasciare il messaggio nella cronologia della shell. `recv`
@@ -136,10 +145,12 @@ Verificare l'impronta del contatto è indispensabile: una carta firmata prova
 che le sue parti appartengono alla stessa identità, non che quell'identità
 appartenga alla persona che intendi contattare. Un computer compromesso può
 leggere passphrase e messaggi mentre il programma è aperto. Il canale di
-trasporto vede quando e con chi comunichi. La memoria interna di SPQR in Rust
-non è sempre bloccata contro lo swap e non è garantito che ogni sua copia venga
-cancellata subito dopo l'uso. Anche le vecchie copie del vault possono restare
-sulla memoria fisica della chiavetta dopo un salvataggio.
+trasporto vede quando e con chi comunichi. Il ponte Rust verso SPQR azzera e
+blocca quando possibile i buffer segreti che restituisce al C++, ma la libreria
+inclusa continua a lavorare in allocazioni normali mentre gira, quindi non è
+garantito che ogni copia venga cancellata subito dopo l'uso. Anche le vecchie
+copie del vault possono restare sulla memoria fisica della chiavetta dopo un
+salvataggio.
 
 I test locali coprono scambi completi, messaggi fuori ordine, replay, dati
 alterati e compatibilità con la suite precedente. Restano necessari una
