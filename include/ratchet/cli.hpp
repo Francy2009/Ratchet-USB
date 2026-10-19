@@ -9,6 +9,7 @@
 #include <string_view>
 #include <vector>
 
+#include "ratchet/passphrase.hpp"
 #include "ratchet/vault.hpp"
 
 // Command-line parsing, kept out of main.cpp so it can be tested directly:
@@ -34,6 +35,9 @@ struct Options {
   bool fingerprint_only = false;
   bool from_mnemonic = false;
   bool commit = false;
+  // Words in the generated vault passphrase (init and passphrase). Six by
+  // default; see ratchet/passphrase.hpp for the entropy this buys.
+  std::size_t passphrase_words = passphrase::kDefaultWords;
   std::string name;
   std::string to;
   std::string card_file;

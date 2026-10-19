@@ -136,11 +136,12 @@ VaultHeader parse_header(const uint8_t* data, std::size_t len) {
   }
 
   header.version = data[off++];
-  if (header.version != kVersion && header.version != kLegacyVersion) {
+  if (header.version != kVersion && header.version != kWordVersion &&
+      header.version != kLegacyVersion) {
     throw Error("unsupported vault version " + std::to_string(header.version) +
                 " (this build understands versions " +
-                std::to_string(kLegacyVersion) + " and " +
-                std::to_string(kVersion) + ")");
+                std::to_string(kLegacyVersion) + ", " + std::to_string(kVersion) +
+                " and " + std::to_string(kWordVersion) + ")");
   }
 
   std::memcpy(header.argon2_salt, data + off, sizeof header.argon2_salt);
@@ -162,16 +163,20 @@ VaultHeader parse_header(const uint8_t* data, std::size_t len) {
 }
 
 std::vector<uint8_t> seal(const SecureBuffer& plaintext,
-                          const SecureString& passphrase, const Params& params) {
+                          const SecureString& passphrase, const Params& params,
+                          uint8_t version) {
   init_sodium();
   check_params(params.time_cost, params.mem_cost_kb);
   if (passphrase.empty()) {
     throw Error("passphrase must not be empty");
   }
+  if (version != kVersion && version != kWordVersion) {
+    throw Error("internal: seal called with an unsupported vault version");
+  }
 
   VaultHeader header{};
   std::memcpy(header.magic, kMagic.data(), kMagic.size());
-  header.version = kVersion;
+  header.version = version;
   randombytes_buf(header.argon2_salt, sizeof header.argon2_salt);
   header.argon2_time_cost = params.time_cost;
   header.argon2_mem_cost_kb = params.mem_cost_kb;

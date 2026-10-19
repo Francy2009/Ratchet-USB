@@ -570,6 +570,18 @@ TEST("the menu offers to verify only a contact that is not verified") {
   CHECK(!has_verify(verified));
 }
 
+TEST("the home menu offers to change the passphrase and its key agrees") {
+  Model model = unlocked_model({contact("alice")});
+  CHECK(model.handle_key(ch("p")) == ActionKind::ChangePassphrase);
+  bool has_passphrase = false;
+  for (const ui::MenuEntry& item : model.menu()) {
+    if (item.label == i18n::Str::MenuPassphrase) {
+      has_passphrase = true;
+    }
+  }
+  CHECK(has_passphrase);
+}
+
 TEST("a menu cursor left past the end of a shrinking menu still works") {
   // Verifying a contact removes an entry from under the cursor.
   Model model = unlocked_model({contact("alice", false)});

@@ -50,6 +50,7 @@ enum class ActionKind : uint8_t {
   ShowCard,
   ImportCard,  // alias() and text()
   Trust,       // selected_contact()
+  ChangePassphrase,  // generate and apply a new vault passphrase
   Send,        // selected_contact() and text()
   Receive,     // text()
   SendFile,    // selected_contact() and text() as file path

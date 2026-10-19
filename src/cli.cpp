@@ -24,9 +24,10 @@ const std::vector<CommandSpec>& specs() {
   static const std::vector<CommandSpec> table = {
       {"init",
        {"--usb-path", "--force", "--otpk-count", "--argon2-time",
-        "--argon2-mem-kb", "--from-mnemonic"},
+        "--argon2-mem-kb", "--from-mnemonic", "--passphrase-words"},
        0},
       {"unlock", {"--usb-path"}, 0},
+      {"passphrase", {"--usb-path", "--passphrase-words"}, 0},
       {"anchor", {"--usb-path"}, 0},
       {"migrate", {"--usb-path", "--commit"}, 0},
       {"card",
@@ -99,6 +100,8 @@ void print_usage(std::ostream& os) {
      << "  " << kProgram
      << " init     --usb-path <dir> [--from-mnemonic] [options]\n"
      << "  " << kProgram << " unlock   --usb-path <dir>\n"
+     << "  " << kProgram
+     << " passphrase --usb-path <dir> [--passphrase-words <n>]\n"
      << "  " << kProgram << " anchor   --usb-path <dir>\n"
      << "  " << kProgram << " migrate  --usb-path <dir> [--commit]\n"
      << "  " << kProgram
@@ -118,12 +121,17 @@ void print_usage(std::ostream& os) {
      << "Commands:\n"
      << "  init      Generate a 128-bit seed, show its 12-word BIP-39 backup,\n"
      << "            and create the vault (identity, a signed prekey, one-\n"
-     << "            time prekeys) at <dir>/vault.bin. With --from-mnemonic,\n"
-     << "            rebuild the identity from an existing 12-word backup\n"
-     << "            instead of generating a new one (no contacts or chat\n"
-     << "            history come back with it; those only ever lived in\n"
-     << "            the old vault.bin).\n"
+     << "            time prekeys) at <dir>/vault.bin. A random word passphrase\n"
+     << "            is generated and shown once; write it down and enter it one\n"
+     << "            word per line to unlock. With --from-mnemonic, rebuild the\n"
+     << "            identity from an existing 12-word backup instead of\n"
+     << "            generating a new one (no contacts or chat history come back\n"
+     << "            with it; those only ever lived in the old vault.bin).\n"
      << "  unlock    Decrypt the vault and print the identity fingerprint.\n"
+     << "  passphrase  Generate a new word passphrase and re-encrypt the vault\n"
+     << "            with it, keeping the identity, contacts and sessions. The\n"
+     << "            current passphrase is asked for first; the new one is shown\n"
+     << "            once and cannot be recovered later.\n"
      << "  anchor    Explicitly enroll this authenticated vault state in the\n"
      << "            host Secret Service for rollback checks.\n"
      << "  migrate   Prepare and verify a v3 vault beside a legacy vault. Run\n"
@@ -166,6 +174,12 @@ void print_usage(std::ostream& os) {
      << vault::kDefaultMemCostKb << ").\n"
      << "  --from-mnemonic      Prompt for an existing 12-word backup instead\n"
      << "                       of generating a new one (init only).\n"
+     << "  --passphrase-words <n>  Words in the generated vault passphrase,\n"
+     << "                       " << passphrase::kMinWords << " to "
+     << passphrase::kMaxWords << " (default " << passphrase::kDefaultWords
+     << "; init and\n"
+     << "                       passphrase only). More words means more entropy\n"
+     << "                       to write down and type.\n"
      << "  --fingerprint        Print only the identity fingerprint (card only).\n"
      << "  --card <file>        Read a contact card from a file (add only).\n"
      << "  --file <file>        Encrypt a file instead of text (send only).\n"
@@ -264,6 +278,16 @@ Options parse_args(const std::vector<std::string_view>& args) {
     } else if (arg == "--from-mnemonic") {
       opts.from_mnemonic = true;
       note("--from-mnemonic");
+    } else if (arg == "--passphrase-words") {
+      const uint32_t words =
+          parse_u32(next("--passphrase-words"), "--passphrase-words");
+      if (words < passphrase::kMinWords || words > passphrase::kMaxWords) {
+        throw Error("--passphrase-words is between " +
+                    std::to_string(passphrase::kMinWords) + " and " +
+                    std::to_string(passphrase::kMaxWords));
+      }
+      opts.passphrase_words = words;
+      note("--passphrase-words");
     } else if (arg == "--commit") {
       opts.commit = true;
       note("--commit");

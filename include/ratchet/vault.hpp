@@ -49,14 +49,33 @@ struct VaultHeader {
 inline constexpr std::array<uint8_t, 4> kMagic = {'R', 'C', 'H', 'T'};
 // v3 adds the authenticated generation chain and host rollback anchor. v2 is
 // accepted only by the explicit migration path.
+//
+// v3 and v4 are the same container. The version byte is the only difference,
+// and it records how the vault passphrase was entered: v3 is a passphrase the
+// user typed on a single line (the classic password), v4 is a generated word
+// phrase entered one word per line. Because the header is authenticated as
+// additional data, the byte cannot be flipped without breaking decryption, so
+// the program can choose the right prompt instead of guessing. The marker is
+// what lets an old password vault keep its one-line prompt.
 inline constexpr uint8_t kLegacyVersion = 2;
 inline constexpr uint8_t kVersion = 3;
+inline constexpr uint8_t kWordVersion = 4;
+
+// True for a vault whose passphrase is a generated word phrase (v4), and so is
+// entered one word per line rather than on a single line.
+constexpr bool uses_word_passphrase(uint8_t version) noexcept {
+  return version == kWordVersion;
+}
 
 inline constexpr std::size_t kHeaderBytes = 4 + 1 + 16 + 4 + 4 + 12;  // 41
 inline constexpr std::size_t kTagBytes = crypto_aead_chacha20poly1305_ietf_ABYTES;
 
 inline constexpr const char* kVaultFilename = "vault.bin";
 inline constexpr const char* kPreparedVaultFilename = "vault.bin.v3-prepared";
+// Where a passphrase change writes the verified new container before promoting
+// it over vault.bin. A separate name from the v3 migration's prepared file so
+// the two mechanisms can never mistake one for the other.
+inline constexpr const char* kRekeyPreparedFilename = "vault.bin.rekey-prepared";
 inline constexpr std::size_t kMaxVaultBytes = std::size_t{64} * 1024u * 1024u;
 
 // Argon2id cost bounds. The upper bounds exist because the parameters are read
@@ -87,8 +106,13 @@ VaultHeader parse_header(const uint8_t* data, std::size_t len);
 // `passphrase` and returns the complete file image. A fresh Argon2id salt and
 // AEAD nonce are drawn for every call, so sealing the same plaintext twice
 // never produces the same bytes.
+//
+// `version` must be kVersion (a passphrase typed on one line) or kWordVersion
+// (a generated word phrase); the default keeps existing callers on the classic
+// format. It is stamped into the authenticated header.
 std::vector<uint8_t> seal(const SecureBuffer& plaintext,
-                          const SecureString& passphrase, const Params& params);
+                          const SecureString& passphrase, const Params& params,
+                          uint8_t version = kVersion);
 
 // Reverse of seal(). Throws Error if the passphrase is wrong or the file has
 // been altered in any way; the two cases are deliberately indistinguishable.

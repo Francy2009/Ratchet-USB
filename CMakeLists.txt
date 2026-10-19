@@ -123,6 +123,7 @@ add_library(ratchet_core
             src/secure.cpp
             src/bip39.cpp
             src/bip39_wordlist.cpp
+            src/passphrase.cpp
             src/kdf.cpp
             src/x25519.cpp
             src/pq.cpp
@@ -144,6 +145,8 @@ add_library(ratchet_core
             src/clipboard.cpp
             src/cli.cpp
             src/app.cpp
+            src/command_io.cpp
+            src/commands.cpp
             src/screen.cpp
             src/i18n.cpp
             src/ui_model.cpp

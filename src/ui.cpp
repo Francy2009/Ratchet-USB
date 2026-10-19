@@ -20,6 +20,7 @@
 #include "ratchet/identity.hpp"
 #include "ratchet/media.hpp"
 #include "ratchet/file.hpp"
+#include "ratchet/passphrase.hpp"
 #include "ratchet/screen.hpp"
 #include "ratchet/session.hpp"
 #include "ratchet/terminal.hpp"
@@ -127,6 +128,7 @@ class Driver {
   void show_card();
   void import_card();
   void trust_selected();
+  void change_passphrase();
   void send_message();
   void receive_message();
   void send_file();
@@ -280,7 +282,15 @@ void Driver::unlock() {
     {
       Modal modal(raw_);
       std::cout << "\n  " << drive_.string() << "\n\n";
-      passphrase = terminal::read_passphrase(std::string(t(Str::PassphrasePrompt)));
+      // The vault says how its passphrase was entered: a word phrase one word
+      // per line, or the classic single-line password.
+      if (vault::uses_word_passphrase(file.header.version)) {
+        passphrase =
+            terminal::read_word_phrase(std::string(t(Str::PassphraseWordsPrompt)));
+      } else {
+        passphrase =
+            terminal::read_passphrase(std::string(t(Str::PassphrasePrompt)));
+      }
       std::cout << "\n  " << t(Str::DerivingKey) << "\n";
       std::cout.flush();
       vault_ = app::open_vault(std::move(file), std::move(passphrase));
@@ -360,8 +370,8 @@ void Driver::create_identity(bool from_mnemonic) {
       // Written straight to the stream, never into a line of the frame: a
       // frame line is an ordinary std::string on unlocked pages, and putting
       // the recovery words there would be handing them to the swap file.
-      app::print_mnemonic(mnemonic, std::cout, t(Str::RecoveryHeading),
-                          t(Str::RecoveryNote));
+      app::print_word_grid(mnemonic, std::cout, t(Str::RecoveryHeading),
+                           t(Str::RecoveryNote));
       mnemonic.clear();
       terminal::wait_for_enter(std::string(t(Str::WroteDownWords)));
       terminal::clear_screen();
@@ -381,8 +391,15 @@ void Driver::create_identity(bool from_mnemonic) {
     app::replenish_pq_prekeys(store, cli::kDefaultOtpkCount);
     identity_sk.wipe();
 
-    SecureString passphrase = terminal::read_new_passphrase(
-        std::string(t(Str::PassphraseNew)), std::string(t(Str::PassphraseAgain)));
+    // The vault passphrase is generated here too, shown once and written down.
+    // It is not the recovery phrase above: it unlocks the vault and nothing
+    // else. The count is the library default; the command line can tune it.
+    SecureString passphrase;
+    passphrase::generate(passphrase, passphrase::kDefaultWords);
+    app::print_word_grid(passphrase, std::cout, t(Str::PassphraseHeading),
+                         t(Str::PassphraseNote));
+    terminal::wait_for_enter(std::string(t(Str::WroteDownWords)));
+    terminal::clear_screen();
 
     // The Argon2 cost is the default here. Tuning it is a command-line thing
     // (`init --argon2-time`), and a vault made here opens fine with either,
@@ -392,7 +409,10 @@ void Driver::create_identity(bool from_mnemonic) {
       std::cout.flush();
     vault::FileLock creation_lock(vault_path_);
     const SecureBuffer plaintext = store::serialize(store);
-    const std::vector<uint8_t> file = vault::seal(plaintext, passphrase, params);
+    // v4: sealed with the generated word phrase, so unlock asks for it one word
+    // per line.
+    const std::vector<uint8_t> file =
+        vault::seal(plaintext, passphrase, params, vault::kWordVersion);
     vault::write_file(vault_path_, file, /*overwrite=*/false);
 
     app::OpenedVault opened;
@@ -400,6 +420,7 @@ void Driver::create_identity(bool from_mnemonic) {
     opened.store = std::move(store);
     opened.params = params;
     opened.passphrase = std::move(passphrase);
+    opened.vault_version = vault::kWordVersion;
     vault_ = std::move(opened);
   } catch (const std::exception& e) {
     vault_.reset();
@@ -504,6 +525,41 @@ void Driver::trust_selected() {
     model_.show_contacts(contact_rows());
     model_.set_status(alias + " " + std::string(t(Str::MarkedVerified)),
                       screen::Style::Good);
+  } catch (const std::exception& e) {
+    report(e);
+  }
+}
+
+void Driver::change_passphrase() {
+  // The new passphrase is generated and shown once, exactly as at creation. The
+  // vault is re-encrypted in place: identity, contacts and sessions stay put,
+  // and the old passphrase stops working. The vault stays open, so the
+  // passphrase it holds is replaced for any later save.
+  SecureString next;
+  try {
+    passphrase::generate(next, passphrase::kDefaultWords);
+    {
+      Modal modal(raw_);
+      std::cout << "\n  " << drive_.string() << "\n";
+      app::print_word_grid(next, std::cout, t(Str::PassphraseHeading),
+                           t(Str::PassphraseNote));
+      std::cout.flush();
+      // Esc backs out here: the new phrase has been shown but the vault has not
+      // been touched, so a wrong keypress costs nothing.
+      if (!terminal::confirm_enter_or_escape(
+              std::string(t(Str::PassphraseConfirm)))) {
+        next.clear();
+        model_.set_status(std::string(t(Str::PassphraseCancelled)),
+                          screen::Style::Dim);
+        return;
+      }
+      std::cout << "\n  " << t(Str::DerivingKey) << "\n";
+      std::cout.flush();
+      app::rekey_vault(vault_path_, vault().store, vault().params, next);
+    }
+    vault().passphrase = std::move(next);
+    vault().vault_version = vault::kWordVersion;
+    model_.set_status(std::string(t(Str::PassphraseChanged)), screen::Style::Good);
   } catch (const std::exception& e) {
     report(e);
   }
@@ -820,6 +876,9 @@ void Driver::loop() {
           break;
         case ActionKind::Trust:
           trust_selected();
+          break;
+        case ActionKind::ChangePassphrase:
+          change_passphrase();
           break;
         case ActionKind::Send:
           send_message();

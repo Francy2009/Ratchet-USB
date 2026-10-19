@@ -133,6 +133,7 @@ namespace ratchet::i18n {
   X(MenuRead, "Read message", "Leggi")                          \
   X(MenuWrite, "Write", "Scrivi")                                              \
   X(MenuVerify, "Mark as verified", "Segna verificato")                        \
+  X(MenuPassphrase, "Change passphrase", "Cambia passphrase")                  \
   X(MenuLock, "Lock", "Blocca")                                                \
   X(MenuQuit, "Quit", "Esci")                                                  \
   X(MenuUseDrive, "Use this drive", "Usa questa unita'")                        \
@@ -143,9 +144,29 @@ namespace ratchet::i18n {
   X(MenuCopy, "Copy block", "Copia blocco")                                    \
   /* the prompts that run outside the frame */                                 \
   X(PassphrasePrompt, "Vault passphrase: ", "Passphrase del vault: ")          \
-  X(PassphraseNew, "Choose a passphrase for the vault: ",                      \
-    "Scegli una passphrase per il vault: ")                                     \
-  X(PassphraseAgain, "Type it again: ", "Riscrivila: ")                        \
+  X(PassphraseWordsPrompt,                                                     \
+    "Vault passphrase (one word per line; empty line or Ctrl-D to finish): ",  \
+    "Passphrase del vault (una parola per riga; riga vuota o Ctrl-D per finire): ") \
+  X(PassphraseConfirm,                                                         \
+    "Press ENTER to confirm the change, Esc to cancel: ",                      \
+    "Premi INVIO per confermare il cambio, Esc per annullare: ")                \
+  X(PassphraseCancelled,                                                       \
+    "Passphrase change cancelled. The vault is unchanged.",                    \
+    "Cambio di passphrase annullato. Il vault e' invariato.")                   \
+  X(PassphraseHeading, "Vault passphrase (write it down, it is shown once):",  \
+    "Passphrase del vault (scrivila, viene mostrata una volta sola):")          \
+  X(PassphraseNote,                                                            \
+    "These words unlock the vault. Type them back one per line, in order,\n"   \
+    "when the vault asks for its passphrase. They are not the recovery\n"      \
+    "phrase: they cannot restore contacts or sessions, and nobody -- not even\n"\
+    "this program -- can show them again.",                                     \
+    "Queste parole aprono il vault. Riscrivile una per riga, in ordine,\n"     \
+    "quando il vault chiede la passphrase. Non sono la frase di recupero:\n"   \
+    "non riportano contatti o sessioni, e nessuno -- nemmeno questo\n"         \
+    "programma -- puo' mostrarle di nuovo.")                                    \
+  X(PassphraseChanged,                                                         \
+    "Vault passphrase changed. The old passphrase no longer opens this vault.",\
+    "Passphrase del vault cambiata. La vecchia non apre piu' questo vault.")   \
   X(RecoveryWordsPrompt, "The 12 recovery words, separated by spaces: ",       \
     "Le 12 parole di recupero, separate da spazi: ")                            \
   X(WroteDownWords, "Press ENTER once you have written them down... ",         \

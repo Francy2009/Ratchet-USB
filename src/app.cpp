@@ -94,8 +94,13 @@ void save_vault(const fs::path& path, store::VaultStore& store,
   std::error_code ec;
   std::optional<rollback::AnchorRecord> anchor;
   rollback::Digest previous_digest{};
+  // A save keeps the vault's passphrase kind: a v3 vault stays v3 (one-line
+  // password), a v4 vault stays v4 (word phrase). Only a brand-new file -- the
+  // migration's prepared vault -- starts on the classic version.
+  uint8_t version = vault::kVersion;
   if (fs::exists(path, ec)) {
     const std::vector<uint8_t> previous = vault::read_file(path);
+    version = vault::parse_header(previous.data(), previous.size()).version;
     previous_digest = rollback::digest(previous.data(), previous.size());
     anchor = rollback::load(store.vault_id);
     if (anchor) {
@@ -125,13 +130,72 @@ void save_vault(const fs::path& path, store::VaultStore& store,
   }
   ++store.generation;
   const SecureBuffer plaintext = store::serialize(store);
-  const std::vector<uint8_t> file = vault::seal(plaintext, passphrase, params);
+  const std::vector<uint8_t> file =
+      vault::seal(plaintext, passphrase, params, version);
   vault::write_file(path, file, /*overwrite=*/true);
   if (anchor) {
     rollback::store(rollback::AnchorRecord{
                         store.vault_id, store.generation,
                         rollback::digest(file.data(), file.size())},
                     store.seed);
+  }
+}
+
+void rekey_vault(const fs::path& path, store::VaultStore& store,
+                 const vault::Params& params, const SecureString& new_passphrase) {
+  init_sodium();
+  const fs::path prepared = path.parent_path() / vault::kRekeyPreparedFilename;
+
+  // The generation advances by one. That is what keeps the change recoverable
+  // if the host anchor below cannot be written: on the next open the anchor is
+  // seen to lag a vault that is genuinely ours and is advanced to the new
+  // digest, instead of the digest mismatch being read as a rollback. It is
+  // incremented before serialising so the written container and the anchor
+  // agree.
+  if (store.generation == UINT64_MAX) {
+    throw Error("vault generation counter exhausted");
+  }
+  ++store.generation;
+
+  const SecureBuffer plaintext = store::serialize(store);
+  // A change of passphrase always installs a generated word phrase, so the new
+  // container is stamped v4 whatever the old one was. This is also how an old
+  // one-line-password vault moves to the word format.
+  const std::vector<uint8_t> file =
+      vault::seal(plaintext, new_passphrase, params, vault::kWordVersion);
+  // Never over the original: write a sibling copy first. write_file is itself
+  // atomic (temp + fsync + rename), so an interrupted write leaves no partial
+  // prepared file, and it overwrites any leftover from an earlier attempt.
+  vault::write_file(prepared, file, /*overwrite=*/true);
+
+  // Verify the exact bytes just written before the original is replaced: they
+  // must decrypt under the new passphrase and parse back to the same vault.
+  const std::vector<uint8_t> written = vault::read_file(prepared);
+  const vault::VaultHeader header =
+      vault::parse_header(written.data(), written.size());
+  if (header.version != vault::kWordVersion) {
+    throw Error("re-encrypted vault is not a word-passphrase vault");
+  }
+  SecureBuffer reopened;
+  vault::unseal(written.data(), written.size(), new_passphrase, reopened);
+  const store::VaultStore verified = store::parse(reopened.data(), reopened.size());
+  if (verified.vault_id != store.vault_id ||
+      verified.generation != store.generation ||
+      !verified.seed.equals(store.seed) ||
+      verified.contacts.size() != store.contacts.size() ||
+      verified.sessions.size() != store.sessions.size()) {
+    throw Error("re-encrypted vault failed its identity check");
+  }
+
+  vault::promote_prepared(prepared, path);
+
+  const rollback::Digest digest = rollback::digest(written.data(), written.size());
+  if (rollback::backend_available()) {
+    if (const auto anchor = rollback::load(store.vault_id)) {
+      rollback::store(
+          rollback::AnchorRecord{store.vault_id, store.generation, digest},
+          store.seed);
+    }
   }
 }
 
@@ -252,11 +316,11 @@ std::size_t expire_skipped_keys(store::VaultStore& store) {
   return session::expire_skipped_keys(store);
 }
 
-void print_mnemonic(const SecureString& mnemonic, std::ostream& os,
-                    std::string_view heading, std::string_view note) {
+void print_word_grid(const SecureString& phrase, std::ostream& os,
+                     std::string_view heading, std::string_view note) {
   os << "\n" << heading << "\n\n";
 
-  const std::string_view all(mnemonic.data(), mnemonic.size());
+  const std::string_view all(phrase.data(), phrase.size());
   std::vector<std::string_view> words;
   std::size_t pos = 0;
   while (pos <= all.size()) {
@@ -270,11 +334,12 @@ void print_mnemonic(const SecureString& mnemonic, std::ostream& os,
   }
 
   constexpr std::size_t kCellWidth = 16;
+  constexpr std::size_t kColumns = 4;
   std::size_t index = 1;
-  for (std::size_t row = 0; row < 3; ++row) {
+  for (std::size_t row = 0; row * kColumns < words.size(); ++row) {
     os << "  ";
-    for (std::size_t col = 0; col < 4; ++col) {
-      const std::size_t w = row * 4 + col;
+    for (std::size_t col = 0; col < kColumns; ++col) {
+      const std::size_t w = row * kColumns + col;
       if (w >= words.size()) {
         break;
       }

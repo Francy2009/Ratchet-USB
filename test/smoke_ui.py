@@ -27,7 +27,6 @@ import termios
 import time
 
 BIN = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else "build/ratchet-usb")
-PASS = "smoke-passphrase"
 # Argon2 at its default cost would make this test take minutes for no extra
 # coverage: what is being tested here is the interface, not the KDF.
 CHEAP = ["--argon2-mem-kb", "65536", "--argon2-time", "3"]
@@ -51,6 +50,34 @@ def cli(args, stdin=""):
     if result.returncode != 0:
         raise SystemExit("setup command failed: %s\n%s" % (args, result.stderr))
     return result.stdout
+
+
+def generated_words(init_output):
+    """Pulls the generated vault passphrase out of an `init` run.
+
+    `init` shows the words once, in a numbered grid, between its own heading
+    and the note that follows it. The recovery phrase uses the same grid, so
+    the heading is what tells the two apart.
+    """
+    match = re.search(
+        r"Vault passphrase \(write.*?\n(.*?)These words unlock",
+        init_output, re.S)
+    if not match:
+        raise SystemExit("could not find the generated vault passphrase")
+    return re.findall(r"[0-9]+\.\s+([a-z]+)", match.group(1))
+
+
+def init_vault(drive):
+    """Creates a vault the way a person would, and returns its words."""
+    words = generated_words(cli(["init", "--usb-path", drive] + CHEAP))
+    if len(words) != 6:
+        raise SystemExit("expected a 6-word passphrase, got %r" % (words,))
+    return words
+
+
+def feed(words):
+    """The passphrase as the program now reads it: one word per line."""
+    return "".join(word + "\n" for word in words)
 
 
 class Ui:
@@ -139,8 +166,10 @@ class Ui:
         fail("the interface did not exit when asked to")
         return -1
 
-    def unlock(self, passphrase=PASS):
-        self.send(passphrase + "\n", 3.0)
+    def unlock(self, words):
+        # The passphrase is entered one word per line and ended with Ctrl-D,
+        # exactly as the prompt asks.
+        self.send("".join(word + "\n" for word in words) + "\x04", 3.0)
 
 
 def block_from(text, label):
@@ -167,10 +196,10 @@ def main():
 
     try:
         step("setting up two vaults with the command line")
-        for drive in (alice, bob):
-            cli(["init", "--usb-path", drive] + CHEAP, stdin=PASS + "\n" + PASS + "\n")
-        bob_card = cli(["card", "--usb-path", bob], stdin=PASS + "\n")
-        alice_card = cli(["card", "--usb-path", alice], stdin=PASS + "\n")
+        alice_words = init_vault(alice)
+        bob_words = init_vault(bob)
+        bob_card = cli(["card", "--usb-path", bob], stdin=feed(bob_words))
+        alice_card = cli(["card", "--usb-path", alice], stdin=feed(alice_words))
         # Bob gets Alice through the command line; his side of this test is
         # about reading a message, not about importing a card twice. The card
         # goes in as a file so that stdin is left for the passphrase.
@@ -178,15 +207,21 @@ def main():
         with open(card_file, "w", encoding="utf-8") as handle:
             handle.write(alice_card)
         cli(["add", "--usb-path", bob, "alice", "--card", card_file],
-            stdin=PASS + "\n")
-        cli(["trust", "--usb-path", bob, "alice"], stdin=PASS + "\n")
+            stdin=feed(bob_words))
+        cli(["trust", "--usb-path", bob, "alice"], stdin=feed(bob_words))
 
         # --- Alice does everything through the interface --------------------
         step("opening the interface on Alice's drive")
         ui = Ui(alice)
-        ui.unlock()
+        ui.unlock(alice_words)
         ui.expect("Your fingerprint", "the vault opened")
         ui.expect("no contacts yet", "an empty contact list says so")
+
+        step("changing the passphrase from the interface")
+        ui.send("p")
+        ui.expect("Vault passphrase", "it shows a new passphrase once")
+        ui.send("\n", 3.0)  # acknowledge the write-down; the vault re-encrypts
+        ui.expect("passphrase changed", "the change is reported")
 
         step("adding Bob by pasting his card")
         ui.send("a")
@@ -235,7 +270,7 @@ def main():
         # --- Bob reads it, also through the interface ------------------------
         step("opening the interface on Bob's drive")
         ui = Ui(bob)
-        ui.unlock()
+        ui.unlock(bob_words)
         ui.expect("Your fingerprint", "his vault opened")
 
         step("reading the message")

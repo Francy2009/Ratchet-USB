@@ -27,12 +27,20 @@ ALICE="$WORK/alice"
 BOB="$WORK/bob"
 mkdir -p "$ALICE" "$BOB"
 
-ALICE_PASS="alice-smoke-passphrase"
-BOB_PASS="bob-smoke-passphrase"
-
 # Argon2id is deliberately expensive in real use. The smoke test is checking
 # plumbing, not key stretching, so wind it down to keep CI quick.
 CHEAP=(--argon2-time 3 --argon2-mem-kb 65536)
+
+# `init` generates the vault passphrase now; it is shown once in the output.
+# This pulls the words back out so the rest of the run can unlock with them.
+# The words are joined by single spaces, which is exactly the passphrase the
+# program derived from the words it showed, so feeding them back on one line
+# unlocks the vault just as typing them one per line does.
+extract_phrase() {
+  sed -n '/Vault passphrase (write/,/These words unlock/p' "$1" |
+    grep -oE '[0-9]+\.[[:space:]]+[a-z]+' | sed -E 's/[0-9]+\.[[:space:]]+//' |
+    paste -sd' ' - | sed -E 's/ +$//'
+}
 
 fail() {
   echo "smoke: FAIL: $*" >&2
@@ -46,16 +54,26 @@ step() {
 # ---------------------------------------------------------------------------
 
 step "creating Alice's vault"
-printf '%s\n%s\n' "$ALICE_PASS" "$ALICE_PASS" |
-  "$BIN" init --usb-path "$ALICE" --otpk-count 3 "${CHEAP[@]}" >"$WORK/alice-init.txt" 2>&1 ||
+"$BIN" init --usb-path "$ALICE" --otpk-count 3 "${CHEAP[@]}" </dev/null \
+  >"$WORK/alice-init.txt" 2>&1 ||
   fail "alice init exited non-zero"
 [[ -f "$ALICE/vault.bin" ]] || fail "alice init left no vault.bin"
+ALICE_PASS="$(extract_phrase "$WORK/alice-init.txt")"
+[[ "$(wc -w <<<"$ALICE_PASS")" -eq 6 ]] ||
+  fail "expected a 6-word vault passphrase, got: '$ALICE_PASS'"
 
 step "creating Bob's vault"
-printf '%s\n%s\n' "$BOB_PASS" "$BOB_PASS" |
-  "$BIN" init --usb-path "$BOB" --otpk-count 3 "${CHEAP[@]}" >"$WORK/bob-init.txt" 2>&1 ||
+"$BIN" init --usb-path "$BOB" --otpk-count 3 "${CHEAP[@]}" </dev/null \
+  >"$WORK/bob-init.txt" 2>&1 ||
   fail "bob init exited non-zero"
 [[ -f "$BOB/vault.bin" ]] || fail "bob init left no vault.bin"
+BOB_PASS="$(extract_phrase "$WORK/bob-init.txt")"
+[[ "$(wc -w <<<"$BOB_PASS")" -eq 6 ]] ||
+  fail "expected a 6-word vault passphrase, got: '$BOB_PASS'"
+
+# The two vaults must not have landed on the same passphrase by accident.
+[[ "$ALICE_PASS" != "$BOB_PASS" ]] ||
+  fail "both vaults drew the same passphrase -- the RNG is not random"
 
 # The recovery phrase must be twelve BIP-39 words, and the two vaults must not
 # somehow have landed on the same identity.
@@ -214,6 +232,37 @@ out="$("$BIN" ui </dev/null 2>&1 || true)"
 if "$BIN" ui </dev/null >/dev/null 2>&1; then
   fail "\`ui\` off a terminal should exit non-zero"
 fi
+
+# ---------------------------------------------------------------------------
+# Changing the passphrase: the same vault, a new key, nothing else moved.
+
+step "changing Alice's vault passphrase"
+FP_BEFORE="$(printf '%s\n' "$ALICE_PASS" |
+  "$BIN" card --usb-path "$ALICE" --fingerprint 2>/dev/null)"
+# The passphrase line, the empty line that ends it, then the empty line that
+# confirms the change at the "ENTER to confirm, Esc to cancel" prompt.
+printf '%s\n\n\n' "$ALICE_PASS" |
+  "$BIN" passphrase --usb-path "$ALICE" >"$WORK/alice-rekey.txt" 2>"$WORK/rekey.err" ||
+  fail "passphrase change exited non-zero: $(cat "$WORK/rekey.err")"
+NEW_PASS="$(extract_phrase "$WORK/alice-rekey.txt")"
+[[ "$(wc -w <<<"$NEW_PASS")" -eq 6 ]] ||
+  fail "expected a 6-word new passphrase, got: '$NEW_PASS'"
+[[ "$NEW_PASS" != "$ALICE_PASS" ]] ||
+  fail "the passphrase did not change"
+
+if printf '%s\n' "$ALICE_PASS" |
+     "$BIN" unlock --usb-path "$ALICE" >/dev/null 2>&1; then
+  fail "the old passphrase still opens the vault after the change"
+fi
+
+FP_AFTER="$(printf '%s\n' "$NEW_PASS" |
+  "$BIN" card --usb-path "$ALICE" --fingerprint 2>/dev/null)" ||
+  fail "the new passphrase does not open the vault"
+[[ "$FP_BEFORE" == "$FP_AFTER" ]] ||
+  fail "the identity changed across a passphrase change"
+
+[[ ! -e "$ALICE/vault.bin.rekey-prepared" ]] ||
+  fail "a prepared re-encryption was left behind"
 
 echo
 echo "smoke: all end-to-end checks passed"

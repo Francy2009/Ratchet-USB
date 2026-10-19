@@ -282,6 +282,9 @@ ActionKind Model::key_in_list(const screen::Key& key) {
   if (key.text == "l") {
     return ActionKind::Lock;
   }
+  if (key.text == "p") {
+    return ActionKind::ChangePassphrase;
+  }
   if (key.text == "q") {
     return ActionKind::Quit;
   }
@@ -447,6 +450,7 @@ std::vector<MenuEntry> Model::menu() const {
       items.push_back(ch(Str::MenuAdd, 'a'));
       items.push_back(ch(Str::MenuCard, 'c'));
       items.push_back(ch(Str::MenuRead, 'r'));
+      items.push_back(ch(Str::MenuPassphrase, 'p'));
       items.push_back(ch(Str::MenuLock, 'l'));
       items.push_back(ch(Str::MenuQuit, 'q'));
       return items;

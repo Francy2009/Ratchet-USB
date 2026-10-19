@@ -102,6 +102,31 @@ TEST("cli: numeric options are parsed") {
   CHECK_EQ(opts.params.mem_cost_kb, static_cast<uint32_t>(65536));
 }
 
+// --- the generated passphrase ------------------------------------------------
+
+TEST("cli: passphrase-words is parsed and bounded") {
+  CHECK_EQ(parse({"init", "--passphrase-words", "8"}).passphrase_words,
+           static_cast<std::size_t>(8));
+  CHECK_EQ(parse({"passphrase", "--passphrase-words", "12"}).passphrase_words,
+           static_cast<std::size_t>(12));
+  // Five words is 55 bits, under the floor, so it is refused rather than
+  // quietly accepted.
+  CHECK_THROWS(parse({"init", "--passphrase-words", "5"}));
+  CHECK_THROWS(parse({"init", "--passphrase-words", "0"}));
+  CHECK_THROWS(parse({"init", "--passphrase-words", "13"}));
+  CHECK_THROWS(parse({"init", "--passphrase-words", "eight"}));
+  // Only the two commands that generate a passphrase take it.
+  CHECK_THROWS(parse({"unlock", "--passphrase-words", "8"}));
+}
+
+TEST("cli: passphrase is a command with its own options") {
+  CHECK_EQ(parse({"passphrase"}).command, std::string("passphrase"));
+  CHECK_EQ(parse({"passphrase", "--usb-path", "/x"}).usb_path.string(),
+           std::string("/x"));
+  CHECK_THROWS(parse({"passphrase", "extra"}));
+  CHECK_THROWS(parse({"passphrase", "--force"}));
+}
+
 // --- positional arguments ----------------------------------------------------
 
 TEST("cli: add and trust take the alias positionally") {
@@ -210,5 +235,6 @@ TEST("cli: defaults are what the help text advertises") {
   CHECK(!opts.fingerprint_only);
   CHECK(!opts.rotate_spk);
   CHECK_EQ(opts.replenish_otpk, static_cast<std::size_t>(0));
+  CHECK_EQ(opts.passphrase_words, passphrase::kDefaultWords);
   CHECK(opts.usb_path.empty());
 }

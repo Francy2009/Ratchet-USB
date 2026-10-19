@@ -13,13 +13,30 @@ namespace ratchet::terminal {
 // harness) the line is read as-is, since there is no echo to switch off.
 SecureString read_passphrase(const std::string& prompt);
 
-// Reads a passphrase twice and checks the two match, to catch typos before
-// anything is encrypted with them.
-SecureString read_new_passphrase(const std::string& prompt,
-                                 const std::string& confirm_prompt);
+// Reads a vault passphrase entered one word per line. Input ends at the first
+// empty line or at end of input (Ctrl-D on a terminal); the lines read are
+// joined with single spaces to form the passphrase handed to Argon2id.
+//
+// The empty-line terminator is what keeps a legacy single-line passphrase
+// enterable: type it and press Enter twice. A generated word phrase is typed
+// one word per line and then confirmed with an empty line (or Ctrl-D). This is
+// the shape the generated phrases take, and it accepts a legacy passphrase
+// typed on one line.
+//
+// Echo is off, no std::string ever holds the value, and input with no non-empty
+// line is refused. A line's own spaces are preserved, so a legacy passphrase
+// that contains spaces survives; only line breaks are normalised to a space.
+SecureString read_word_phrase(const std::string& prompt);
 
 // Waits for ENTER. No-op when stdin is not a tty.
 void wait_for_enter(const std::string& prompt);
+
+// Waits for a single key and returns true on ENTER, false on Escape (or end of
+// input). Used where an action is about to change the vault and the user must
+// be able to back out: a mistake there is not undoable, so cancelling has to be
+// as easy as confirming. Echo is off, and the read is in cbreak mode so Escape
+// takes effect without a following newline.
+bool confirm_enter_or_escape(const std::string& prompt);
 
 // Prints prompt and reads one line with normal echo, for values that are not
 // secret (a path, an alias). Returns an empty string on EOF or when stdin is

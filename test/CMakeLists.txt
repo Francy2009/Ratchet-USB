@@ -1,6 +1,7 @@
 add_executable(ratchet_tests
                test_main.cpp
                test_bip39.cpp
+               test_passphrase.cpp
                test_kdf.cpp
                test_vault.cpp
                test_store.cpp

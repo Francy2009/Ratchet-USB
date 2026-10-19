@@ -147,6 +147,22 @@ TEST("parse_header rejects malformed headers") {
   CHECK_THROWS(vault::parse_header(zero_time.data(), zero_time.size()));
 }
 
+TEST("a word-passphrase vault is stamped v4 and parses back") {
+  const SecureBuffer plaintext = make_plaintext("payload");
+  const SecureString pass = make_pass("wild region mind payment bounce hour");
+  const std::vector<uint8_t> file =
+      vault::seal(plaintext, pass, kFastParams, vault::kWordVersion);
+  CHECK_EQ(file[4], vault::kWordVersion);
+  const vault::VaultHeader parsed = vault::parse_header(file.data(), file.size());
+  CHECK_EQ(parsed.version, vault::kWordVersion);
+  CHECK(vault::uses_word_passphrase(parsed.version));
+  CHECK(!vault::uses_word_passphrase(vault::kVersion));
+
+  SecureBuffer opened;
+  vault::unseal(file.data(), file.size(), pass, opened);
+  CHECK(buffers_equal(opened, plaintext));
+}
+
 TEST("seal/unseal round-trip recovers arbitrary-length plaintext") {
   const std::string long_text(5000, 'z');
   const std::string_view cases[] = {"", "x", "a fairly ordinary short message",

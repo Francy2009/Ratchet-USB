@@ -70,6 +70,20 @@ OpenedVault open_vault(VaultFile file, SecureString passphrase,
 void save_vault(const std::filesystem::path& path, store::VaultStore& store,
                 const vault::Params& params, const SecureString& passphrase);
 
+// Re-encrypts the same vault under a new passphrase, keeping the identity, the
+// contacts, the prekeys and the sessions exactly as they are.
+//
+// The operation is recoverable rather than merely atomic: the new container is
+// written to a sibling prepared file first, read back, decrypted with the new
+// passphrase and parsed again, and only then promoted over vault.bin with a
+// single rename. An interruption at any earlier point leaves the original
+// vault untouched and a prepared file that the next attempt overwrites. The
+// host rollback anchor, if one is enrolled, is moved to the new digest so the
+// change is not mistaken for a rollback on the next open.
+void rekey_vault(const std::filesystem::path& path, store::VaultStore& store,
+                 const vault::Params& params,
+                 const SecureString& new_passphrase);
+
 // Enrolls the current authenticated USB state in the host Secret Service.
 // This is deliberately separate from open: host trust is an explicit
 // user action, never a side effect of merely inserting a drive.
@@ -130,20 +144,23 @@ void rotate_signed_prekey(store::VaultStore& store,
 // touches; this is the sweep a vault that is only ever opened still needs.
 std::size_t expire_skipped_keys(store::VaultStore& store);
 
-// Writes the 12 words as a numbered grid, under `heading` and above `note`.
+// Writes a space-separated word phrase as a numbered grid, under `heading` and
+// above `note`. It is used for both the 12-word recovery phrase and the
+// generated vault passphrase, so the grid layout exists once and the two cannot
+// drift apart.
 //
 // The wording is a parameter because the command line and the interface say it
 // in different languages, and the grid itself -- which is the part that must
 // not put a word in an ordinary std::string -- should exist once.
 //
-// The mnemonic arrives in a SecureString and must not leave it. The words are
+// The phrase arrives in a SecureString and must not leave it. The words are
 // referred to as string_views into that buffer and streamed straight out, so
-// no copy of a recovery word is made that the caller cannot wipe -- which is
-// exactly what building padded cells as std::string used to do. It is also why
-// this writes to a stream rather than returning lines: a returned
-// vector<string> would be that copy.
-void print_mnemonic(const SecureString& mnemonic, std::ostream& os,
-                    std::string_view heading, std::string_view note);
+// no copy of a word is made that the caller cannot wipe -- which is exactly
+// what building padded cells as std::string used to do. It is also why this
+// writes to a stream rather than returning lines: a returned vector<string>
+// would be that copy.
+void print_word_grid(const SecureString& phrase, std::ostream& os,
+                     std::string_view heading, std::string_view note);
 
 }  // namespace ratchet::app
 
