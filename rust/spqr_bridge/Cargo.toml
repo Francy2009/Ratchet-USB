@@ -11,3 +11,6 @@ crate-type = ["staticlib"]
 spqr = { path = "../../third_party/spqr" }
 rand = "0.9"
 zeroize = "1.8"
+# For best-effort mlock/munlock of the secret buffers handed back to C. Already
+# present in the lockfile as a transitive dependency; pinned by Cargo.lock.
+libc = "0.2"
