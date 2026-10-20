@@ -104,7 +104,7 @@ int cmd_init(const Options& opts) {
   // This is the vault passphrase, not the recovery phrase above: it unlocks the
   // vault and nothing else.
   app::print_word_grid(
-      passphrase, std::cout,
+      passphrase, std::cerr,
       i18n::t(i18n::Lang::En, i18n::Str::PassphraseHeading),
       i18n::t(i18n::Lang::En, i18n::Str::PassphraseNote));
   terminal::wait_for_enter(
@@ -295,7 +295,7 @@ int cmd_passphrase(const Options& opts) {
   SecureString next;
   passphrase::generate(next, opts.passphrase_words);
   app::print_word_grid(
-      next, std::cout,
+      next, std::cerr,
       i18n::t(i18n::Lang::En, i18n::Str::PassphraseHeading),
       i18n::t(i18n::Lang::En, i18n::Str::PassphraseNote));
   // The new phrase is shown before anything is re-encrypted, and Enter is not

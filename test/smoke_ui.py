@@ -69,7 +69,13 @@ def generated_words(init_output):
 
 def init_vault(drive):
     """Creates a vault the way a person would, and returns its words."""
-    words = generated_words(cli(["init", "--usb-path", drive] + CHEAP))
+    # The generated passphrase is shown on stderr, so both streams are searched
+    # for the grid; the recovery phrase stays on stdout.
+    result = subprocess.run([BIN, "init", "--usb-path", drive] + CHEAP,
+                            input="", capture_output=True, text=True)
+    if result.returncode != 0:
+        raise SystemExit("init failed: %s" % result.stderr)
+    words = generated_words(result.stdout + result.stderr)
     if len(words) != 6:
         raise SystemExit("expected a 6-word passphrase, got %r" % (words,))
     return words

@@ -244,7 +244,7 @@ FP_BEFORE="$(printf '%s\n' "$ALICE_PASS" |
 printf '%s\n\n\n' "$ALICE_PASS" |
   "$BIN" passphrase --usb-path "$ALICE" >"$WORK/alice-rekey.txt" 2>"$WORK/rekey.err" ||
   fail "passphrase change exited non-zero: $(cat "$WORK/rekey.err")"
-NEW_PASS="$(extract_phrase "$WORK/alice-rekey.txt")"
+NEW_PASS="$(extract_phrase "$WORK/rekey.err")"
 [[ "$(wc -w <<<"$NEW_PASS")" -eq 6 ]] ||
   fail "expected a 6-word new passphrase, got: '$NEW_PASS'"
 [[ "$NEW_PASS" != "$ALICE_PASS" ]] ||
