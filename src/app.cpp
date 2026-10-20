@@ -155,7 +155,21 @@ void rekey_vault(const fs::path& path, store::VaultStore& store,
   if (store.generation == UINT64_MAX) {
     throw Error("vault generation counter exhausted");
   }
+  const uint64_t previous_generation = store.generation;
   ++store.generation;
+  // If anything below throws before the new container is promoted, the open
+  // vault must keep the generation that is still on disk; otherwise a later
+  // save writes a generation the anchor and the file no longer match.
+  struct RestoreGeneration {
+    store::VaultStore& s;
+    uint64_t previous;
+    bool committed = false;
+    ~RestoreGeneration() {
+      if (!committed) {
+        s.generation = previous;
+      }
+    }
+  } guard{store, previous_generation};
 
   const SecureBuffer plaintext = store::serialize(store);
   // A change of passphrase always installs a generated word phrase, so the new
@@ -188,6 +202,7 @@ void rekey_vault(const fs::path& path, store::VaultStore& store,
   }
 
   vault::promote_prepared(prepared, path);
+  guard.committed = true;
 
   const rollback::Digest digest = rollback::digest(written.data(), written.size());
   if (rollback::backend_available()) {
