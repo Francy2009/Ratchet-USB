@@ -48,6 +48,7 @@
 #include <unistd.h>
 
 #include "cli_runner.hpp"
+#include "host_env.hpp"
 
 namespace {
 
@@ -166,44 +167,6 @@ class ConfirmOnlyDialog : public QDialog {
     QDialog::keyPressEvent(event);
   }
 };
-
-// The environment for a host program (the file manager), not for a bundled
-// one. When this GUI runs from the AppImage, AppRun prepends the bundle's
-// directories to LD_LIBRARY_PATH. Launching `xdg-open`/`gio` with that path
-// makes them load the bundle's libglib/libgio instead of the host's, and they
-// die with a symbol error before opening anything -- "Apri cartella" then does
-// nothing at all. Drop every search-path entry that points inside $APPDIR and
-// let the host tools resolve their own libraries.
-QProcessEnvironment hostProcessEnvironment() {
-  QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-  const QString appdir = env.value(QStringLiteral("APPDIR"));
-  if (appdir.isEmpty()) {
-    return env;
-  }
-  const QStringList path_vars{
-      QStringLiteral("LD_LIBRARY_PATH"),
-      QStringLiteral("QT_PLUGIN_PATH"),
-      QStringLiteral("QML2_IMPORT_PATH"),
-      QStringLiteral("XDG_DATA_DIRS"),
-  };
-  for (const QString& name : path_vars) {
-    if (!env.contains(name)) continue;
-    QStringList kept;
-    for (const QString& part :
-         env.value(name).split(QLatin1Char(':'), Qt::SkipEmptyParts)) {
-      if (!part.startsWith(appdir)) kept << part;
-    }
-    if (kept.isEmpty()) {
-      env.remove(name);
-    } else {
-      env.insert(name, kept.join(QLatin1Char(':')));
-    }
-  }
-  // Set by the AppImage's Qt hook on GNOME/XFCE; it should not leak to host
-  // applications that happen to use Qt.
-  env.remove(QStringLiteral("QT_QPA_PLATFORMTHEME"));
-  return env;
-}
 
 bool startDetachedWith(const QString& program, const QStringList& arguments,
                        const QProcessEnvironment& environment) {
@@ -959,7 +922,7 @@ bool MainWindow::openFolder(const QString& dir) {
   if (!QFileInfo(dir).isDir()) {
     return false;
   }
-  const QProcessEnvironment env = hostProcessEnvironment();
+  const QProcessEnvironment env = ratchet::gui::hostProcessEnvironment();
   // xdg-open is the desktop's dispatcher; gio covers systems without
   // xdg-utils. Both run with the host's library path, not the bundle's.
   if (startDetachedWith(QStringLiteral("xdg-open"), {dir}, env)) {

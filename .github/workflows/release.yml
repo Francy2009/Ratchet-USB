@@ -121,6 +121,32 @@ jobs:
             -x SHA256SUMS.minisig \
             -t "Ratchet-USB $GITHUB_REF_NAME SHA256SUMS"
 
+      - name: Verify the signed release files
+        run: |
+          cd build
+          sha256sum -c SHA256SUMS
+          minisign -Vm SHA256SUMS -p ../ci/minisign.pub
+          minisign -Vm Ratchet-USB-x86_64.AppImage -p ../ci/minisign.pub
+
+      - name: Run the smoke test against the packaged CLI
+        # The AppImage is what users actually run. verify-appimage.sh only runs
+        # --version inside it; this drives a whole conversation through the
+        # bundled CLI. The wrapper sets the bundle's library path for the CLI
+        # only, so the grep/sed the test uses keep the host libraries.
+        run: |
+          work="$RUNNER_TEMP/appimage-smoke"
+          mkdir -p "$work"
+          cd "$work"
+          "$GITHUB_WORKSPACE/build/Ratchet-USB-x86_64.AppImage" --appimage-extract >/dev/null
+          bundle="$PWD/squashfs-root"
+          wrapper="$work/ratchet-usb-packaged"
+          cat > "$wrapper" <<EOF
+          #!/bin/sh
+          LD_LIBRARY_PATH="$bundle/usr/lib:$bundle/usr/lib/x86_64-linux-gnu" exec "$bundle/usr/bin/ratchet-usb" "\$@"
+          EOF
+          chmod +x "$wrapper"
+          "$GITHUB_WORKSPACE/test/smoke.sh" "$wrapper"
+
       - name: Upload the signed release files as a workflow artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:

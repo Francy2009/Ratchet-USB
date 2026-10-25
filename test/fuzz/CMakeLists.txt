@@ -32,3 +32,9 @@ target_link_options(fuzz_ui_keys PRIVATE -fsanitize=fuzzer,address,undefined)
 # than from these forty lines.
 target_compile_options(fuzz_parsers PRIVATE ${RATCHET_FUZZ_FLAGS})
 target_link_options(fuzz_parsers PRIVATE -fsanitize=fuzzer,address,undefined)
+
+# The command-line grammar. Its inputs are NUL-separated argv strings.
+add_executable(fuzz_cli fuzz_cli.cpp)
+target_link_libraries(fuzz_cli PRIVATE ratchet_core)
+target_compile_options(fuzz_cli PRIVATE ${RATCHET_FUZZ_FLAGS})
+target_link_options(fuzz_cli PRIVATE -fsanitize=fuzzer,address,undefined)

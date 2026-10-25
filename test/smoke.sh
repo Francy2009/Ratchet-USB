@@ -303,6 +303,10 @@ FP_AFTER="$(printf '%s\n' "$NEW_PASS" |
 # until a fresh card is imported.
 
 step "removing a contact drops it and its session"
+if printf '%s\n' "$NEW_PASS" |
+     "$BIN" remove --usb-path "$ALICE" bob >/dev/null 2>&1; then
+  fail "remove without --yes should require a terminal"
+fi
 printf '%s\n' "$NEW_PASS" |
   "$BIN" remove --usb-path "$ALICE" --yes bob >/dev/null 2>&1 ||
   fail "remove exited non-zero"
@@ -310,10 +314,50 @@ if printf '%s\n' "$NEW_PASS" |
      "$BIN" contacts --usb-path "$ALICE" 2>/dev/null | grep -q '^bob '; then
   fail "the removed contact is still listed"
 fi
+printf '%s\n' "$NEW_PASS" |
+  "$BIN" contacts --usb-path "$ALICE" 2>/dev/null | grep -q "No contacts yet" ||
+  fail "removing the only contact should leave an empty list"
 if printf '%s\n' "$NEW_PASS" |
      "$BIN" remove --usb-path "$ALICE" --yes bob >/dev/null 2>&1; then
   fail "removing a contact that is no longer there should fail"
 fi
+
+# ---------------------------------------------------------------------------
+# A removed contact can be added back from a fresh card, and a new opening
+# works once neither side still holds the old session. Both sides have to
+# forget: while Bob still has a live session, the protocol deliberately refuses
+# an opening message that would replace it.
+
+step "both sides remove each other and start a fresh session"
+printf '%s\n' "$BOB_PASS" |
+  "$BIN" card --usb-path "$BOB" >"$WORK/bob2.card" 2>/dev/null ||
+  fail "bob could not export a fresh card"
+printf '%s\n' "$NEW_PASS" |
+  "$BIN" card --usb-path "$ALICE" >"$WORK/alice2.card" 2>/dev/null ||
+  fail "alice could not export a fresh card"
+printf '%s\n' "$BOB_PASS" |
+  "$BIN" remove --usb-path "$BOB" --yes alice >/dev/null 2>&1 ||
+  fail "bob could not remove alice"
+printf '%s\n' "$NEW_PASS" |
+  "$BIN" add --usb-path "$ALICE" bob --card "$WORK/bob2.card" >/dev/null 2>&1 ||
+  fail "alice could not re-add bob"
+printf '%s\n' "$NEW_PASS" |
+  "$BIN" trust --usb-path "$ALICE" bob >/dev/null 2>&1 ||
+  fail "alice could not re-trust bob"
+printf '%s\n' "$BOB_PASS" |
+  "$BIN" add --usb-path "$BOB" alice --card "$WORK/alice2.card" >/dev/null 2>&1 ||
+  fail "bob could not re-add alice"
+printf '%s\n' "$BOB_PASS" |
+  "$BIN" trust --usb-path "$BOB" alice >/dev/null 2>&1 ||
+  fail "bob could not re-trust alice"
+printf '%s\n' "$NEW_PASS" |
+  "$BIN" send --usb-path "$ALICE" bob "after remove" >"$WORK/remsg.txt" 2>/dev/null ||
+  fail "alice could not send after re-adding bob"
+printf '%s\n' "$BOB_PASS" |
+  "$BIN" recv --usb-path "$BOB" "$(cat "$WORK/remsg.txt")" >"$WORK/rerecv.txt" 2>/dev/null ||
+  fail "bob could not receive the message after re-add"
+grep -q "after remove" "$WORK/rerecv.txt" ||
+  fail "the message after re-add did not decrypt"
 
 echo
 echo "smoke: all end-to-end checks passed"

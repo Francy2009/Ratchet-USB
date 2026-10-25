@@ -5,28 +5,45 @@
 // is worth keeping true for the tests too, so this is a small registry of test
 // functions plus a handful of assertion macros rather than a framework.
 
+#include <array>
+#include <cstddef>
+#include <cstdlib>
 #include <exception>
-#include <functional>
 #include <iostream>
 #include <sstream>
 #include <string>
-#include <vector>
+#include <utility>
 
 namespace ratchet::test {
 
+inline constexpr std::size_t kMaxTests = 1024;
+
 struct TestCase {
-  std::string name;
-  std::function<void()> body;
+  const char* name;
+  void (*body)();
 };
 
-inline std::vector<TestCase>& registry() {
-  static std::vector<TestCase> tests;
+// A fixed array and a function pointer, rather than a std::vector of
+// std::function: registration happens during static initialisation, where an
+// allocation that throws cannot be caught (and is a lint error for good
+// reason). The ceiling is far above the number of tests in this tree.
+inline std::array<TestCase, kMaxTests>& registry() {
+  static std::array<TestCase, kMaxTests> tests{};
   return tests;
 }
 
+inline std::size_t& registry_size() {
+  static std::size_t size = 0;
+  return size;
+}
+
 struct Registrar {
-  Registrar(const char* name, std::function<void()> body) {
-    registry().push_back({name, std::move(body)});
+  Registrar(const char* name, void (*body)()) noexcept {
+    std::size_t& size = registry_size();
+    if (size >= kMaxTests) {
+      std::abort();
+    }
+    registry()[size++] = TestCase{name, body};
   }
 };
 
@@ -39,9 +56,20 @@ class Failure : public std::exception {
   std::string what_;
 };
 
-inline int run_all() {
+inline int run_all(const std::string& filter = {}, bool list_only = false) {
+  const std::size_t total = registry_size();
+  std::size_t run = 0;
   std::size_t failed = 0;
-  for (const TestCase& test : registry()) {
+  for (std::size_t i = 0; i < total; ++i) {
+    const TestCase& test = registry()[i];
+    if (!filter.empty() && std::string(test.name).find(filter) == std::string::npos) {
+      continue;
+    }
+    ++run;
+    if (list_only) {
+      std::cout << test.name << "\n";
+      continue;
+    }
     try {
       test.body();
       std::cout << "  ok   " << test.name << "\n";
@@ -50,8 +78,10 @@ inline int run_all() {
       ++failed;
     }
   }
-  std::cout << "\n" << registry().size() - failed << "/" << registry().size()
-            << " tests passed\n";
+  if (list_only) {
+    return 0;
+  }
+  std::cout << "\n" << run - failed << "/" << run << " tests passed\n";
   return failed == 0 ? 0 : 1;
 }
 

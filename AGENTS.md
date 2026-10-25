@@ -20,7 +20,7 @@ ctest --test-dir build --output-on-failure
 
 Unit tests are one binary (`build/test/ratchet_tests`) using a hand-rolled
 harness (`test/test_support.hpp`: `TEST`, `CHECK`, `CHECK_EQ`, `CHECK_THROWS`).
-There is **no per-test filter**; run the binary directly and read its output.
+Run it directly; `--list` lists tests and `--filter <substring>` runs a subset.
 Add a new file to the `add_executable(ratchet_tests ...)` list in
 `test/CMakeLists.txt`. New `src/*.cpp` must be added to the `ratchet_core`
 source list in the root `CMakeLists.txt`.

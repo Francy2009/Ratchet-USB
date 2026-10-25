@@ -18,7 +18,9 @@ add_executable(ratchet-gui
                main_window.cpp
                main_window.hpp
                cli_runner.cpp
-               cli_runner.hpp)
+               cli_runner.hpp
+               host_env.cpp
+               host_env.hpp)
 
 target_link_libraries(ratchet-gui PRIVATE Qt6::Widgets)
 
