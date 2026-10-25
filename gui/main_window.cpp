@@ -4,6 +4,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QClipboard>
+#include <QCloseEvent>
 #include <QColor>
 #include <QComboBox>
 #include <QCursor>
@@ -17,6 +18,7 @@
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
@@ -128,6 +130,27 @@ QStringList removableMountPoints() {
   }
   return drives;
 }
+
+// A dialog that can only be dismissed through its own buttons. The title-bar
+// close button and Escape are swallowed so the "Chiudi" handler always runs;
+// that handler is what removes the temporary folder holding a received file.
+class ConfirmOnlyDialog : public QDialog {
+ public:
+  explicit ConfirmOnlyDialog(QWidget* parent) : QDialog(parent) {
+    setWindowFlag(Qt::WindowCloseButtonHint, false);
+  }
+
+ protected:
+  void closeEvent(QCloseEvent* event) override { event->ignore(); }
+
+  void keyPressEvent(QKeyEvent* event) override {
+    if (event->key() == Qt::Key_Escape) {
+      event->accept();  // ignore it instead of rejecting the dialog
+      return;
+    }
+    QDialog::keyPressEvent(event);
+  }
+};
 
 }  // namespace
 
@@ -845,7 +868,7 @@ void MainWindow::showResultDialog(bool ok, const QString& title,
 
 void MainWindow::showFileDialog(const QString& ext, const QString& path,
                                 const QString& detail) {
-  QDialog dialog(this);
+  ConfirmOnlyDialog dialog(this);
   dialog.setWindowTitle(tr("File ricevuto"));
   auto* layout = new QVBoxLayout(&dialog);
   layout->setContentsMargins(16, 16, 16, 12);
@@ -869,6 +892,8 @@ void MainWindow::showFileDialog(const QString& ext, const QString& path,
     message += tr("Non e' stato preparato automaticamente.");
   } else {
     message += tr("Preparato in una cartella temporanea privata:\n%1").arg(path);
+    message += QLatin1Char('\n');
+    message += tr("La cartella viene rimossa quando chiudi questa finestra.");
   }
   auto* msg = new QLabel(message);
   msg->setWordWrap(true);
@@ -889,16 +914,30 @@ void MainWindow::showFileDialog(const QString& ext, const QString& path,
   buttons->addStretch(1);
   if (!path.isEmpty()) {
     auto* open = new QPushButton(tr("Apri cartella"));
-    connect(open, &QPushButton::clicked, this, [this, path, &dialog] {
+    connect(open, &QPushButton::clicked, &dialog, [this, path] {
       QDesktopServices::openUrl(
           QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
-      dialog.accept();
+      statusBar()->showMessage(
+          tr("Cartella aperta. Premi Chiudi per rimuoverla."), 6000);
     });
     buttons->addWidget(open);
   }
   auto* close = new QPushButton(tr("Chiudi"));
   close->setDefault(true);
-  connect(close, &QPushButton::clicked, &dialog, &QDialog::accept);
+  connect(close, &QPushButton::clicked, &dialog, [&dialog, path] {
+    if (!path.isEmpty()) {
+      // The file was staged in the CLI's private ratchet-XXXXXX folder. Remove
+      // that folder now, when the dialog is dismissed, rather than leaving it
+      // to the CLI's background reaper. Only a directory that looks like the
+      // staging folder is ever touched.
+      QDir dir = QFileInfo(path).absoluteDir();
+      if (dir.exists() &&
+          dir.dirName().startsWith(QStringLiteral("ratchet-"))) {
+        dir.removeRecursively();
+      }
+    }
+    dialog.accept();
+  });
   buttons->addWidget(close);
   layout->addLayout(buttons);
 
