@@ -40,7 +40,7 @@ Packages: 174.
 | `cpufeatures` | `0.3.1` | `MIT OR Apache-2.0` |
 | `crabgrind` | `0.2.6` | `MIT` |
 | `crypto-common` | `0.2.2` | `MIT OR Apache-2.0` |
-| `ctutils` | `0.4.2` | `Apache-2.0 OR MIT` |
+| `ctutils` | `0.4.5` | `Apache-2.0 OR MIT` |
 | `curve25519-dalek` | `5.0.0` | `BSD-3-Clause` |
 | `curve25519-dalek-derive` | `0.1.1` | `MIT/Apache-2.0` |
 | `digest` | `0.11.3` | `MIT OR Apache-2.0` |
