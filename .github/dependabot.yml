@@ -1,0 +1,12 @@
+version: 2
+
+# Keep the workflow actions pinned by commit SHA (the workflows use the full
+# SHA with the version tag in a comment). Dependabot updates both the SHA and
+# that comment. Rust dependencies are deliberately not listed here: bumping
+# them goes through the license and RustSec review instead.
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5

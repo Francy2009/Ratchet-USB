@@ -116,6 +116,29 @@ chmod +x Ratchet-USB-x86_64.AppImage
 Questi tag sono pre-release: build di sviluppo, non release approvate per la
 produzione. La GUI è documentata in [README-GUI.md](README-GUI.md).
 
+### Verificare i download
+
+Gli asset delle release sono firmati con
+[minisign](https://jedisct1.github.io/minisign/). La chiave pubblica è nel
+repository, in [`ci/minisign.pub`](ci/minisign.pub):
+
+```
+RWSc8TG7Yiu1VRTzI7/Nrx2OobosPlf2ju6yKAnYEbX5fO8Nb8wseNTY
+```
+
+Scarica `Ratchet-USB-x86_64.AppImage`, `SHA256SUMS` e i due file `.minisig`
+nella stessa cartella, poi verifica il checksum e le firme:
+
+```sh
+minisign -Vm SHA256SUMS -p ci/minisign.pub
+sha256sum -c SHA256SUMS
+minisign -Vm Ratchet-USB-x86_64.AppImage -p ci/minisign.pub
+```
+
+`sha256sum -c` si aspetta l'AppImage accanto a `SHA256SUMS`. Se non sei in un
+clone, salva la riga della chiave qui sopra come `minisign.pub` e passa
+`-p minisign.pub`. Serve minisign 0.11 o più recente.
+
 ### Dai sorgenti
 
 Il sistema supportato è Linux. Servono un compilatore C++20, CMake 3.16 o più

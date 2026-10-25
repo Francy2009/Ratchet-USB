@@ -22,3 +22,7 @@ leak-*
 vault.bin
 vault.bin.tmp
 *.seed
+
+# Never commit a release signing key. The CI key lives in GitHub Secrets.
+minisign.key
+minisign-ci.key
