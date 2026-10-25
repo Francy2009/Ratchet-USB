@@ -124,7 +124,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libsodium-dev cmake curl perl make ${{ matrix.compiler }}
 
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: ${{ env.OPENSSL_PREFIX }}
           key: openssl-3.5.9-${{ runner.os }}-${{ runner.arch }}
@@ -183,14 +183,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake curl perl make gcc
 
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: ${{ env.OPENSSL_PREFIX }}
           key: openssl-3.5.9-${{ runner.os }}-${{ runner.arch }}
 
       - name: Cache the libsodium build
         id: sodium-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: ~/sodium-prefix
           key: sodium-${{ env.SODIUM_VERSION }}-${{ runner.os }}
@@ -262,7 +262,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libsodium-dev cmake curl perl make g++
 
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: ${{ env.OPENSSL_PREFIX }}
           key: openssl-3.5.9-${{ runner.os }}-${{ runner.arch }}
@@ -321,7 +321,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libsodium-dev cmake valgrind curl perl make g++
 
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: ${{ env.OPENSSL_PREFIX }}
           key: openssl-3.5.9-${{ runner.os }}-${{ runner.arch }}
@@ -367,7 +367,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libsodium-dev cmake clang libclang-rt-dev curl perl make
 
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: ${{ env.OPENSSL_PREFIX }}
           key: openssl-3.5.9-${{ runner.os }}-${{ runner.arch }}
@@ -464,7 +464,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libsodium-dev cmake clang-tidy curl perl make g++
 
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: ${{ env.OPENSSL_PREFIX }}
           key: openssl-3.5.9-${{ runner.os }}-${{ runner.arch }}
