@@ -2,11 +2,14 @@
 
 Lingue: **Italiano** · [English](README.md)
 
-Ratchet-USB è un programma da terminale per scambiarsi messaggi cifrati senza un
-server dedicato. Scrivi un messaggio sul tuo computer, copi il blocco cifrato che
-compare e lo invii attraverso il canale che preferisci. La persona che lo riceve
-incolla il blocco nel programma per leggerlo. Il canale usato per il trasporto
-vede il blocco e l'ora dello scambio, ma non il testo del messaggio.
+Ratchet-USB permette a due persone di scambiarsi messaggi cifrati senza un
+server dedicato. Scrivi un messaggio, copi il blocco cifrato che il programma
+stampa e lo invii attraverso il canale che preferisci; chi lo riceve lo incolla
+nel programma per leggerlo. Il trasporto vede il blocco e quando è stato
+inviato, ma non il messaggio.
+
+C'è un'interfaccia a schermo intero nel terminale e un'app desktop opzionale.
+Entrambe usano gli stessi comandi sotto, quindi non importa quale scegli.
 
 Identità, contatti e sessioni sono conservati in un vault cifrato su una chiavetta
 USB o in una cartella scelta dall'utente. La chiavetta non è una chiave
@@ -30,6 +33,12 @@ scrivere e leggere messaggi con i tasti indicati sullo schermo. La lingua segue
 la locale del sistema; puoi scegliere esplicitamente `--lang it` o `--lang en`.
 L'interfaccia si blocca dopo tre minuti di inattività. L'intervallo si cambia
 con `--idle-lock <secondi>`.
+
+Se preferisci una finestra, avvia `ratchet-gui`. Mette le stesse operazioni
+dietro Qt6 — scegli la cartella del vault, la sblocchi, poi usi le schede
+Contatti e Messaggi — e lancia `ratchet-usb` in background invece di
+reimplementare qualcosa. Viene compilata quando Qt6 è installata ed è inclusa
+nell'AppImage; vedi [README-GUI.md](README-GUI.md).
 
 Gli stessi passaggi sono disponibili come comandi. Questo è uno scambio tipico:
 
@@ -91,7 +100,7 @@ adatta al tuo caso, passa `--usb-path <cartella>` ai comandi o imposta
 
 ### AppImage
 
-Ogni tag di questo repository pubblica un `Ratchet-USB-x86_64.AppImage` autonomo
+Ogni tag di release (`v*`) pubblica un `Ratchet-USB-x86_64.AppImage` autonomo
 nella pagina [Releases](https://github.com/Francy2009/Ratchet-USB/releases).
 Contiene la CLI, la GUI Qt opzionale e tutte le librerie che servono, quindi non
 c'è niente da installare:
@@ -201,10 +210,9 @@ sviluppo, non versioni approvate per l'uso in produzione.
 | `milestone/file-sharing` | Invio di file cifrati, appunti di sistema e file ricevuti aperti in una cartella temporanea rimossa all'uscita. |
 
 Puoi esaminare una tappa con `git show milestone/triple-ratchet` o confrontare
-due tappe con `git diff milestone/pq-hybrid milestone/triple-ratchet`. Gli
-stessi commit sono elencati su
-<https://github.com/Francy2009/Ratchet-USB/releases>. Le build AppImage
-pubblicate da questo repository, una per tag, sono elencate lì.
+due con `git diff milestone/pq-hybrid milestone/triple-ratchet`. I tag sono
+nella [pagina delle release](https://github.com/Francy2009/Ratchet-USB/releases),
+e ogni nuovo tag `v*` ha anche un AppImage allegato.
 
 ## Licenza e componenti
 

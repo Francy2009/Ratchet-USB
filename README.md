@@ -2,11 +2,14 @@
 
 Languages: [Italiano](README.it.md) · **English**
 
-Ratchet-USB is a terminal program for exchanging encrypted messages without a
-dedicated server. Write a message on your computer, copy the encrypted block it
-prints, and send that block through a channel of your choice. The recipient
-pastes the block into the program to read it. The transport channel can see the
-block and the time of the exchange, but not the message text.
+Ratchet-USB lets two people exchange encrypted messages without a dedicated
+server. You write a message, copy the encrypted block the program prints, and
+send that block through whatever channel you like. The recipient pastes it back
+in to read it. The transport sees the block and when it was sent, but never the
+message itself.
+
+There is a full-screen terminal interface and an optional desktop app. Both
+drive the same commands underneath, so it does not matter which one you use.
 
 Your identity, contacts, and sessions live in an encrypted vault on a USB drive
 or in a directory you choose. The drive itself is not a cryptographic key. The
@@ -27,6 +30,12 @@ create a vault, add a contact, verify their fingerprint, and exchange messages
 using the keys shown on screen. The interface follows your system locale; use
 `--lang it` or `--lang en` to choose explicitly. It locks after three minutes
 of inactivity by default. Change that interval with `--idle-lock <seconds>`.
+
+If you would rather have a window, run `ratchet-gui`. It puts the same
+operations behind Qt6 — choose the vault folder, unlock it, then work from the
+contacts and messages tabs — and it runs `ratchet-usb` in the background rather
+than reimplementing anything. It is built when Qt6 is installed and is included
+in the AppImage; see [README-GUI.md](README-GUI.md).
 
 The same steps are available as commands. A typical exchange looks like this:
 
@@ -83,7 +92,7 @@ your setup, pass `--usb-path <directory>` to commands or set `RATCHET_USB_PATH`.
 
 ### AppImage
 
-Each tag on this repository publishes a self-contained
+Each release tag (`v*`) publishes a self-contained
 `Ratchet-USB-x86_64.AppImage` under
 [Releases](https://github.com/Francy2009/Ratchet-USB/releases). It bundles the
 CLI, the optional Qt GUI, and every library they need, so nothing has to be
@@ -186,10 +195,10 @@ They are not production-approved releases.
 | `milestone/suite-4-xwing` | Suite 4 X-Wing handshakes for new cards, HMAC on new rollback anchors, and a ProVerif session model. |
 | `milestone/file-sharing` | Encrypted file sharing, the system clipboard, and received files opened in a temporary folder that is removed on exit. |
 
-Inspect a step with `git show milestone/triple-ratchet`, or compare two steps
-with `git diff milestone/pq-hybrid milestone/triple-ratchet`. The same commits
-are listed at <https://github.com/Francy2009/Ratchet-USB/releases>. The AppImage
-builds published from this repository, one per tag, are listed there too.
+Inspect a step with `git show milestone/triple-ratchet`, or compare two with
+`git diff milestone/pq-hybrid milestone/triple-ratchet`. The tags are on the
+[releases page](https://github.com/Francy2009/Ratchet-USB/releases), and each
+new `v*` tag also gets an AppImage attached.
 
 ## License and dependencies
 
