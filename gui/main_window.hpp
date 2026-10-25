@@ -104,6 +104,10 @@ class MainWindow : public QMainWindow {
   void showFileDialog(const QString& ext, const QString& path,
                       const QString& detail);
 
+  // Opens `dir` in the host file manager. Host programs are launched with a
+  // cleaned environment so they do not load this process's bundled libraries.
+  bool openFolder(const QString& dir);
+
   CliRunner* runner_ = nullptr;
 
   QLineEdit* usbEdit_ = nullptr;

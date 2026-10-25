@@ -29,6 +29,8 @@
 #include <QPalette>
 #include <QPixmap>
 #include <QPlainTextEdit>
+#include <QProcess>
+#include <QProcessEnvironment>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QSpinBox>
@@ -151,6 +153,53 @@ class ConfirmOnlyDialog : public QDialog {
     QDialog::keyPressEvent(event);
   }
 };
+
+// The environment for a host program (the file manager), not for a bundled
+// one. When this GUI runs from the AppImage, AppRun prepends the bundle's
+// directories to LD_LIBRARY_PATH. Launching `xdg-open`/`gio` with that path
+// makes them load the bundle's libglib/libgio instead of the host's, and they
+// die with a symbol error before opening anything -- "Apri cartella" then does
+// nothing at all. Drop every search-path entry that points inside $APPDIR and
+// let the host tools resolve their own libraries.
+QProcessEnvironment hostProcessEnvironment() {
+  QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+  const QString appdir = env.value(QStringLiteral("APPDIR"));
+  if (appdir.isEmpty()) {
+    return env;
+  }
+  const QStringList path_vars{
+      QStringLiteral("LD_LIBRARY_PATH"),
+      QStringLiteral("QT_PLUGIN_PATH"),
+      QStringLiteral("QML2_IMPORT_PATH"),
+      QStringLiteral("XDG_DATA_DIRS"),
+  };
+  for (const QString& name : path_vars) {
+    if (!env.contains(name)) continue;
+    QStringList kept;
+    for (const QString& part :
+         env.value(name).split(QLatin1Char(':'), Qt::SkipEmptyParts)) {
+      if (!part.startsWith(appdir)) kept << part;
+    }
+    if (kept.isEmpty()) {
+      env.remove(name);
+    } else {
+      env.insert(name, kept.join(QLatin1Char(':')));
+    }
+  }
+  // Set by the AppImage's Qt hook on GNOME/XFCE; it should not leak to host
+  // applications that happen to use Qt.
+  env.remove(QStringLiteral("QT_QPA_PLATFORMTHEME"));
+  return env;
+}
+
+bool startDetachedWith(const QString& program, const QStringList& arguments,
+                       const QProcessEnvironment& environment) {
+  QProcess process;
+  process.setProcessEnvironment(environment);
+  process.setProgram(program);
+  process.setArguments(arguments);
+  return process.startDetached();
+}
 
 }  // namespace
 
@@ -866,6 +915,25 @@ void MainWindow::showResultDialog(bool ok, const QString& title,
   dialog.exec();
 }
 
+bool MainWindow::openFolder(const QString& dir) {
+  if (!QFileInfo(dir).isDir()) {
+    return false;
+  }
+  const QProcessEnvironment env = hostProcessEnvironment();
+  // xdg-open is the desktop's dispatcher; gio covers systems without
+  // xdg-utils. Both run with the host's library path, not the bundle's.
+  if (startDetachedWith(QStringLiteral("xdg-open"), {dir}, env)) {
+    return true;
+  }
+  if (startDetachedWith(QStringLiteral("gio"),
+                        {QStringLiteral("open"), dir}, env)) {
+    return true;
+  }
+  // Last resort: let Qt try its own dispatch. It may route through the
+  // desktop portal, which runs outside this process.
+  return QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+}
+
 void MainWindow::showFileDialog(const QString& ext, const QString& path,
                                 const QString& detail) {
   ConfirmOnlyDialog dialog(this);
@@ -903,6 +971,13 @@ void MainWindow::showFileDialog(const QString& ext, const QString& path,
   header->addWidget(msg, 1);
   layout->addLayout(header);
 
+  auto* feedback = new QLabel;
+  feedback->setWordWrap(true);
+  feedback->setTextFormat(Qt::PlainText);
+  feedback->setTextInteractionFlags(Qt::TextSelectableByMouse);
+  feedback->hide();
+  layout->addWidget(feedback);
+
   if (path.isEmpty() && !detail.trimmed().isEmpty()) {
     auto* view = new QPlainTextEdit(detail.trimmed());
     view->setReadOnly(true);
@@ -914,12 +989,26 @@ void MainWindow::showFileDialog(const QString& ext, const QString& path,
   buttons->addStretch(1);
   if (!path.isEmpty()) {
     auto* open = new QPushButton(tr("Apri cartella"));
-    connect(open, &QPushButton::clicked, &dialog, [this, path] {
-      QDesktopServices::openUrl(
-          QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
-      statusBar()->showMessage(
-          tr("Cartella aperta. Premi Chiudi per rimuoverla."), 6000);
-    });
+    connect(open, &QPushButton::clicked, &dialog,
+            [this, &dialog, path, feedback] {
+              const QString dir = QFileInfo(path).absolutePath();
+              if (openFolder(dir)) {
+                feedback->setText(
+                    tr("Cartella aperta. Premi Chiudi per rimuoverla."));
+              } else {
+                feedback->setText(
+                    tr("Non riesco ad aprire il gestore di file. La cartella "
+                       "e':\n%1").arg(dir));
+                QMessageBox::warning(
+                    &dialog, tr("Impossibile aprire la cartella"),
+                    tr("Non e' stato possibile aprire il gestore di file.\n\n"
+                       "La cartella e':\n%1\n\n"
+                       "Puoi copiare questo percorso e aprirla a mano.")
+                        .arg(dir));
+              }
+              feedback->show();
+              dialog.adjustSize();
+            });
     buttons->addWidget(open);
   }
   auto* close = new QPushButton(tr("Chiudi"));
