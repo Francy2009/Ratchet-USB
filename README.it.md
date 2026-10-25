@@ -2,6 +2,8 @@
 
 Lingue: **Italiano** · [English](README.md)
 
+[![Ultima release](https://img.shields.io/github/v/tag/Francy2009/Ratchet-USB?label=versione&color=blue)](https://github.com/Francy2009/Ratchet-USB/tags)
+
 Ratchet-USB permette a due persone di scambiarsi messaggi cifrati senza un
 server dedicato. Scrivi un messaggio, copi il blocco cifrato che il programma
 stampa e lo invii attraverso il canale che preferisci; chi lo riceve lo incolla
@@ -24,6 +26,52 @@ implementata in questa versione, ma non è stata sottoposta a una revisione
 indipendente. Per il dettaglio delle verifiche fatte e di quelle ancora da fare,
 vedi [lo stato della migrazione](docs/PQ-MIGRATION-STATUS.md) e il
 [modello di minaccia](docs/THREAT-MODEL.md).
+
+## A chi serve
+
+Il caso ovvio è quello di chi potrebbe subire danni se un messaggio viene
+letto. È il caso attorno a cui è costruito il progetto, ed è anche quello che
+non riguarda quasi nessuno di chi legge. La versione quotidiana è più piccola
+e molto più comune: ogni tanto devi mandare qualcosa che non ha niente da fare
+in una chat per sempre.
+
+**Una password, un numero di conto, una frase di recupero.** Il Wi-Fi
+dell'ufficio, un IBAN, il PIN di una SIM, il codice dell'allarme, le parole di
+un wallet, le credenziali di qualcosa in condivisione. Finiscono in WhatsApp o
+in email perché non c'è niente di più semplice a portata di mano, e poi
+restano lì: su due telefoni, in un backup cloud che di solito non è cifrato
+end-to-end, in una casella che viene esportata intera la prossima volta che
+qualcuno cambia portatile. Cifralo prima che parta e la copia che sopravvive
+alla conversazione non vale più niente.
+
+**Una fattura che deve essere davvero tua.** Qualcuno entra nella casella di
+un fornitore, cambia le coordinate bancarie e rimanda la fattura
+dall'indirizzo vero, in mezzo a un thread vero. Funziona abbastanza spesso da
+avere un nome in ogni lingua, e le piccole aziende sono il bersaglio abituale
+perché lì nessuno ha un modo per controllare. Qui non si tratta di segretezza:
+ogni messaggio è legato alla chiave d'identità del mittente dall'handshake,
+quindi un'impronta verificata una volta, a voce, al telefono, continua a
+rispondere "è davvero lui?" per ogni messaggio successivo.
+
+**Un canale che sopravvive ai tuoi account.** Una SIM swap, una pagina di
+login convincente, un token di sessione rubato da un portatile: l'account
+sparisce e tutto ciò che contiene diventa leggibile e, peggio, scrivibile a
+tuo nome. Qui niente vive in un account. Non c'è una password da phishing, un
+numero da trasferire, una sessione da rubare: l'identità è un file su una
+chiavetta, e l'unico modo per averla è avere la chiavetta e la passphrase.
+
+**Passare un segreto a un collega senza niente in mezzo.** La risposta
+abituale è un link usa-e-getta o un servizio che invia segreti. Funzionano, e
+ognuno di loro fa passare il segreto da una macchina gestita da qualcun altro,
+sulla promessa che venga cancellato dopo. Qui non si carica niente: il testo
+cifrato viaggia nella chat che usavi già, e la chiave non lascia mai le due
+chiavette.
+
+Non è un sostituto di Signal. Signal è migliore come messenger in tutto ciò
+che conta per parlare tutto il giorno, ed è quello per cui va usato. Questo
+serve per il messaggio che non è chat: quello occasionale che porta qualcosa
+che vale più della conversazione attorno, e che preferiresti non affidare a un
+account, a un backup o alla buona volontà di un'azienda.
 
 ## Come si usa
 
@@ -162,6 +210,13 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j2
 ctest --test-dir build --output-on-failure
 ```
+
+Ogni release è taggata, quindi `git checkout <tag>` ti dà una versione fissa
+invece di quello che `main` è quel giorno. I formati del vault e dei messaggi
+non sono ancora congelati, e entrambe le parti di una conversazione devono
+usare lo stesso. Preferisci l'AppImage firmata qui sopra, oppure compila dal
+tag; una distribuzione che lo pacchettizza lo compila contro la propria
+libsodium.
 
 Per usare dipendenze già installate, `./setup.sh --no-deps` salta il passaggio
 dei pacchetti. macOS e Windows non sono supportati. L'applicazione usa funzioni

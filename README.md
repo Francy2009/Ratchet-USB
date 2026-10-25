@@ -2,6 +2,8 @@
 
 Languages: [Italiano](README.it.md) · **English**
 
+[![Latest release](https://img.shields.io/github/v/tag/Francy2009/Ratchet-USB?label=version&color=blue)](https://github.com/Francy2009/Ratchet-USB/tags)
+
 Ratchet-USB lets two people exchange encrypted messages without a dedicated
 server. You write a message, copy the encrypted block the program prints, and
 send that block through whatever channel you like. The recipient pastes it back
@@ -22,6 +24,51 @@ This is still a development version (`0.5.0-dev`). The post-quantum migration is
 implemented, but it has not had an independent security review. See the
 [migration status](docs/PQ-MIGRATION-STATUS.md) for completed and outstanding
 checks, and the [threat model](docs/THREAT-MODEL.md) for its limits.
+
+## Who this is for
+
+The obvious case is somebody who could be hurt if a message is read. That is
+what the design is built around, and it is also the case that applies to
+almost nobody reading this. The everyday version is smaller and far more
+common: now and then you have to send something that has no business sitting
+in a chat forever.
+
+**A password, an account number, a recovery phrase.** The office Wi-Fi, an
+IBAN, a SIM's PIN, the code to the alarm, a wallet's seed words, the login to
+something shared. These get typed into WhatsApp or email because nothing
+easier is at hand, and then they stay: on two phones, in a cloud backup that
+is usually not end-to-end encrypted, in a mailbox that gets exported whole the
+next time somebody changes laptop. Encrypt it before it goes in and the copy
+that outlives the conversation is worthless.
+
+**An invoice that has to actually be from you.** Somebody gets into a
+supplier's mailbox, changes the bank details, and sends the invoice on from
+the real address, in the middle of a real thread. It works often enough to
+have a name in every language, and small firms are the usual target because
+nobody there has any way to check. This is not about secrecy at all: every
+message is tied to the sender's identity key through the handshake, so a
+fingerprint you checked once, out loud, over the phone, goes on answering
+"is this really them" for every message after it.
+
+**A channel that outlives your accounts.** A SIM swap, a convincing login
+page, a session token lifted off a laptop: the account goes, and everything in
+it becomes readable and, worse, writable in your name. Nothing here lives in
+an account. There is no password to phish, no number to port, no session to
+steal: the identity is a file on a drive, and the only way to have it is to
+have the drive and the passphrase.
+
+**Handing a secret to a colleague with nothing in the middle.** The usual
+answer is a one-time link or a send-a-secret service. They work, and every one
+of them routes the secret through a machine somebody else runs, on the promise
+that it is deleted afterwards. Nothing is uploaded here: the ciphertext goes
+down the chat you were already using, and the key never leaves the two drives.
+
+This is not a replacement for Signal. Signal is better at being a messenger in
+every way that matters for talking to people all day, and that is what it
+should be used for. This is for the message that is not chat: the occasional
+one carrying something worth more than the conversation around it, that you
+would rather not hand to an account, a backup, or a company's continued good
+behaviour.
 
 ## Using it
 
@@ -152,6 +199,12 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j2
 ctest --test-dir build --output-on-failure
 ```
+
+Every release is tagged, so `git checkout <tag>` gets you a fixed version
+instead of whatever `main` happens to be that day. The vault and message
+formats are not frozen yet, and both ends of a conversation have to run the
+same one. Prefer the signed AppImage above, or build from the tag; a
+distribution that packages this links its own libsodium.
 
 Use `./setup.sh --no-deps` to skip system package installation when dependencies
 are already present. macOS and Windows are not supported. The program uses
