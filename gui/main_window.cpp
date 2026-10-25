@@ -439,6 +439,32 @@ QWidget* MainWindow::buildContactsTab() {
   manage_layout->addWidget(resetAliasCombo_, 1, 1);
   manage_layout->addWidget(reset_button, 1, 2);
   layout->addWidget(makeGroup(tr("Gestione contatto"), manage_layout));
+
+  auto* remove_layout = new QGridLayout;
+  removeAliasCombo_ = makeAliasCombo(tr("alias (dalla lista)"));
+  auto* remove_button = new QPushButton(tr("Rimuovi contatto (remove)"));
+  actionButtons_ << remove_button;
+  connect(remove_button, &QPushButton::clicked, this, [this] {
+    const QString alias = removeAliasCombo_->currentText().trimmed();
+    if (alias.isEmpty()) {
+      warn(tr("Serve un alias."));
+      return;
+    }
+    const auto answer = QMessageBox::warning(
+        this, tr("Eliminare il contatto?"),
+        tr("Eliminare '%1'?\n\n"
+           "Verranno cancellati il contatto e la sua sessione, comprese le "
+           "chiavi del ratchet. L'operazione non si puo' annullare: per "
+           "riscrivervi servira' una nuova carta.").arg(alias),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes) return;
+    launchWithPassphrase(QStringLiteral("remove"),
+                         {QStringLiteral("--yes")}, {alias});
+  });
+  remove_layout->addWidget(new QLabel(tr("Alias:")), 0, 0);
+  remove_layout->addWidget(removeAliasCombo_, 0, 1);
+  remove_layout->addWidget(remove_button, 0, 2);
+  layout->addWidget(makeGroup(tr("Rimuovi contatto (remove)"), remove_layout));
   layout->addStretch(1);
   return tab;
 }
@@ -710,7 +736,7 @@ void MainWindow::parseContacts(const QString& text) {
   aliases.removeDuplicates();
 
   const QList<QComboBox*> combos{sendAliasCombo_, trustAliasCombo_,
-                                 resetAliasCombo_};
+                                 resetAliasCombo_, removeAliasCombo_};
   for (QComboBox* combo : combos) {
     if (combo == nullptr) continue;
     const QString current = combo->currentText();
@@ -854,6 +880,7 @@ QString MainWindow::commandTitle(const QString& command) const {
   if (command == QLatin1String("add")) return tr("Contatto aggiunto");
   if (command == QLatin1String("trust")) return tr("Contatto verificato");
   if (command == QLatin1String("reset-session")) return tr("Sessione azzerata");
+  if (command == QLatin1String("remove")) return tr("Contatto rimosso");
   if (command == QLatin1String("send")) return tr("Blocco cifrato");
   if (command == QLatin1String("recv")) return tr("Messaggio ricevuto");
   if (command == QLatin1String("anchor")) return tr("Rollback anchor");
@@ -1105,6 +1132,14 @@ void MainWindow::onFinished(int exit_code, bool normal_exit) {
   if (command == QLatin1String("add")) {
     showResultDialog(true, tr("Contatto aggiunto"),
                      tr("Verifica l'impronta con la persona, fuori banda."),
+                     commandStdout_);
+    refreshContacts();
+    return;
+  }
+
+  if (command == QLatin1String("remove")) {
+    showResultDialog(true, tr("Contatto rimosso"),
+                     tr("Il contatto e la sua sessione sono stati eliminati."),
                      commandStdout_);
     refreshContacts();
     return;

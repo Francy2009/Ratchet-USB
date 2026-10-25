@@ -73,7 +73,9 @@ delle sessioni. `card` genera la carta da condividere. `unlock` apre il vault
 e rinnova le prekey quando serve. `anchor` può registrare sul computer un
 riferimento per rilevare il ripristino di una vecchia copia del vault; questa
 protezione richiede un'attivazione esplicita. `migrate` prepara una migrazione
-di formato e `migrate --commit` la conferma dopo le verifiche.
+di formato e `migrate --commit` la conferma dopo le verifiche. `remove` elimina
+un contatto insieme alla sua sessione e alle chiavi del ratchet che contiene;
+non si può annullare, e per riscrivergli serve una nuova carta.
 
 Oltre al testo, `send` può portare con sé un file. `ratchet-usb send alice
 --file documento.odt` cifra il file con lo stesso ratchet e stampa un blocco

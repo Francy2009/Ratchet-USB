@@ -124,6 +124,7 @@ class MainWindow : public QMainWindow {
   QLineEdit* addAliasEdit_ = nullptr;
   QComboBox* trustAliasCombo_ = nullptr;
   QComboBox* resetAliasCombo_ = nullptr;
+  QComboBox* removeAliasCombo_ = nullptr;
 
   QComboBox* sendAliasCombo_ = nullptr;
   QPlainTextEdit* sendMessageEdit_ = nullptr;

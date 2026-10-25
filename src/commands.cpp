@@ -541,6 +541,54 @@ int cmd_reset_session(const Options& opts) {
   return 0;
 }
 
+int cmd_remove(const Options& opts) {
+  const fs::path usb = require_usb_path(opts);
+  const std::string name = require_value(
+      opts.name, "Contact alias: ", "a contact alias is required");
+  const fs::path path = vault::vault_path(usb);
+
+  OpenedVault opened = unlock_vault(path);
+  store::VaultStore& store = opened.store;
+
+  const int contact_idx = store.find_contact(name);
+  if (contact_idx < 0) throw Error("no contact named '" + name + "'");
+
+  // Deleting a contact also deletes the ratchet keys in its session, so it is
+  // a destructive operation: ask unless the caller has already confirmed with
+  // its own dialog (--yes, as the GUI does).
+  if (!opts.assume_yes) {
+    if (!terminal::stdin_is_tty()) {
+      throw Error("remove requires --yes or an interactive confirmation");
+    }
+    const std::string answer = terminal::read_line(
+        "Delete '" + terminal::escape_control_chars(name) +
+        "' and its session keys? Type REMOVE: ");
+    if (answer != "REMOVE") throw Error("contact removal cancelled");
+  }
+
+  const std::size_t idx = static_cast<std::size_t>(contact_idx);
+
+  // Sessions index into `contacts` by position, so drop this one first, then
+  // the contact, then renumber the sessions that followed it. Erasing the
+  // Session destroys its SecureBytes (root key, chain keys, skipped keys), the
+  // same way reset-session does.
+  store.sessions.erase(
+      std::remove_if(store.sessions.begin(), store.sessions.end(),
+                     [idx](const store::Session& session) {
+                       return session.contact_index == idx;
+                     }),
+      store.sessions.end());
+  store.contacts.erase(store.contacts.begin() + contact_idx);
+  for (store::Session& session : store.sessions) {
+    if (session.contact_index > idx) --session.contact_index;
+  }
+
+  app::save_vault(path, store, opened.params, opened.passphrase);
+  std::cout << "Removed '" << terminal::escape_control_chars(name)
+            << "' and its session.\n";
+  return 0;
+}
+
 int cmd_send(const Options& opts) {
   const fs::path usb = require_usb_path(opts);
   const std::string to =
@@ -744,6 +792,9 @@ int run(const Options& opts) {
   }
   if (opts.command == "reset-session") {
     return cmd_reset_session(opts);
+  }
+  if (opts.command == "remove") {
+    return cmd_remove(opts);
   }
   if (opts.command == "send") {
     return cmd_send(opts);

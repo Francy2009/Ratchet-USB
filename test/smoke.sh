@@ -298,5 +298,22 @@ FP_AFTER="$(printf '%s\n' "$NEW_PASS" |
 [[ ! -e "$ALICE/vault.bin.rekey-prepared" ]] ||
   fail "a prepared re-encryption was left behind"
 
+# ---------------------------------------------------------------------------
+# Removing a contact also removes its session, so it cannot be talked to again
+# until a fresh card is imported.
+
+step "removing a contact drops it and its session"
+printf '%s\n' "$NEW_PASS" |
+  "$BIN" remove --usb-path "$ALICE" --yes bob >/dev/null 2>&1 ||
+  fail "remove exited non-zero"
+if printf '%s\n' "$NEW_PASS" |
+     "$BIN" contacts --usb-path "$ALICE" 2>/dev/null | grep -q '^bob '; then
+  fail "the removed contact is still listed"
+fi
+if printf '%s\n' "$NEW_PASS" |
+     "$BIN" remove --usb-path "$ALICE" --yes bob >/dev/null 2>&1; then
+  fail "removing a contact that is no longer there should fail"
+fi
+
 echo
 echo "smoke: all end-to-end checks passed"

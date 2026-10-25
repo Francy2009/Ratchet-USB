@@ -68,7 +68,9 @@ block. `contacts` shows your contacts and their session status. `card` produces
 your shareable card. `unlock` opens the vault and refreshes prekeys when needed.
 `anchor` can enroll a reference on the computer to detect restoration of an
 older vault copy; you must enable it explicitly. `migrate` prepares a format
-migration, and `migrate --commit` confirms it after checks.
+migration, and `migrate --commit` confirms it after checks. `remove` deletes a
+contact together with its session and the ratchet keys in it; it cannot be
+undone, and talking to that person again needs a fresh card.
 
 Besides text, `send` can carry a file. `ratchet-usb send alice --file
 documento.odt` encrypts the file through the same ratchet and prints the same

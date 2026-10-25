@@ -37,6 +37,7 @@ const std::vector<CommandSpec>& specs() {
       {"contacts", {"--usb-path"}, 0},
       {"trust", {"--usb-path"}, 1},
       {"reset-session", {"--usb-path"}, 1},
+      {"remove", {"--usb-path", "--yes"}, 1},
       {"send", {"--usb-path", "--file"}, 2},
       {"recv", {"--usb-path", "--stage-file"}, 1},
       {"ui", {"--usb-path", "--lang", "--idle-lock"}, 0},
@@ -72,7 +73,7 @@ void assign_positional(Options& opts, const std::vector<std::string>& positional
   };
 
   if (opts.command == "add" || opts.command == "trust" ||
-      opts.command == "reset-session") {
+      opts.command == "reset-session" || opts.command == "remove") {
     if (const std::string* v = take()) {
       opts.name = *v;
     }
@@ -112,6 +113,7 @@ void print_usage(std::ostream& os) {
      << "  " << kProgram << " contacts --usb-path <dir>\n"
      << "  " << kProgram << " trust    --usb-path <dir> <alias>\n"
      << "  " << kProgram << " reset-session --usb-path <dir> <alias>\n"
+     << "  " << kProgram << " remove   --usb-path <dir> [--yes] <alias>\n"
      << "  " << kProgram
      << " send     --usb-path <dir> <alias> [message|--file <file>]\n"
      << "  " << kProgram << " recv     --usb-path <dir> [message] [--stage-file]\n"
@@ -145,6 +147,8 @@ void print_usage(std::ostream& os) {
      << "  trust     Mark <alias>'s fingerprint as verified out of band.\n"
      << "  reset-session  Explicitly discard session and skipped-key state;\n"
      << "            the next message requires a fresh authenticated opening.\n"
+     << "  remove    Delete <alias>, its card and its session, including the\n"
+     << "            ratchet keys. --yes skips the interactive confirmation.\n"
      << "  send      Encrypt a message for <alias> (running the initial\n"
      << "            handshake automatically if needed) and print the block\n"
      << "            to paste into the chat. [message] falls back to standard\n"
@@ -189,6 +193,7 @@ void print_usage(std::ostream& os) {
      << "  --stage-file         Stage a received file in the private temporary\n"
      << "                       folder and print its path, without asking on a\n"
      << "                       terminal whether to open it (recv only).\n"
+     << "  --yes                Skip the interactive confirmation (remove only).\n"
      << "  --lang en|it         Language of the interface (ui only). Without\n"
      << "                       it, an Italian locale gets Italian and\n"
      << "                       anything else gets English.\n"
@@ -297,6 +302,9 @@ Options parse_args(const std::vector<std::string_view>& args) {
     } else if (arg == "--commit") {
       opts.commit = true;
       note("--commit");
+    } else if (arg == "--yes") {
+      opts.assume_yes = true;
+      note("--yes");
     } else if (arg == "--stage-file") {
       opts.stage_received = true;
       note("--stage-file");

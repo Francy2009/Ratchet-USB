@@ -129,9 +129,10 @@ TEST("cli: passphrase is a command with its own options") {
 
 // --- positional arguments ----------------------------------------------------
 
-TEST("cli: add and trust take the alias positionally") {
+TEST("cli: add, trust and remove take the alias positionally") {
   CHECK_EQ(parse({"add", "alice"}).name, std::string("alice"));
   CHECK_EQ(parse({"trust", "alice"}).name, std::string("alice"));
+  CHECK_EQ(parse({"remove", "alice"}).name, std::string("alice"));
 }
 
 TEST("cli: send takes an alias then a message") {
@@ -205,6 +206,7 @@ TEST("cli: options are rejected for commands that do not take them") {
   CHECK_THROWS(parse({"recv", "--from-mnemonic"}));
   CHECK_THROWS(parse({"send", "alice", "hi", "--card", "f.txt"}));
   CHECK_THROWS(parse({"trust", "alice", "--rotate-spk"}));
+  CHECK_THROWS(parse({"trust", "alice", "--yes"}));
   CHECK_THROWS(parse({"init", "--replenish-otpk", "5"}));
 }
 
@@ -213,6 +215,7 @@ TEST("cli: each command still accepts its own options") {
   CHECK(parse({"card", "--fingerprint"}).fingerprint_only);
   CHECK(parse({"card", "--rotate-spk"}).rotate_spk);
   CHECK(parse({"migrate", "--commit"}).commit);
+  CHECK(parse({"remove", "alice", "--yes"}).assume_yes);
   CHECK_EQ(parse({"card", "--replenish-otpk", "10"}).replenish_otpk,
            static_cast<std::size_t>(10));
   CHECK_EQ(parse({"add", "alice", "--card", "a.txt"}).card_file,

@@ -21,7 +21,7 @@ export QT_PLUGIN_PATH="$here/usr/plugins:$here/usr/lib/qt6/plugins:${QT_PLUGIN_P
 export XDG_DATA_DIRS="$here/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 
 case "${1:-}" in
-  init|unlock|passphrase|anchor|migrate|card|add|contacts|trust|reset-session|send|recv|ui)
+  init|unlock|passphrase|anchor|migrate|card|add|contacts|trust|reset-session|remove|send|recv|ui)
     exec "$here/usr/bin/ratchet-usb" "$@"
     ;;
   help|version|-h|--help|-V|--version)

@@ -35,6 +35,9 @@ struct Options {
   bool fingerprint_only = false;
   bool from_mnemonic = false;
   bool commit = false;
+  // remove --yes: skip the interactive confirmation. The GUI asks with its own
+  // dialog first and has no terminal to type the confirmation into.
+  bool assume_yes = false;
   // recv --stage-file: stage a received file in the private temporary folder and
   // print its path, instead of asking on a terminal whether to open it. For a
   // front end with no terminal (the GUI) to hand the file to the user.

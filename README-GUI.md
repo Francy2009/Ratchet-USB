@@ -22,7 +22,8 @@ chmod +x Ratchet-USB-x86_64.AppImage
 
 È `ci/AppRun` a decidere cosa avviare: un sottocomando noto (`init`, `unlock`,
 `passphrase`, `anchor`, `migrate`, `card`, `add`, `contacts`, `trust`,
-`reset-session`, `send`, `recv`, `ui`) o un flag di aiuto/versione va alla CLI;
+`reset-session`, `remove`, `send`, `recv`, `ui`) o un flag di aiuto/versione va
+alla CLI;
 qualsiasi altra cosa, compreso nessun argomento, apre la GUI.
 
 I tag di questa linea (`v0.5.0-appimage-test.*`) sono **pre-release**: build di
@@ -102,10 +103,12 @@ funzioni che richiedono un vault aperto.
 2. Solo dopo uno sblocco riuscito le schede si attivano:
    - **Vault**: `anchor` (rollback anchor), `passphrase` (cambia passphrase).
    - **Contatti**: `card` (genera la card identità), `contacts` (lista identità e
-     stato), `add` (incolla la card o scegli un file), `trust`, `reset-session`.
+     stato), `add` (incolla la card o scegli un file), `trust`, `reset-session`,
+     `remove` (seleziona l'alias e conferma nel popup: elimina contatto e
+     sessione, chiavi comprese).
      Dopo lo sblocco l'elenco contatti viene letto automaticamente e i menu a
-     tendina (destinatario di `send`, alias di `trust`/`reset-session`) si
-     popolano da soli; il pulsante *Aggiorna elenco contatti* li ricarica.
+     tendina (destinatario di `send`, alias di `trust`/`reset-session`/`remove`)
+     si popolano da soli; il pulsante *Aggiorna elenco contatti* li ricarica.
    - **Messaggi**: `send` (testo o `--file`) e `recv` (incolla il blocco). Se il
      blocco contiene un file, compare un popup "File ricevuto" con *Apri
      cartella* (apre nel file manager la cartella temporanea privata dove
