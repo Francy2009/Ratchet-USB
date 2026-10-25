@@ -65,10 +65,13 @@ What it does not add:
   reading and interpreting terminfo files. The colours are the sixteen every
   terminal has had for forty years, written as a fixed set of SGR sequences,
   and they are off whenever the output is not a terminal or `NO_COLOR` is set.
-- **No graphical toolkit** or X11/Wayland window. The interface does not
-  publish message text to a desktop accessibility bus. On Linux, the optional
+- **The terminal interface needs no graphical toolkit** or X11/Wayland
+  window, and does not publish message text to a desktop accessibility bus.
+  On Linux, the optional
   rollback anchor uses libsecret and may communicate with Secret Service over
-  D-Bus; its record contains no message or key material.
+  D-Bus; its record contains no message or key material. A separate optional
+  Qt6 front-end exists (`ratchet-gui`); it is a process wrapper with its own
+  properties, described under "The optional desktop GUI" below.
 - **No config, history, cache, theme or layout files.** The interface keeps
   nothing of its own on the host. The optional rollback anchor is a non-secret
   generation/digest record in Secret Service and is created only by the
@@ -92,8 +95,9 @@ What it does not add:
   whose type a desktop might *execute* rather than display (`.desktop`, `.sh`,
   `.py`, executables and the like) is refused outright, and the file's
   extension is shown before any open is offered.
-- **No window title**, ever. A title naming the tool would appear in the
-  taskbar, the window switcher, and any screenshot or screen share.
+- **No window title in the terminal interface**, ever. A title naming the tool
+  would appear in the taskbar, the window switcher, and any screenshot or
+  screen share. (The optional desktop GUI does set a window title; see below.)
 - **No mouse reporting**, which keeps the escape sequences it has to decode
   down to a handful and leaves the terminal's own selection working.
 - **Nothing on the existing code paths.** With stdin or stdout redirected, none
@@ -141,6 +145,36 @@ itself green, and every run is closed again so a truncated line cannot leave
 the terminal — or the shell prompt after it — painted. There are tests for all
 of it, and a fuzzer that drives arbitrary bytes through the key decoder and the
 state machine and checks the drawn frame each time.
+
+## The optional desktop GUI
+
+`ratchet-gui` is a Qt6 front-end that runs the same `ratchet-usb` binary as a
+child process. It does not link the cryptographic core, does not read the vault
+format, and adds no cryptography of its own: every operation is a CLI
+invocation, so everything above still holds for the code that touches keys and
+messages. It is built only when Qt6 Widgets is present; without it the CLI and
+its tests are unaffected.
+
+What it changes, stated plainly:
+
+- **It has a window and a title.** The tool's name appears in the taskbar and
+  the window switcher, which the terminal interface deliberately avoids.
+- **It is a graphical toolkit, so accessibility applies.** Message text and
+  blocks live in Qt widgets, which the desktop accessibility bus (AT-SPI) can
+  expose — the terminal interface published nothing to it. Setting
+  `QT_ACCESSIBILITY=0` turns that bridge off.
+- **The passphrase lives in a widget for the session.** It is typed into a
+  masked field, handed to the child on stdin — never in `argv` and never in the
+  environment — and cleared when the vault is locked. As with the interface, it
+  stays in memory for as long as the vault is open, so the same "compromised
+  host is out of scope" caveat applies.
+- **A received file is staged by the same code.** `recv --stage-file` writes the
+  decrypted bytes into the same private `0700` directory as a `0600` file, and
+  the GUI opens that folder in the file manager. The refusal to open types a
+  desktop might execute is the same code path, so it applies here too.
+- **Child arguments are separated explicitly.** Message text, blocks and aliases
+  are passed after a literal `--`, so a value that begins with `-` is taken as a
+  value and never reinterpreted as a command-line option.
 
 What is explicitly **out of scope**, in the sense that the design does not try
 to defend against it:

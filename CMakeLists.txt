@@ -210,6 +210,15 @@ if(RATCHET_HARDENED AND NOT MSVC)
   endif()
 endif()
 
+# --- desktop GUI -----------------------------------------------------------
+# A Qt6 Widgets front-end that drives the ratchet-usb binary as a child process.
+# It does not link ratchet_core; when Qt6 is absent the subdirectory warns and
+# skips the target, so the CLI build and its tests are unaffected.
+option(RATCHET_BUILD_GUI "Build the Qt6 desktop GUI" ON)
+if(RATCHET_BUILD_GUI)
+  add_subdirectory(gui)
+endif()
+
 # --- tests -----------------------------------------------------------------
 if(RATCHET_BUILD_TESTS)
   enable_testing()

@@ -89,6 +89,24 @@ adatta al tuo caso, passa `--usb-path <cartella>` ai comandi o imposta
 
 ## Installazione
 
+### AppImage
+
+Ogni tag di questo repository pubblica un `Ratchet-USB-x86_64.AppImage` autonomo
+nella pagina [Releases](https://github.com/Francy2009/Ratchet-USB/releases).
+Contiene la CLI, la GUI Qt opzionale e tutte le librerie che servono, quindi non
+c'è niente da installare:
+
+```sh
+chmod +x Ratchet-USB-x86_64.AppImage
+./Ratchet-USB-x86_64.AppImage          # apre la GUI
+./Ratchet-USB-x86_64.AppImage card     # esegue un sottocomando della CLI
+```
+
+Questi tag sono pre-release: build di sviluppo, non release approvate per la
+produzione. La GUI è documentata in [README-GUI.md](README-GUI.md).
+
+### Dai sorgenti
+
 Il sistema supportato è Linux. Servono un compilatore C++20, CMake 3.16 o più
 recente, libsodium, OpenSSL 3.5 o più recente, Rust 1.88 o più recente e Cargo.
 `setup.sh` propone i pacchetti per dnf, apt, pacman o zypper prima di
@@ -185,7 +203,8 @@ sviluppo, non versioni approvate per l'uso in produzione.
 Puoi esaminare una tappa con `git show milestone/triple-ratchet` o confrontare
 due tappe con `git diff milestone/pq-hybrid milestone/triple-ratchet`. Gli
 stessi commit sono elencati su
-<https://github.com/Francy2009/Ratchet-USB/releases>.
+<https://github.com/Francy2009/Ratchet-USB/releases>. Le build AppImage
+pubblicate da questo repository, una per tag, sono elencate lì.
 
 ## Licenza e componenti
 

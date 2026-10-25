@@ -1,0 +1,101 @@
+name: Release AppImage
+
+# A tag is what publishes a build: it produces the AppImage, proves it is
+# self-contained, uploads it as an artifact and attaches it to the GitHub
+# Release for that tag. workflow_dispatch exists so the packaging path can be
+# exercised on a throwaway branch and test tag without touching main.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  OPENSSL_PREFIX: ${{ github.workspace }}/.openssl
+
+jobs:
+  appimage:
+    name: AppImage (ubuntu-22.04)
+    # Pinned rather than ubuntu-latest: the AppImage links against this
+    # distribution's glibc and Qt, and that is what decides the oldest system
+    # it will run on. Moving the runner silently moves that floor.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal
+
+      - name: Install build and packaging dependencies
+        # qt6-base-dev on jammy pulls in qmake6, the QPA plugins (the xcb
+        # platform plugin the GUI needs) and the Qt6Widgets CMake config.
+        # libgl1-mesa-dev is needed too: Qt6's CMake config calls
+        # find_package(OpenGL), and without the GL headers Qt6Widgets is
+        # reported as not found even though the package is installed.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libsodium-dev cmake curl perl make g++ \
+            qt6-base-dev libgl1-mesa-dev file wget desktop-file-utils
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.OPENSSL_PREFIX }}
+          # The runner image is part of the key on purpose. ci.yml runs on
+          # ubuntu-latest and shares the project; without the "-jammy" suffix
+          # this job would restore an OpenSSL built against a newer glibc and
+          # fail to link (__isoc23_strtol is glibc >= 2.38).
+          key: openssl-3.5.9-${{ runner.os }}-${{ runner.arch }}-jammy
+
+      - name: Install pinned OpenSSL 3.5 LTS (static)
+        run: ./ci/install-openssl.sh "$OPENSSL_PREFIX"
+
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_INSTALL_PREFIX=/usr
+          -DOPENSSL_ROOT_DIR="$OPENSSL_PREFIX"
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: End-to-end smoke test
+        run: ./test/smoke.sh build/ratchet-usb
+
+      - name: Build the AppImage
+        run: ./ci/build-appimage.sh build build/Ratchet-USB-x86_64.AppImage
+
+      - name: Verify the AppImage is self-contained
+        run: ./ci/verify-appimage.sh build/Ratchet-USB-x86_64.AppImage
+
+      - name: Upload the AppImage as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ratchet-USB-x86_64.AppImage
+          path: build/Ratchet-USB-x86_64.AppImage
+          if-no-files-found: error
+
+      - name: Attach the AppImage to the GitHub Release
+        # Only a tag publishes a release. A workflow_dispatch run stops after
+        # the artifact upload above.
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/Ratchet-USB-x86_64.AppImage
+          fail_on_unmatched_files: true
+          # This tree is the test-only 0.5.0-dev line, so a tag here is a
+          # pre-release by default: GitHub must not offer it as the stable
+          # "Latest" build to somebody who did not ask for a test build.
+          # Remove this line to publish a stable release.
+          prerelease: true

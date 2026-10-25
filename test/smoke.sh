@@ -183,6 +183,40 @@ for i in 3 1 2; do
 done
 
 # ---------------------------------------------------------------------------
+# The desktop GUI passes message text after a literal "--" (gui/main_window.cpp
+# keeps flags and positionals apart and emits the separator itself). That
+# separator is what stops a message beginning with "-" from being read as an
+# option: without it the CLI prints its help and exits 0, so a front-end shows
+# "operation complete" while nothing was encrypted. This drives the exact argv
+# shape the GUI emits, in both directions.
+
+step "a message beginning with a dash is encrypted, not read as an option"
+DASH_MSG="--file this is a message, not a flag"
+printf '%s\n' "$ALICE_PASS" |
+  "$BIN" send --usb-path "$ALICE" -- bob "$DASH_MSG" >"$WORK/dash.txt" 2>/dev/null ||
+  fail "send rejected a dash-leading message"
+grep -q "BEGIN RATCHET MESSAGE" "$WORK/dash.txt" ||
+  fail "a dash-leading message produced no wire block"
+if grep -qi "usage:" "$WORK/dash.txt"; then
+  fail "a dash-leading message was read as an option (the CLI printed its help)"
+fi
+
+printf '%s\n' "$BOB_PASS" |
+  "$BIN" recv --usb-path "$BOB" -- "$(cat "$WORK/dash.txt")" >"$WORK/dash-recv.txt" 2>/dev/null ||
+  fail "recv rejected a dash-leading block"
+grep -qF -- "$DASH_MSG" "$WORK/dash-recv.txt" ||
+  fail "the dash-leading message did not survive the round trip"
+
+# The check above only means something if the unseparated form really does
+# swallow the text. Assert that, so the day it stops being true the test says
+# so instead of passing vacuously.
+printf '%s\n' "$ALICE_PASS" |
+  "$BIN" send --usb-path "$ALICE" bob -h >"$WORK/nosep.txt" 2>&1 || true
+if grep -q "BEGIN RATCHET MESSAGE" "$WORK/nosep.txt"; then
+  fail "the unseparated form encrypted '-h' after all; the separator check is now vacuous"
+fi
+
+# ---------------------------------------------------------------------------
 # Things that must fail.
 
 step "a tampered message must be rejected"

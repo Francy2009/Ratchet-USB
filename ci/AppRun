@@ -1,0 +1,33 @@
+#!/bin/sh
+# One AppImage, two entry points.
+#
+# A known ratchet-usb subcommand (or a help/version flag) runs the bundled CLI;
+# anything else, including no arguments, opens the GUI. Both binaries live in
+# usr/bin, so the GUI's own discovery finds ratchet-usb beside itself.
+#
+# linuxdeploy normally generates AppRun itself. This replaces it, so it has to
+# reproduce the environment that the generated one sets up -- otherwise the
+# bundled Qt libraries and platform plugins are not found at run time.
+set -e
+
+if [ -n "${APPDIR:-}" ]; then
+  here="$APPDIR"
+else
+  here="$(cd "$(dirname "$0")" && pwd)"
+fi
+
+export LD_LIBRARY_PATH="$here/usr/lib:$here/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
+export QT_PLUGIN_PATH="$here/usr/plugins:$here/usr/lib/qt6/plugins:${QT_PLUGIN_PATH:-}"
+export XDG_DATA_DIRS="$here/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+
+case "${1:-}" in
+  init|unlock|passphrase|anchor|migrate|card|add|contacts|trust|reset-session|send|recv|ui)
+    exec "$here/usr/bin/ratchet-usb" "$@"
+    ;;
+  help|version|-h|--help|-V|--version)
+    exec "$here/usr/bin/ratchet-usb" "$@"
+    ;;
+  *)
+    exec "$here/usr/bin/ratchet-gui" "$@"
+    ;;
+esac

@@ -81,6 +81,25 @@ your setup, pass `--usb-path <directory>` to commands or set `RATCHET_USB_PATH`.
 
 ## Installing
 
+### AppImage
+
+Each tag on this repository publishes a self-contained
+`Ratchet-USB-x86_64.AppImage` under
+[Releases](https://github.com/Francy2009/Ratchet-USB/releases). It bundles the
+CLI, the optional Qt GUI, and every library they need, so nothing has to be
+installed:
+
+```sh
+chmod +x Ratchet-USB-x86_64.AppImage
+./Ratchet-USB-x86_64.AppImage          # opens the GUI
+./Ratchet-USB-x86_64.AppImage card     # runs a CLI subcommand
+```
+
+Those tags are pre-releases: development builds, not production-approved
+releases. The GUI itself is documented in [README-GUI.md](README-GUI.md).
+
+### From source
+
 Linux is the supported system. You need a C++20 compiler, CMake 3.16 or newer,
 libsodium, OpenSSL 3.5 or newer, Rust 1.88 or newer, and Cargo. `setup.sh`
 proposes packages for dnf, apt, pacman, or zypper before installing them.
@@ -169,7 +188,8 @@ They are not production-approved releases.
 
 Inspect a step with `git show milestone/triple-ratchet`, or compare two steps
 with `git diff milestone/pq-hybrid milestone/triple-ratchet`. The same commits
-are listed at <https://github.com/Francy2009/Ratchet-USB/releases>.
+are listed at <https://github.com/Francy2009/Ratchet-USB/releases>. The AppImage
+builds published from this repository, one per tag, are listed there too.
 
 ## License and dependencies
 

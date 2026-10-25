@@ -644,6 +644,15 @@ int cmd_recv(const Options& opts) {
       std::cerr << "not opening it: a '." << received->ext
                 << "' file can run code; save it and inspect it yourself if "
                    "you trust the sender\n";
+    } else if (opts.stage_received) {
+      // No terminal to ask on (the GUI drives this as a child process): stage
+      // the file and print its path so the front end can show it and open the
+      // folder itself.
+      try {
+        std::cout << file::stage_file(*received) << "\n";
+      } catch (const std::exception& e) {
+        std::cerr << "could not stage the received file: " << e.what() << "\n";
+      }
     } else if (terminal::stdin_is_tty()) {
       const std::string answer = terminal::read_line(
           "Show the ." + received->ext +

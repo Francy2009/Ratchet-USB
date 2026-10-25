@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Ratchet-USB
+GenericName=Encrypted messaging
+Comment=Encrypted vault and hybrid post-quantum messaging
+Exec=ratchet-gui
+Icon=ratchet-usb
+Terminal=false
+Categories=Utility;Security;
+Keywords=encryption;messaging;ratchet;pqxdh;

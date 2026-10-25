@@ -35,6 +35,10 @@ struct Options {
   bool fingerprint_only = false;
   bool from_mnemonic = false;
   bool commit = false;
+  // recv --stage-file: stage a received file in the private temporary folder and
+  // print its path, instead of asking on a terminal whether to open it. For a
+  // front end with no terminal (the GUI) to hand the file to the user.
+  bool stage_received = false;
   // Words in the generated vault passphrase (init and passphrase). Six by
   // default; see ratchet/passphrase.hpp for the entropy this buys.
   std::size_t passphrase_words = passphrase::kDefaultWords;

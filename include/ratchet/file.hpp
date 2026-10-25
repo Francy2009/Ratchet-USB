@@ -152,6 +152,19 @@ void cleanup_staging();
 // the desktop may execute (see is_dangerous_extension()).
 void open_in_file_manager(const FilePayload& file);
 
+// Stages `file` in the private temporary folder and returns the path of the
+// staged file, without opening anything. This is the staging half of
+// open_in_file_manager(), exposed so a front end that has no terminal (the GUI
+// drives recv as a child process) can put the file on screen and let the user
+// open the folder itself.
+//
+// The folder is still the session's private staging directory and is removed by
+// the same detached helper: the caller must use the path before that happens.
+//
+// Throws Error on failure, or if `file.ext` names a type the desktop may execute
+// (see is_dangerous_extension()).
+std::string stage_file(const FilePayload& file);
+
 }  // namespace ratchet::file
 
 #endif  // RATCHET_FILE_HPP

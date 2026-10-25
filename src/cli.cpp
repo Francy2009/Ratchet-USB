@@ -38,7 +38,7 @@ const std::vector<CommandSpec>& specs() {
       {"trust", {"--usb-path"}, 1},
       {"reset-session", {"--usb-path"}, 1},
       {"send", {"--usb-path", "--file"}, 2},
-      {"recv", {"--usb-path"}, 1},
+      {"recv", {"--usb-path", "--stage-file"}, 1},
       {"ui", {"--usb-path", "--lang", "--idle-lock"}, 0},
   };
   return table;
@@ -114,7 +114,7 @@ void print_usage(std::ostream& os) {
      << "  " << kProgram << " reset-session --usb-path <dir> <alias>\n"
      << "  " << kProgram
      << " send     --usb-path <dir> <alias> [message|--file <file>]\n"
-     << "  " << kProgram << " recv     --usb-path <dir> [message]\n"
+     << "  " << kProgram << " recv     --usb-path <dir> [message] [--stage-file]\n"
      << "  " << kProgram
      << " ui       [--usb-path <dir>] [--lang en|it] [--idle-lock <s>]\n"
      << "\n"
@@ -155,6 +155,9 @@ void print_usage(std::ostream& os) {
      << "  recv      Decrypt a pasted message block (establishing the\n"
      << "            session automatically if it is the first one). [message]\n"
      << "            falls back to standard input, or a prompt, when omitted.\n"
+     << "            With --stage-file, a received file is staged in the private\n"
+     << "            temporary folder and its path is printed, instead of asking\n"
+     << "            on a terminal whether to open it.\n"
      << "  ui        Open the full-screen terminal interface, which does all\n"
      << "            of the above without flags. This is what running the\n"
      << "            program with no arguments does, on a terminal; with the\n"
@@ -183,6 +186,9 @@ void print_usage(std::ostream& os) {
      << "  --fingerprint        Print only the identity fingerprint (card only).\n"
      << "  --card <file>        Read a contact card from a file (add only).\n"
      << "  --file <file>        Encrypt a file instead of text (send only).\n"
+     << "  --stage-file         Stage a received file in the private temporary\n"
+     << "                       folder and print its path, without asking on a\n"
+     << "                       terminal whether to open it (recv only).\n"
      << "  --lang en|it         Language of the interface (ui only). Without\n"
      << "                       it, an Italian locale gets Italian and\n"
      << "                       anything else gets English.\n"
@@ -291,6 +297,9 @@ Options parse_args(const std::vector<std::string_view>& args) {
     } else if (arg == "--commit") {
       opts.commit = true;
       note("--commit");
+    } else if (arg == "--stage-file") {
+      opts.stage_received = true;
+      note("--stage-file");
     } else if (arg == "--lang") {
       opts.lang = std::string(next("--lang"));
       if (!i18n::is_valid_choice(opts.lang)) {

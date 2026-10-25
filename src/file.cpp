@@ -466,14 +466,7 @@ std::optional<FilePayload> decode_file_payload(const std::string& plaintext) {
   return out;
 }
 
-void open_in_file_manager(const FilePayload& file) {
-  // The file is not handed to an application directly. The bytes are staged at
-  // a real path on a private tmpfs -- a sandboxed application reached through
-  // xdg-desktop-portal does not inherit our descriptors, so a memfd or
-  // /proc/self/fd path cannot be used -- and the *folder* holding it is opened
-  // in the file manager, so the receiver chooses what to do with it. The folder
-  // is removed when ratchet-usb exits.
-
+std::string stage_file(const FilePayload& file) {
   // A type the desktop may execute is never staged at all: the dispatch keys
   // off the extension, so a verified-but-hostile sender could otherwise have
   // the receiver run a ".desktop" or a shell script from the folder.
@@ -513,6 +506,18 @@ void open_in_file_manager(const FilePayload& file) {
     throw Error("cannot write file to temporary file: " + msg);
   }
   ::close(file_fd);
+  return path;
+}
+
+void open_in_file_manager(const FilePayload& file) {
+  // The file is not handed to an application directly. The bytes are staged at
+  // a real path on a private tmpfs -- a sandboxed application reached through
+  // xdg-desktop-portal does not inherit our descriptors, so a memfd or
+  // /proc/self/fd path cannot be used -- and the *folder* holding it is opened
+  // in the file manager, so the receiver chooses what to do with it. The folder
+  // is removed when ratchet-usb exits.
+  const std::string path = stage_file(file);
+  const std::string dir = std::filesystem::path(path).parent_path().string();
 
   // ── step 3: fork + exec xdg-open on the folder ───────────────────────────
   const pid_t pid = ::fork();
