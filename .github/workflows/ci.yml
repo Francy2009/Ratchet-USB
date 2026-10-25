@@ -37,7 +37,7 @@ jobs:
     name: Test vectors are in sync
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
@@ -61,7 +61,7 @@ jobs:
     name: Vendored SPQR and bridge tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.88.0 --profile minimal
@@ -79,7 +79,7 @@ jobs:
     name: RustSec advisories for both lockfiles
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install checksum-verified cargo-audit
         run: |
@@ -114,7 +114,7 @@ jobs:
           - compiler: clang
             cxx: clang++
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.88.0 --profile minimal
@@ -173,7 +173,7 @@ jobs:
     env:
       SODIUM_VERSION: 1.0.22
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.88.0 --profile minimal
@@ -252,7 +252,7 @@ jobs:
     name: AddressSanitizer + UndefinedBehaviorSanitizer
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.88.0 --profile minimal
@@ -311,7 +311,7 @@ jobs:
     name: Valgrind
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.88.0 --profile minimal
@@ -357,7 +357,7 @@ jobs:
     name: Fuzz the untrusted-input parsers
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.88.0 --profile minimal
@@ -454,7 +454,7 @@ jobs:
     name: clang-tidy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.88.0 --profile minimal
