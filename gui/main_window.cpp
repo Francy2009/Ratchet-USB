@@ -15,6 +15,7 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFrame>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -33,6 +34,7 @@
 #include <QProcessEnvironment>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QScrollArea>
 #include <QSpinBox>
 #include <QStatusBar>
 #include <QStyle>
@@ -53,6 +55,17 @@ QGroupBox* makeGroup(const QString& title, QLayout* layout) {
   auto* box = new QGroupBox(title);
   box->setLayout(layout);
   return box;
+}
+
+// A tab can be taller than the window. Without a scroll area the controls at
+// the bottom are laid out past the visible edge and there is no way to reach
+// them (the contact-removal block sat under "Azzera sessione").
+QWidget* scrollable(QWidget* content) {
+  auto* area = new QScrollArea;
+  area->setWidgetResizable(true);
+  area->setFrameShape(QFrame::NoFrame);
+  area->setWidget(content);
+  return area;
 }
 
 // /proc/mounts escapes characters that would break its field layout.
@@ -466,7 +479,7 @@ QWidget* MainWindow::buildContactsTab() {
   remove_layout->addWidget(remove_button, 0, 2);
   layout->addWidget(makeGroup(tr("Rimuovi contatto (remove)"), remove_layout));
   layout->addStretch(1);
-  return tab;
+  return scrollable(tab);
 }
 
 QWidget* MainWindow::buildMessagesTab() {
@@ -535,7 +548,7 @@ QWidget* MainWindow::buildMessagesTab() {
   recv_layout->addWidget(recv_button);
   layout->addWidget(makeGroup(tr("Ricevi (recv)"), recv_layout));
   layout->addStretch(1);
-  return tab;
+  return scrollable(tab);
 }
 
 void MainWindow::chooseBinary() {
