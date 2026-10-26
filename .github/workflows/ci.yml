@@ -448,6 +448,10 @@ jobs:
             -max_total_time="$DURATION" -rss_limit_mb=2048 -print_final_stats=1
 
       - name: Upload any input that failed
+        # A crash or timeout input is diagnostic evidence: it is kept longer
+        # than the coverage report, and every CI run of a branch replaces the
+        # previous upload of the same name, so at most one copy exists per
+        # workflow/branch at a time.
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
@@ -457,6 +461,7 @@ jobs:
             oom-*
             timeout-*
           if-no-files-found: ignore
+          retention-days: 30
 
   # ---------------------------------------------------------------------
   # Static analysis.
@@ -558,11 +563,15 @@ jobs:
           cat coverage-report/summary.txt
 
       - name: Upload the coverage report
+        # A report, not a gate: a week is enough for "which branches did the
+        # last CI run miss". Every run uploads the same name, so a branch keeps
+        # only its newest report once the older one expires.
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: coverage-report
           path: coverage-report
           if-no-files-found: error
+          retention-days: 7
 
   # ---------------------------------------------------------------------
   # The CLI must build and pass its tests when Qt6 is not installed at all;
