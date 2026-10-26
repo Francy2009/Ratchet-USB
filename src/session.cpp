@@ -250,6 +250,9 @@ ReceiveResult receive(store::VaultStore& vault, const IdentitySigningSecretKey& 
       result.plaintext = ratchet::decrypt(
           fresh, env.header, env.ciphertext, message::envelope_aad_prefix(env));
     }
+    // The remaining vault updates can allocate and throw. The decrypted body
+    // must not be left in a local result that is then unwound.
+    StringWipe wipe_plaintext(result.plaintext);
 
     const int existing = vault.find_session(contact_index);
     if (existing >= 0) {
@@ -288,6 +291,7 @@ ReceiveResult receive(store::VaultStore& vault, const IdentitySigningSecretKey& 
     vault.contacts[contact_index].minimum_suite = env.suite;
 
     result.session_established = true;
+    wipe_plaintext.dismiss();
     return result;
   }
 
@@ -331,8 +335,12 @@ ReceiveResult receive(store::VaultStore& vault, const IdentitySigningSecretKey& 
             s, env.header, env.ciphertext, message::envelope_aad_prefix(env));
         s.status = store::Session::Status::Confirmed;
       }
+      // The caller takes ownership on the return below; until then an
+      // exception (a failed session move, for example) must wipe the body.
+      StringWipe wipe_plaintext(result.plaintext);
 
       result.session_established = false;
+      wipe_plaintext.dismiss();
       return result;
     }
   }

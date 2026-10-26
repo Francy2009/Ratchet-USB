@@ -58,6 +58,13 @@ app::OpenedVault unlock_vault(const std::filesystem::path& path,
 std::string read_bounded(std::istream& input, std::size_t max_bytes,
                          const char* what);
 
+// Reads exactly `bytes` bytes from `input` as one value. Used by the
+// --stdin-payload front-end path: the length is sent by the parent, so the
+// payload can contain newlines, blank lines, NUL bytes and arbitrary UTF-8 and
+// still end exactly before the passphrase begins. Throws Error if the stream
+// ends early; the partial buffer is wiped on the way out.
+std::string read_exact(std::istream& input, std::size_t bytes, const char* what);
+
 std::string read_text_arg_or_stdin(const std::optional<std::string>& arg,
                                    const char* prompt_if_tty,
                                    std::size_t max_bytes);

@@ -121,6 +121,7 @@ cmake_pop_check_state()
 # --- library ---------------------------------------------------------------
 add_library(ratchet_core
             src/secure.cpp
+            src/gui_format.cpp
             src/bip39.cpp
             src/bip39_wordlist.cpp
             src/passphrase.cpp

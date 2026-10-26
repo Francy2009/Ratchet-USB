@@ -1,6 +1,7 @@
 #include "ratchet/commands.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <optional>
@@ -13,6 +14,7 @@
 #include "ratchet/cli.hpp"
 #include "ratchet/command_io.hpp"
 #include "ratchet/file.hpp"
+#include "ratchet/gui_format.hpp"
 #include "ratchet/i18n.hpp"
 #include "ratchet/identity.hpp"
 #include "ratchet/media.hpp"
@@ -40,6 +42,34 @@ using app::kReplenishThreshold;
 
 namespace {
 
+// --stdin-payload is a front-end protocol: the payload occupies the beginning
+// of stdin, so the drive must already be known and must not be resolved by a
+// prompt that would consume those bytes. The GUI always passes --usb-path; the
+// environment fallback is accepted because it needs no reading either.
+void require_known_usb_for_payload(const Options& opts) {
+  if (!opts.stdin_payload_bytes || !opts.usb_path.empty()) {
+    return;
+  }
+  const char* env = std::getenv("RATCHET_USB_PATH");
+  if (env != nullptr && env[0] != '\0') {
+    return;
+  }
+  throw Error("--stdin-payload requires --usb-path or RATCHET_USB_PATH");
+}
+
+// A view over a SecureString, without copying it. An empty SecureString has no
+// buffer worth exposing, so it maps to an empty view.
+std::string_view view_of(const SecureString& text) {
+  return text.empty() ? std::string_view{}
+                      : std::string_view(text.data(), text.size());
+}
+
+void write_structured_or_throw(const gui_format::Result& result) {
+  if (!gui_format::write_result(std::cout, result)) {
+    throw Error("could not write structured output");
+  }
+}
+
 int cmd_init(const Options& opts) {
   const fs::path usb = require_usb_path(opts, /*for_init=*/true);
   warn_if_host_disk(usb);
@@ -52,6 +82,9 @@ int cmd_init(const Options& opts) {
   vault::FileLock init_lock(path);
 
   bip39::Entropy entropy;
+  // Kept alive until the structured result has been written, but only in that
+  // mode: the default path still drops it as soon as it has been printed.
+  SecureString recovery;
   if (opts.from_mnemonic) {
     SecureString mnemonic =
         terminal::read_passphrase("Recovery words (12, space-separated): ");
@@ -62,18 +95,19 @@ int cmd_init(const Options& opts) {
                  "ever lived in the old vault.bin, never in the words.\n\n";
   } else {
     bip39::generate_entropy(entropy);
-    SecureString mnemonic;
-    bip39::encode(entropy, mnemonic);
-    // English on the command line whatever the locale says: the CLI's output
-    // is part of the project's public face, and scripts read it.
-    app::print_word_grid(mnemonic, std::cout,
-                         i18n::t(i18n::Lang::En, i18n::Str::RecoveryHeading),
-                         i18n::t(i18n::Lang::En, i18n::Str::RecoveryNote));
-    terminal::wait_for_enter("Press ENTER once you have written them down...");
-    terminal::clear_screen();
-    // The words are on paper by now; nothing is served by keeping them in
-    // memory for the rest of `init`.
-    mnemonic.clear();
+    bip39::encode(entropy, recovery);
+    if (!opts.structured_output) {
+      // English on the command line whatever the locale says: the CLI's output
+      // is part of the project's public face, and scripts read it.
+      app::print_word_grid(recovery, std::cout,
+                           i18n::t(i18n::Lang::En, i18n::Str::RecoveryHeading),
+                           i18n::t(i18n::Lang::En, i18n::Str::RecoveryNote));
+      terminal::wait_for_enter("Press ENTER once you have written them down...");
+      terminal::clear_screen();
+      // The words are on paper by now; nothing is served by keeping them in
+      // memory for the rest of `init`.
+      recovery.clear();
+    }
   }
 
   store::VaultStore store;
@@ -103,13 +137,15 @@ int cmd_init(const Options& opts) {
   // list, and one passed on the command line would land in the shell history.
   // This is the vault passphrase, not the recovery phrase above: it unlocks the
   // vault and nothing else.
-  app::print_word_grid(
-      passphrase, std::cerr,
-      i18n::t(i18n::Lang::En, i18n::Str::PassphraseHeading),
-      i18n::t(i18n::Lang::En, i18n::Str::PassphraseNote));
-  terminal::wait_for_enter(
-      "Press ENTER once you have written the passphrase down...");
-  terminal::clear_screen();
+  if (!opts.structured_output) {
+    app::print_word_grid(
+        passphrase, std::cerr,
+        i18n::t(i18n::Lang::En, i18n::Str::PassphraseHeading),
+        i18n::t(i18n::Lang::En, i18n::Str::PassphraseNote));
+    terminal::wait_for_enter(
+        "Press ENTER once you have written the passphrase down...");
+    terminal::clear_screen();
+  }
 
   std::cerr << "Deriving the vault key with Argon2id ("
             << opts.params.mem_cost_kb / 1024 << " MiB, " << opts.params.time_cost
@@ -120,7 +156,9 @@ int cmd_init(const Options& opts) {
   // asks for it one word per line rather than one line.
   const std::vector<uint8_t> file =
       vault::seal(plaintext, passphrase, opts.params, vault::kWordVersion);
-  passphrase.clear();
+  if (!opts.structured_output) {
+    passphrase.clear();
+  }
 
   vault::write_file(path, file, opts.force);
 
@@ -133,6 +171,18 @@ int cmd_init(const Options& opts) {
             << " anchor --usb-path <dir>` to enroll host rollback protection,\n"
             << "then `" << kProgram
             << " card --usb-path <dir>` to get the contact card to share.\n";
+
+  if (opts.structured_output) {
+    // Only after the vault is on disk. A failed init leaves no structured
+    // block, so the GUI can never display a passphrase for a vault that was
+    // not written.
+    write_structured_or_throw(gui_format::Result{
+        "init", "ok", opts.from_mnemonic ? "mnemonic" : "generated",
+        view_of(passphrase), opts.passphrase_words, view_of(recovery),
+        opts.from_mnemonic ? 0 : bip39::kWordCount});
+    passphrase.clear();
+    recovery.clear();
+  }
   return 0;
 }
 
@@ -294,23 +344,40 @@ int cmd_passphrase(const Options& opts) {
   // it, not a limitation of this command.
   SecureString next;
   passphrase::generate(next, opts.passphrase_words);
-  app::print_word_grid(
-      next, std::cerr,
-      i18n::t(i18n::Lang::En, i18n::Str::PassphraseHeading),
-      i18n::t(i18n::Lang::En, i18n::Str::PassphraseNote));
+  if (!opts.structured_output) {
+    app::print_word_grid(
+        next, std::cerr,
+        i18n::t(i18n::Lang::En, i18n::Str::PassphraseHeading),
+        i18n::t(i18n::Lang::En, i18n::Str::PassphraseNote));
+  }
   // The new phrase is shown before anything is re-encrypted, and Enter is not
   // the only way on: Esc backs out and leaves the vault exactly as it was.
   if (!terminal::confirm_enter_or_escape(
           std::string(i18n::t(i18n::Lang::En, i18n::Str::PassphraseConfirm)))) {
     next.clear();
     std::cout << i18n::t(i18n::Lang::En, i18n::Str::PassphraseCancelled) << "\n";
+    if (opts.structured_output) {
+      write_structured_or_throw(gui_format::Result{
+          "passphrase", "cancelled", {}, {}, 0, {}, 0});
+    }
     return 0;
   }
-  terminal::clear_screen();
+  if (!opts.structured_output) {
+    terminal::clear_screen();
+  }
 
   app::rekey_vault(path, opened.store, opened.params, next);
-  next.clear();
+  if (!opts.structured_output) {
+    next.clear();
+  }
   std::cout << i18n::t(i18n::Lang::En, i18n::Str::PassphraseChanged) << "\n";
+  if (opts.structured_output) {
+    // After the rekey has completed: a failure leaves no block, so the GUI
+    // cannot show a new passphrase that the vault does not use.
+    write_structured_or_throw(gui_format::Result{
+        "passphrase", "ok", {}, view_of(next), opts.passphrase_words, {}, 0});
+    next.clear();
+  }
   return 0;
 }
 
@@ -590,13 +657,48 @@ int cmd_remove(const Options& opts) {
 }
 
 int cmd_send(const Options& opts) {
+  if (opts.stdin_payload_bytes && opts.message.has_value()) {
+    throw Error("--stdin-payload and a message cannot be combined");
+  }
+  if (opts.stdin_payload_bytes && !opts.file_path.empty()) {
+    throw Error("--stdin-payload and --file cannot be combined");
+  }
+  require_known_usb_for_payload(opts);
   const fs::path usb = require_usb_path(opts);
+  if (opts.stdin_payload_bytes && opts.to.empty()) {
+    // A prompt here would read from the same stdin as the payload and consume
+    // its first bytes as an alias.
+    throw Error("a recipient alias is required with --stdin-payload");
+  }
   const std::string to =
       require_value(opts.to, "Send to (contact alias): ", "a recipient alias is required");
   const fs::path path = vault::vault_path(usb);
 
   if (!opts.file_path.empty() && opts.message.has_value()) {
     throw Error("--file and a message cannot be combined");
+  }
+
+  // Read a front-end payload before the passphrase: the two share stdin, and
+  // the exact byte count is what lets a multiline, blank-line-containing or
+  // NUL-containing message end where the passphrase begins.
+  //
+  // The guard wipes on every path out, including the ones that never reach
+  // session::send(): a wrong passphrase, a missing contact, a failed save.
+  std::string plaintext;
+  StringWipe wipe_plaintext(plaintext);
+  std::vector<uint8_t> raw;
+  struct RawWipe {
+    std::vector<uint8_t>& bytes;
+    ~RawWipe() { wipe_vector(bytes); }
+  } raw_wipe{raw};
+  if (opts.stdin_payload_bytes) {
+    if (*opts.stdin_payload_bytes > message::kMaxPlaintextBytes) {
+      throw Error("--stdin-payload exceeds the 4 MiB plaintext limit");
+    }
+    plaintext = read_exact(std::cin, *opts.stdin_payload_bytes, "message");
+    if (plaintext.empty()) {
+      throw Error("message must not be empty");
+    }
   }
 
   OpenedVault opened = unlock_vault(path);
@@ -611,18 +713,20 @@ int cmd_send(const Options& opts) {
   // With --file the message is the framed file; otherwise it is the text the
   // user typed. Either way the same session::send call does the encryption, so
   // a file is protected by exactly the keys a message is.
-  std::string plaintext;
-  std::vector<uint8_t> raw;
-  if (!opts.file_path.empty()) {
-    raw = file::load_file(fs::path(opts.file_path));
-    const std::string ext = file::extension_for(fs::path(opts.file_path), raw);
-    plaintext = file::encode_file_payload(raw, ext);
-    sodium_memzero(raw.data(), raw.size());
-  } else {
-    plaintext = read_text_arg_or_stdin(opts.message, "Message (end with Ctrl-D): ",
-                                       message::kMaxPlaintextBytes);
-    if (plaintext.empty()) {
-      throw Error("message must not be empty");
+  if (!opts.stdin_payload_bytes) {
+    if (!opts.file_path.empty()) {
+      raw = file::load_file(fs::path(opts.file_path));
+      const std::string ext =
+          file::extension_for(fs::path(opts.file_path), raw);
+      plaintext = file::encode_file_payload(raw, ext);
+      wipe_vector(raw);
+    } else {
+      plaintext = read_text_arg_or_stdin(
+          opts.message, "Message (end with Ctrl-D): ",
+          message::kMaxPlaintextBytes);
+      if (plaintext.empty()) {
+        throw Error("message must not be empty");
+      }
     }
   }
 
@@ -634,6 +738,7 @@ int cmd_send(const Options& opts) {
       session::send(store, identity_sk, identity_pk, contact_index, plaintext);
   identity_sk.wipe();
   wipe_string(plaintext);
+  wipe_plaintext.dismiss();
 
   app::save_vault(path, store, opened.params, opened.passphrase);
 
@@ -645,6 +750,10 @@ int cmd_send(const Options& opts) {
 }
 
 int cmd_recv(const Options& opts) {
+  if (opts.stdin_payload_bytes && opts.message.has_value()) {
+    throw Error("--stdin-payload and a block cannot be combined");
+  }
+  require_known_usb_for_payload(opts);
   const fs::path usb = require_usb_path(opts);
   const fs::path path = vault::vault_path(usb);
 
@@ -652,9 +761,21 @@ int cmd_recv(const Options& opts) {
   // helper never inherits key material.
   file::prepare_staging();
 
-  const std::string block =
-      read_text_arg_or_stdin(opts.message, "Paste the message block, then Ctrl-D: ",
-                             std::size_t{12} * 1024u * 1024u);
+  std::string block;
+  if (opts.stdin_payload_bytes) {
+    constexpr std::size_t kMaxBlockBytes = std::size_t{12} * 1024u * 1024u;
+    if (*opts.stdin_payload_bytes > kMaxBlockBytes) {
+      throw Error("--stdin-payload exceeds the block size limit");
+    }
+    block = read_exact(std::cin, *opts.stdin_payload_bytes, "message block");
+    if (block.empty()) {
+      throw Error("message block must not be empty");
+    }
+  } else {
+    block = read_text_arg_or_stdin(
+        opts.message, "Paste the message block, then Ctrl-D: ",
+        std::size_t{12} * 1024u * 1024u);
+  }
 
   OpenedVault opened = unlock_vault(path);
   store::VaultStore& store = opened.store;
@@ -666,6 +787,11 @@ int cmd_recv(const Options& opts) {
   session::ReceiveResult result =
       session::receive(store, identity_sk, identity_pk, block);
   identity_sk.wipe();
+
+  // The decrypted body is an ordinary std::string because it has to leave the
+  // ratchet and reach the terminal. It still must not survive an exception from
+  // file decoding, output or a later vault save.
+  StringWipe wipe_plaintext(result.plaintext);
 
   app::save_vault(path, store, opened.params, opened.passphrase);
 
@@ -685,6 +811,17 @@ int cmd_recv(const Options& opts) {
   // shown first, and a type the desktop might execute is never staged at all.
   std::optional<file::FilePayload> received =
       file::decode_file_payload(result.plaintext);
+  // The file bytes are a second copy of the plaintext (the first is
+  // result.plaintext, wiped by its own guard). Zero and release them even if
+  // staging, the terminal prompt or the file manager throws.
+  struct ReceivedWipe {
+    std::optional<file::FilePayload>& file;
+    ~ReceivedWipe() {
+      if (file.has_value()) {
+        wipe_vector(file->bytes);
+      }
+    }
+  } received_wipe{received};
   if (received.has_value()) {
     std::cerr << alias << ": [encrypted file received: ." << received->ext
               << "]\n";
@@ -712,16 +849,14 @@ int cmd_recv(const Options& opts) {
     } else {
       std::cerr << "not opening it: standard input is not a terminal\n";
     }
-    sodium_memzero(received->bytes.data(), received->bytes.size());
   } else {
     // The message body is whatever the sender chose to put in it. Escaped when
     // it is going to a terminal, verbatim when it is going to a file or a pipe.
     std::cout << alias << ": " << terminal::escape_if_tty(result.plaintext)
               << "\n";
   }
-  // `plaintext` still holds the decrypted body (and, for a file, a second copy
-  // of its bytes); it is wiped here whether it was a message or a file.
-  wipe_string(result.plaintext);
+  // Both guards run here: result.plaintext is wiped even when file decoding or
+  // output threw, and the framed file bytes are zeroed and released.
   return 0;
 }
 

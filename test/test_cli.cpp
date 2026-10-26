@@ -1,8 +1,10 @@
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "ratchet/cli.hpp"
+#include "ratchet/command_io.hpp"
 #include "test_support.hpp"
 
 using namespace ratchet;
@@ -226,6 +228,70 @@ TEST("cli: each command still accepts its own options") {
     CHECK_EQ(parse({command, "--usb-path", "/x"}).usb_path.string(),
              std::string("/x"));
   }
+}
+
+TEST("cli: structured output is opt-in for init and passphrase only") {
+  CHECK(!parse({"init"}).structured_output);
+  CHECK(parse({"init", "--structured-output"}).structured_output);
+  CHECK(parse({"passphrase", "--structured-output"}).structured_output);
+  CHECK_THROWS(parse({"init", "--structured-output=false"}));
+  CHECK_THROWS(parse({"unlock", "--structured-output"}));
+  CHECK_THROWS(parse({"send", "alice", "hi", "--structured-output"}));
+  CHECK_THROWS(parse({"contacts", "--structured-output"}));
+}
+
+// --- the front-end payload channel -----------------------------------------
+
+TEST("cli: --stdin-payload is parsed for send and recv only") {
+  const Options sent = parse({"send", "--stdin-payload", "7", "alice"});
+  CHECK(sent.stdin_payload_bytes.has_value());
+  CHECK_EQ(*sent.stdin_payload_bytes, std::size_t{7});
+  CHECK_EQ(sent.to, std::string("alice"));
+  CHECK(!sent.message.has_value());
+
+  const Options received = parse({"recv", "--stdin-payload", "9"});
+  CHECK(received.stdin_payload_bytes.has_value());
+  CHECK_EQ(*received.stdin_payload_bytes, std::size_t{9});
+
+  // Zero is not a payload, and the option is not a general flag.
+  CHECK_THROWS(parse({"send", "--stdin-payload", "0", "alice"}));
+  CHECK_THROWS(parse({"send", "--stdin-payload", "x", "alice"}));
+  CHECK_THROWS(parse({"send", "--stdin-payload"}));
+  CHECK_THROWS(parse({"contacts", "--stdin-payload", "4"}));
+  CHECK_THROWS(parse({"init", "--stdin-payload", "4"}));
+}
+
+TEST("command_io: read_exact stops exactly where the passphrase begins") {
+  // A payload with a blank line inside it, followed by a word-passphrase
+  // shaped stream. The count is what separates them; no delimiter could.
+  // Exactly the GUI shape: payload bytes, then the passphrase with no
+  // separator. The length is what makes the boundary unambiguous.
+  const std::string input =
+      std::string("line one\n\nline three") + "word one word two\n\n";
+  std::istringstream in(input);
+  const std::string payload = commands::read_exact(in, 20, "message");
+  CHECK_EQ(payload, std::string("line one\n\nline three"));
+
+  std::string rest;
+  std::getline(in, rest);
+  CHECK_EQ(rest, std::string("word one word two"));
+}
+
+TEST("command_io: read_exact preserves NUL and UTF-8 bytes") {
+  std::string input;
+  input.append("a\0b", 3);
+  input += "città";  // UTF-8, not one byte per character
+  input += "TAIL";
+  std::istringstream in(input);
+  const std::string payload = commands::read_exact(in, 9, "message");
+  CHECK_EQ(payload.size(), std::size_t{9});
+  CHECK_EQ(payload.substr(0, 3), std::string("a\0b", 3));
+  CHECK_EQ(payload.substr(3, 6), std::string("città"));
+}
+
+TEST("command_io: read_exact refuses a stream that ends early") {
+  std::istringstream in("short");
+  CHECK_THROWS(commands::read_exact(in, 10, "message"));
 }
 
 TEST("cli: defaults are what the help text advertises") {

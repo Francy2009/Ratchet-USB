@@ -40,6 +40,7 @@
 #include <QStyle>
 #include <QTabWidget>
 #include <QTemporaryFile>
+#include <QTextDocument>
 #include <QToolButton>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -48,7 +49,9 @@
 #include <unistd.h>
 
 #include "cli_runner.hpp"
+#include "gui_output.hpp"
 #include "host_env.hpp"
+#include "payload_input.hpp"
 
 namespace {
 
@@ -208,6 +211,9 @@ void MainWindow::buildUi() {
   root->addWidget(buildAccessPanel());
 
   tabs_ = new QTabWidget;
+  // Object names are for the headless GUI test: it drives the real widgets
+  // instead of duplicating the launch logic.
+  tabs_->setObjectName(QStringLiteral("tabs"));
   tabs_->addTab(buildVaultTab(), tr("Vault"));
   tabs_->addTab(buildContactsTab(), tr("Contatti"));
   tabs_->addTab(buildMessagesTab(), tr("Messaggi"));
@@ -230,6 +236,7 @@ QWidget* MainWindow::buildAccessPanel() {
 
   layout->addWidget(new QLabel(tr("Cartella del vault (USB):")), 0, 0);
   usbEdit_ = new QLineEdit;
+  usbEdit_->setObjectName(QStringLiteral("usbPathEdit"));
   usbEdit_->setPlaceholderText(
       tr("la cartella che contiene (o conterra') vault.bin"));
   connect(usbEdit_, &QLineEdit::textChanged, this,
@@ -257,6 +264,7 @@ QWidget* MainWindow::buildAccessPanel() {
 
   layout->addWidget(new QLabel(tr("Passphrase:")), 2, 0);
   passphraseEdit_ = new QLineEdit;
+  passphraseEdit_->setObjectName(QStringLiteral("passphraseEdit"));
   passphraseEdit_->setEchoMode(QLineEdit::Password);
   passphraseEdit_->setPlaceholderText(
       tr("le parole della passphrase, separate da spazio"));
@@ -275,6 +283,7 @@ QWidget* MainWindow::buildAccessPanel() {
   auto* buttons = new QHBoxLayout;
   buttons->setSpacing(8);
   unlockButton_ = new QPushButton(tr("Accedi"));
+  unlockButton_->setObjectName(QStringLiteral("unlockButton"));
   unlockButton_->setDefault(true);
   lockButton_ = new QPushButton(tr("Blocca"));
   auto* init_button = new QPushButton(tr("Crea un nuovo vault..."));
@@ -304,11 +313,14 @@ QWidget* MainWindow::buildVaultTab() {
 
   auto* anchor_button = new QPushButton(tr("Registra rollback anchor (anchor)"));
   auto* rekey_button = new QPushButton(tr("Cambia passphrase (passphrase)"));
+  rekey_button->setObjectName(QStringLiteral("rekeyButton"));
   actionButtons_ << anchor_button << rekey_button;
   connect(anchor_button, &QPushButton::clicked, this,
           [this] { launchWithPassphrase(QStringLiteral("anchor"), {}, {}); });
-  connect(rekey_button, &QPushButton::clicked, this,
-          [this] { launchWithPassphrase(QStringLiteral("passphrase"), {}, {}, true); });
+  connect(rekey_button, &QPushButton::clicked, this, [this] {
+    launchWithPassphrase(QStringLiteral("passphrase"),
+                         {QStringLiteral("--structured-output")}, {}, true);
+  });
 
   auto* hint = new QLabel(tr(
       "anchor registra lo stato del vault nell'host per la protezione da "
@@ -453,15 +465,18 @@ QWidget* MainWindow::buildMessagesTab() {
 
   auto* send_layout = new QGridLayout;
   sendAliasCombo_ = makeAliasCombo(tr("destinatario (dalla lista contatti)"));
+  sendAliasCombo_->setObjectName(QStringLiteral("sendAliasCombo"));
   sendFileEdit_ = new QLineEdit;
   sendFileEdit_->setPlaceholderText(tr("file da cifrare (opzionale; --file)"));
   auto* send_file_button = new QPushButton(tr("File..."));
   connect(send_file_button, &QPushButton::clicked, this,
           &MainWindow::chooseSendFile);
   sendMessageEdit_ = new QPlainTextEdit;
+  sendMessageEdit_->setObjectName(QStringLiteral("sendMessageEdit"));
   sendMessageEdit_->setPlaceholderText(tr("messaggio in chiaro da cifrare"));
   sendMessageEdit_->setMaximumHeight(100);
   auto* send_button = new QPushButton(tr("Cifra e genera blocco (send)"));
+  send_button->setObjectName(QStringLiteral("sendButton"));
   actionButtons_.append(send_button);
   connect(send_button, &QPushButton::clicked, this, [this] {
     const QString alias = sendAliasCombo_->currentText().trimmed();
@@ -471,18 +486,23 @@ QWidget* MainWindow::buildMessagesTab() {
     }
     const QString file = sendFileEdit_->text().trimmed();
     QStringList flags;
-    QStringList positionals{alias};
+    const QStringList positionals{alias};
     if (!file.isEmpty()) {
       flags << "--file" << file;
+      launchWithPassphrase(QStringLiteral("send"), flags, positionals);
     } else {
       const QString message = sendMessageEdit_->toPlainText();
       if (message.isEmpty()) {
         warn(tr("Scrivi un messaggio oppure scegli un file."));
         return;
       }
-      positionals << message;
+      // The plaintext never enters argv (readable in /proc by every process of
+      // this user); it goes on stdin, before the passphrase, framed by its
+      // byte count.
+      QByteArray payload = message.toUtf8();
+      launchWithPayload(QStringLiteral("send"), flags, positionals, payload);
+      ratchet::gui::wipeByteArray(payload);
     }
-    launchWithPassphrase(QStringLiteral("send"), flags, positionals);
   });
   send_layout->addWidget(new QLabel(tr("A:")), 0, 0);
   send_layout->addWidget(sendAliasCombo_, 0, 1, 1, 2);
@@ -495,6 +515,7 @@ QWidget* MainWindow::buildMessagesTab() {
 
   auto* recv_layout = new QVBoxLayout;
   recvBlockEdit_ = new QPlainTextEdit;
+  recvBlockEdit_->setObjectName(QStringLiteral("recvBlockEdit"));
   recvBlockEdit_->setPlaceholderText(tr("incolla il blocco ricevuto da decifrare"));
   recvBlockEdit_->setMaximumHeight(130);
   auto* recv_button = new QPushButton(tr("Decifra blocco (recv)"));
@@ -505,7 +526,13 @@ QWidget* MainWindow::buildMessagesTab() {
       warn(tr("Incolla un blocco da decifrare."));
       return;
     }
-    launchWithPassphrase(QStringLiteral("recv"), {"--stage-file"}, {block});
+    // The block is ciphertext, not plaintext, but it can be large and there is
+    // no reason to put it in argv either. The same stdin framing keeps the
+    // passphrase and the block on separate, length-delimited parts of the
+    // stream.
+    QByteArray payload = block.toUtf8();
+    launchWithPayload(QStringLiteral("recv"), {"--stage-file"}, {}, payload);
+    ratchet::gui::wipeByteArray(payload);
   });
   recv_layout->addWidget(recvBlockEdit_);
   recv_layout->addWidget(recv_button);
@@ -592,7 +619,11 @@ void MainWindow::doUnlock() {
 
 void MainWindow::doLock() {
   setUnlocked(false);
-  passphraseEdit_->clear();
+  // A lock drops the passphrase and everything the CLI printed, including a
+  // decrypted message or a generated phrase. Unsent compose text and a pasted
+  // ciphertext block are kept: they are the user's input, not vault output, and
+  // dropping them would make a retry after unlocking start from nothing.
+  clearSensitiveState(/*include_unsent_input=*/false);
   statusLabel_->setText(tr("Non connesso"));
 }
 
@@ -671,8 +702,14 @@ void MainWindow::showInitDialog() {
     }
     flags << "--from-mnemonic";
     stdin_data = m.toUtf8() + "\n";
+    // The line edit and the local `m` are Qt strings: clear() releases the
+    // visible copy, but Qt's implicit sharing and its own buffers are not
+    // zeroed by anything this code can call.
+    mnemonic->clear();
   }
+  flags << QStringLiteral("--structured-output");
   launch(QStringLiteral("init"), flags, {}, stdin_data);
+  ratchet::gui::wipeByteArray(stdin_data);
 }
 
 QComboBox* MainWindow::makeAliasCombo(const QString& placeholder) {
@@ -798,8 +835,26 @@ void MainWindow::launchWithPassphrase(const QString& command,
                                       const QStringList& positionals,
                                       bool confirm_extra_newline,
                                       bool silent) {
-  launch(command, flags, positionals, passphraseInput(confirm_extra_newline),
-         silent);
+  QByteArray input = passphraseInput(confirm_extra_newline);
+  launch(command, flags, positionals, input, silent);
+  // QProcess has copied what it needs into its own write buffer by the time
+  // run() returns from write(); this copy can go. The QProcess buffer itself is
+  // not reachable (see cli_runner.cpp).
+  ratchet::gui::wipeByteArray(input);
+}
+
+void MainWindow::launchWithPayload(const QString& command,
+                                   const QStringList& flags,
+                                   const QStringList& positionals,
+                                   const QByteArray& payload, bool silent) {
+  QByteArray pass = passphraseInput(false);
+  ratchet::gui::PayloadInput framed =
+      ratchet::gui::payloadInput(payload, pass);
+  ratchet::gui::wipeByteArray(pass);
+  QStringList all_flags = flags;
+  all_flags << framed.flags;
+  launch(command, all_flags, positionals, framed.stdin_data, silent);
+  ratchet::gui::wipeByteArray(framed.stdin_data);
 }
 
 void MainWindow::setBusy(bool busy) {
@@ -831,22 +886,6 @@ QString MainWindow::extractError(const QString& text) const {
   }
   const QString trimmed = text.trimmed();
   return trimmed.isEmpty() ? tr("Nessun dettaglio disponibile.") : trimmed;
-}
-
-QString MainWindow::extractPhrase(const QString& text, const QString& heading,
-                                  const QString& end_marker) const {
-  const qsizetype start = text.indexOf(heading);
-  if (start < 0) return {};
-  qsizetype end = text.indexOf(end_marker, start);
-  if (end < 0) end = text.size();
-  const QString region = text.mid(start, end - start);
-  static const QRegularExpression re(QStringLiteral("([0-9]+)\\.\\s+([a-z]+)"));
-  QStringList words;
-  auto it = re.globalMatch(region);
-  while (it.hasNext()) {
-    words << it.next().captured(2);
-  }
-  return words.join(QLatin1Char(' '));
 }
 
 QString MainWindow::commandTitle(const QString& command) const {
@@ -893,9 +932,18 @@ void MainWindow::showResultDialog(bool ok, const QString& title,
   if (!detail.trimmed().isEmpty()) {
     view = new QPlainTextEdit(detail);
     view->setReadOnly(true);
+    view->setUndoRedoEnabled(false);
     view->setLineWrapMode(QPlainTextEdit::NoWrap);
     view->setMinimumSize(560, 300);
     layout->addWidget(view, 1);
+    // Drop the visible copy when the dialog closes. QTextDocument does not
+    // zero the allocation, but it does stop the dialog from keeping a
+    // decrypted message, a generated passphrase or the recovery words alive
+    // after it is gone.
+    QObject::connect(&dialog, &QDialog::finished, view, [view](int) {
+      view->clear();
+      view->document()->clearUndoRedoStacks();
+    });
   }
 
   auto* buttons = new QHBoxLayout;
@@ -903,6 +951,10 @@ void MainWindow::showResultDialog(bool ok, const QString& title,
   if (view != nullptr) {
     auto* copy = new QPushButton(tr("Copia"));
     connect(copy, &QPushButton::clicked, this, [this, view] {
+      // The clipboard belongs to another process (or to the display server).
+      // This program cannot wipe it, cannot know how many copies the clipboard
+      // manager keeps, and does not claim to. It is offered because a card or a
+      // message block has to be pasted somewhere to be useful.
       QApplication::clipboard()->setText(view->toPlainText());
       statusBar()->showMessage(tr("Copiato negli appunti."), 4000);
     });
@@ -1038,6 +1090,15 @@ void MainWindow::showFileDialog(const QString& ext, const QString& path,
 }
 
 void MainWindow::onFinished(int exit_code, bool normal_exit) {
+  // The raw stdout/stderr of the child can contain the decrypted message, a
+  // generated passphrase or the recovery words. handleFinished() copies what it
+  // needs into a dialog; the buffers are dropped on every path out, including
+  // the error and silent ones.
+  handleFinished(exit_code, normal_exit);
+  clearCommandBuffers();
+}
+
+void MainWindow::handleFinished(int exit_code, bool normal_exit) {
   const QString command = lastCommand_;
   const bool silent = silentCommand_;
   const bool ok = normal_exit && exit_code == 0;
@@ -1052,47 +1113,74 @@ void MainWindow::onFinished(int exit_code, bool normal_exit) {
   }
 
   if (!ok) {
+    QString detail = extractError(commandStderr_);
+    // The new GUI asks for --structured-output. An older CLI rejects the flag
+    // at parse time, before it touches a vault. Say that explicitly; do not
+    // fall back to scraping headings, which could turn a missing field into a
+    // short phrase that looks valid.
+    if ((command == QLatin1String("init") ||
+         command == QLatin1String("passphrase")) &&
+        commandStderr_.contains(QStringLiteral("--structured-output"))) {
+      detail = tr("La CLI selezionata non supporta --structured-output, "
+                  "richiesto da questa GUI. Aggiorna ratchet-usb oppure scegli "
+                  "il binario della stessa versione.");
+    }
     showResultDialog(false, tr("Operazione non riuscita"),
-                     tr("Il comando '%1' e' fallito.").arg(command),
-                     extractError(commandStderr_));
+                     tr("Il comando '%1' e' fallito.").arg(command), detail);
     if (command == QLatin1String("unlock")) setUnlocked(false);
     return;
   }
 
   if (command == QLatin1String("init")) {
-    const QString pass =
-        extractPhrase(commandStderr_, QStringLiteral("Vault passphrase"),
-                      QStringLiteral("These words unlock"));
-    const QString recovery =
-        extractPhrase(commandStdout_, QStringLiteral("Recovery phrase"),
-                      QStringLiteral("Write these words"));
+    const ratchet::gui::ParsedGuiResult parsed =
+        ratchet::gui::parseGuiResult(commandStdout_, QStringLiteral("init"));
+    if (!parsed.ok) {
+      showResultDialog(false, tr("Risultato non valido"),
+                       tr("La CLI non ha prodotto un risultato strutturato "
+                          "valido per init."),
+                       parsed.error);
+      return;
+    }
     QString detail;
-    if (!pass.isEmpty()) {
-      detail += tr("Passphrase del vault (scrivile ora, non e' recuperabile):\n%1\n\n")
-                    .arg(pass);
+    detail += tr("Passphrase del vault (scrivile ora, non e' recuperabile):\n%1\n\n")
+                  .arg(parsed.value.passphrase);
+    if (!parsed.value.recovery.isEmpty()) {
+      detail += tr("Frase di recupero (12 parole):\n%1\n\n")
+                    .arg(parsed.value.recovery);
+    } else {
+      detail += tr("Nessuna nuova frase di recupero: l'identita' e' stata "
+                   "ricostruita dalle parole fornite.\n\n");
     }
-    if (!recovery.isEmpty()) {
-      detail += tr("Frase di recupero (12 parole):\n%1\n\n").arg(recovery);
-    }
-    detail += tr("--- output completo ---\n") + commandStdout_ + commandStderr_;
     showResultDialog(true, tr("Vault creato"),
-                     tr("Annota passphrase e frase di recupero: sono mostrate "
-                        "solo qui."),
-                     detail);
+                     tr("Annota la passphrase: e' mostrata solo qui."), detail);
     return;
   }
 
   if (command == QLatin1String("passphrase")) {
-    const QString pass =
-        extractPhrase(commandStderr_, QStringLiteral("Vault passphrase"),
-                      QStringLiteral("These words unlock"));
-    const QString detail =
-        pass.isEmpty()
-            ? commandStderr_
-            : tr("Nuova passphrase del vault (mostrata una sola volta):\n%1")
-                  .arg(pass);
+    const ratchet::gui::ParsedGuiResult parsed =
+        ratchet::gui::parseGuiResult(commandStdout_,
+                                     QStringLiteral("passphrase"));
+    if (!parsed.ok) {
+      showResultDialog(false, tr("Risultato non valido"),
+                       tr("La CLI non ha prodotto un risultato strutturato "
+                          "valido per passphrase."),
+                       parsed.error);
+      return;
+    }
+    if (parsed.value.status == ratchet::gui::GuiResult::Status::Cancelled) {
+      showResultDialog(true, tr("Passphrase non cambiata"),
+                       tr("Il vault non e' stato modificato."), {});
+      return;
+    }
     showResultDialog(true, tr("Passphrase cambiata"),
-                     tr("La vecchia passphrase non e' piu' valida."), detail);
+                     tr("La vecchia passphrase non e' piu' valida."),
+                     tr("Nuova passphrase del vault (mostrata una sola volta):\n%1")
+                         .arg(parsed.value.passphrase));
+    // The old phrase no longer opens anything; leaving it in the field only
+    // keeps a dead secret around and invites a failed unlock.
+    passphraseEdit_->clear();
+    revealButton_->setChecked(false);
+    passphraseEdit_->setEchoMode(QLineEdit::Password);
     return;
   }
 
@@ -1132,6 +1220,16 @@ void MainWindow::onFinished(int exit_code, bool normal_exit) {
     }
   }
 
+  if (command == QLatin1String("send") &&
+      sendFileEdit_->text().trimmed().isEmpty()) {
+    // The plaintext was encrypted and is no longer needed; keeping it in the
+    // compose box would keep a copy on screen and in the undo history. A
+    // failed send returns above, before this point, so the text is still there
+    // to retry.
+    sendMessageEdit_->clear();
+    sendMessageEdit_->document()->clearUndoRedoStacks();
+  }
+
   if (!commandStdout_.trimmed().isEmpty()) {
     showResultDialog(true, commandTitle(command), tr("Operazione completata."),
                      commandStdout_);
@@ -1139,6 +1237,51 @@ void MainWindow::onFinished(int exit_code, bool normal_exit) {
     showResultDialog(true, commandTitle(command), tr("Operazione completata."),
                      commandStderr_);
   }
+}
+
+void MainWindow::clearCommandBuffers() {
+  commandStdout_.clear();
+  commandStderr_.clear();
+}
+
+// What clear() can and cannot promise.
+//
+// QLineEdit::clear() and QPlainTextEdit::clear() drop the visible value, but
+// they do not zero the allocation that held it: Qt frees or reuses the buffer
+// like any other string, and implicit sharing means copies made by tr(), a
+// signal, a QLabel or QProcess may still exist. QLineEdit exposes no way to
+// disable or clear its internal undo stack; QPlainTextEdit does, and it is
+// cleared here after the compose text is dropped. The passphrase field's undo
+// history and any implicit copy are therefore a documented limit, not a claim
+// of erasure. The safest statement is: the GUI stops displaying the value and
+// drops its own reference, and a host that can read its memory can still see
+// whatever Qt has not overwritten yet.
+void MainWindow::clearSensitiveState(bool include_unsent_input) {
+  if (passphraseEdit_ != nullptr) {
+    passphraseEdit_->clear();
+    passphraseEdit_->setEchoMode(QLineEdit::Password);
+  }
+  if (revealButton_ != nullptr) {
+    revealButton_->setChecked(false);
+  }
+  clearCommandBuffers();
+  stagedCard_.reset();
+  if (!include_unsent_input) {
+    return;
+  }
+  if (sendMessageEdit_ != nullptr) {
+    sendMessageEdit_->clear();
+    sendMessageEdit_->document()->clearUndoRedoStacks();
+  }
+  if (recvBlockEdit_ != nullptr) {
+    recvBlockEdit_->clear();
+    recvBlockEdit_->document()->clearUndoRedoStacks();
+  }
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+  clearSensitiveState(/*include_unsent_input=*/true);
+  QMainWindow::closeEvent(event);
 }
 
 QIcon MainWindow::eyeIcon(bool open) const {

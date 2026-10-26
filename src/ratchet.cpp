@@ -138,6 +138,10 @@ std::string aead_decrypt(const SecureBytes<32>& mk, const std::vector<uint8_t>& 
     }
   }
 
+  // The unavoidable unprotected copy: the caller needs an ordinary string to
+  // print or frame. If this allocation throws, the SecureBuffer destructor
+  // still wipes the locked copy. Callers that keep the string across work that
+  // can throw protect it with StringWipe.
   std::string out(reinterpret_cast<const char*>(pt.data()), unpadded_len);
   pt.clear();
   return out;
@@ -312,7 +316,9 @@ std::string decrypt_in_place(store::Session& s,
         aead_key.assign(it->message_key);
       }
       std::string plaintext = aead_decrypt(aead_key, ciphertext, aad);
+      StringWipe wipe_plaintext(plaintext);
       s.skipped.erase(it);
+      wipe_plaintext.dismiss();
       return plaintext;
     }
   }
@@ -361,7 +367,11 @@ std::string decrypt(store::Session& s, const message::RatchetHeader& header,
   std::string plaintext =
       decrypt_in_place(candidate, header, ciphertext, aad_prefix,
                        pq_message_key);
+  // Adopting the advanced session is the last operation that can throw; the
+  // decrypted body must not be unwound without being wiped.
+  StringWipe wipe_plaintext(plaintext);
   s = std::move(candidate);
+  wipe_plaintext.dismiss();
   return plaintext;
 }
 

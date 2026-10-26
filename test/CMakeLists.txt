@@ -18,6 +18,7 @@ add_executable(ratchet_tests
                test_file.cpp
                test_secure.cpp
                test_terminal.cpp
+               test_gui_format.cpp
                test_screen.cpp
                test_ui.cpp
                test_vectors.cpp
@@ -46,4 +47,59 @@ if(Qt6Test_FOUND)
                              ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(ratchet_gui_tests PRIVATE Qt6::Core Qt6::Test)
   add_test(NAME ratchet_gui_tests COMMAND ratchet_gui_tests)
+
+  # The GUI's stdin framing helper: the plaintext must reach the CLI as exact
+  # bytes on a pipe, never as an argv value.
+  add_executable(ratchet_gui_payload_tests
+                 test_payload_input.cpp
+                 ${CMAKE_SOURCE_DIR}/gui/payload_input.cpp)
+  set_target_properties(ratchet_gui_payload_tests PROPERTIES AUTOMOC ON)
+  target_include_directories(ratchet_gui_payload_tests PRIVATE
+                             ${CMAKE_SOURCE_DIR}/gui
+                             ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(ratchet_gui_payload_tests PRIVATE Qt6::Core Qt6::Test)
+  add_test(NAME ratchet_gui_payload_tests COMMAND ratchet_gui_payload_tests)
+
+  # The structured-output parser runs in the GUI process and must reject a
+  # missing, incomplete or malformed block rather than show a partial phrase.
+  add_executable(ratchet_gui_output_tests
+                 test_gui_output.cpp
+                 ${CMAKE_SOURCE_DIR}/gui/gui_output.cpp
+                 ${CMAKE_SOURCE_DIR}/gui/gui_output.hpp)
+  set_target_properties(ratchet_gui_output_tests PROPERTIES AUTOMOC ON)
+  target_include_directories(ratchet_gui_output_tests PRIVATE
+                             ${CMAKE_SOURCE_DIR}/gui
+                             ${CMAKE_SOURCE_DIR}/include
+                             ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(ratchet_gui_output_tests PRIVATE Qt6::Core Qt6::Test)
+  add_test(NAME ratchet_gui_output_tests COMMAND ratchet_gui_output_tests)
+
+  # The real window against a fake CLI: verifies the message is written to
+  # stdin and is not present in the child's argv. Needs Widgets and an
+  # offscreen platform plugin, so it is skipped on a no-GUI build.
+  find_package(Qt6 COMPONENTS Widgets QUIET)
+  if(Qt6Widgets_FOUND)
+    add_executable(ratchet_gui_launch_tests
+                   test_gui_launch.cpp
+                   ${CMAKE_SOURCE_DIR}/gui/main_window.cpp
+                   ${CMAKE_SOURCE_DIR}/gui/main_window.hpp
+                   ${CMAKE_SOURCE_DIR}/gui/cli_runner.cpp
+                   ${CMAKE_SOURCE_DIR}/gui/cli_runner.hpp
+                   ${CMAKE_SOURCE_DIR}/gui/host_env.cpp
+                   ${CMAKE_SOURCE_DIR}/gui/host_env.hpp
+                   ${CMAKE_SOURCE_DIR}/gui/payload_input.cpp
+                   ${CMAKE_SOURCE_DIR}/gui/payload_input.hpp
+                   ${CMAKE_SOURCE_DIR}/gui/gui_output.cpp
+                   ${CMAKE_SOURCE_DIR}/gui/gui_output.hpp)
+    set_target_properties(ratchet_gui_launch_tests PROPERTIES AUTOMOC ON)
+    target_include_directories(ratchet_gui_launch_tests PRIVATE
+                               ${CMAKE_SOURCE_DIR}/gui
+                               ${CMAKE_SOURCE_DIR}/include
+                               ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(ratchet_gui_launch_tests PRIVATE
+                          Qt6::Widgets Qt6::Test)
+    add_test(NAME ratchet_gui_launch_tests COMMAND ratchet_gui_launch_tests)
+    set_tests_properties(ratchet_gui_launch_tests PROPERTIES
+                         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+  endif()
 endif()

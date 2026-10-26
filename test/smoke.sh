@@ -83,6 +83,51 @@ words="$(sed -n '/Recovery phrase/,/Write these words/p' "$WORK/alice-init.txt" 
          grep -oE '[0-9]+\.[[:space:]]+[a-z]+' | wc -l)"
 [[ "$words" -eq 12 ]] || fail "expected a 12-word recovery phrase, counted $words"
 
+# The default output must stay human and must not grow a machine block.
+if grep -q "BEGIN RATCHET GUI RESULT" "$WORK/alice-init.txt"; then
+  fail "the default init output grew a structured block"
+fi
+
+step "structured output is opt-in and round-trips"
+STRUCT="$WORK/structured"
+mkdir -p "$STRUCT"
+"$BIN" init --usb-path "$STRUCT" --otpk-count 1 "${CHEAP[@]}" \
+  --structured-output >"$WORK/structured-init.txt" 2>"$WORK/structured-init.err" ||
+  fail "structured init exited non-zero: $(cat "$WORK/structured-init.err")"
+grep -q "BEGIN RATCHET GUI RESULT" "$WORK/structured-init.txt" ||
+  fail "structured init wrote no result block"
+if grep -q "BEGIN RATCHET GUI RESULT" "$WORK/structured-init.err"; then
+  fail "structured init put its result on stderr"
+fi
+STRUCT_PASS="$(sed -n 's/^passphrase=//p' "$WORK/structured-init.txt")"
+STRUCT_RECOVERY="$(sed -n 's/^recovery=//p' "$WORK/structured-init.txt")"
+[[ "$(wc -w <<<"$STRUCT_PASS")" -eq 6 ]] ||
+  fail "structured init passphrase is not 6 words"
+[[ "$(wc -w <<<"$STRUCT_RECOVERY")" -eq 12 ]] ||
+  fail "structured init recovery phrase is not 12 words"
+if grep -qF "Vault passphrase (write" "$WORK/structured-init.txt" ||
+   grep -qF "Vault passphrase (write" "$WORK/structured-init.err"; then
+  fail "structured init still printed the human passphrase grid"
+fi
+
+printf '%s\n\n\n' "$STRUCT_PASS" |
+  "$BIN" passphrase --usb-path "$STRUCT" --structured-output \
+  >"$WORK/structured-rekey.txt" 2>"$WORK/structured-rekey.err" ||
+  fail "structured passphrase change exited non-zero"
+STRUCT_NEW="$(sed -n 's/^passphrase=//p' "$WORK/structured-rekey.txt")"
+[[ "$(wc -w <<<"$STRUCT_NEW")" -eq 6 ]] ||
+  fail "structured rekey passphrase is not 6 words"
+[[ "$STRUCT_NEW" != "$STRUCT_PASS" ]] ||
+  fail "structured rekey did not change the passphrase"
+
+# Cancellation is a valid structured result, not a malformed success.
+printf '%s\n\n\033' "$STRUCT_NEW" |
+  "$BIN" passphrase --usb-path "$STRUCT" --structured-output \
+  >"$WORK/structured-cancel.txt" 2>"$WORK/structured-cancel.err" ||
+  fail "structured cancelled rekey exited non-zero"
+grep -q "status=cancelled" "$WORK/structured-cancel.txt" ||
+  fail "structured cancellation did not report status=cancelled"
+
 step "exporting contact cards"
 printf '%s\n' "$ALICE_PASS" |
   "$BIN" card --usb-path "$ALICE" >"$WORK/alice.card" 2>/dev/null ||
@@ -183,12 +228,12 @@ for i in 3 1 2; do
 done
 
 # ---------------------------------------------------------------------------
-# The desktop GUI passes message text after a literal "--" (gui/main_window.cpp
-# keeps flags and positionals apart and emits the separator itself). That
-# separator is what stops a message beginning with "-" from being read as an
-# option: without it the CLI prints its help and exits 0, so a front-end shows
-# "operation complete" while nothing was encrypted. This drives the exact argv
-# shape the GUI emits, in both directions.
+# The CLI keeps flags and positionals apart with a literal "--". That separator
+# is what stops a message beginning with "-" from being read as an option:
+# without it the CLI prints its help and exits 0, so a front-end shows
+# "operation complete" while nothing was encrypted. The desktop GUI no longer
+# passes message text in argv at all; it uses --stdin-payload, tested below.
+# This section still pins the CLI's own separator contract in both directions.
 
 step "a message beginning with a dash is encrypted, not read as an option"
 DASH_MSG="--file this is a message, not a flag"
@@ -217,6 +262,49 @@ if grep -q "BEGIN RATCHET MESSAGE" "$WORK/nosep.txt"; then
 fi
 
 # ---------------------------------------------------------------------------
+# The desktop GUI does not put a message or a received block in the child's
+# argv: /proc/<pid>/cmdline is readable by every process of the same user. It
+# writes the exact bytes to stdin instead, followed by the passphrase, and tells
+# the CLI the payload length with --stdin-payload.
+
+step "a front-end payload on stdin survives Unicode and multiline text"
+UNICODE_MSG="prima riga
+seconda riga: città 🚀
+(una riga vuota segue)
+
+ultima riga"
+PAYLOAD_BYTES="$(printf '%s' "$UNICODE_MSG" | wc -c)"
+{
+  printf '%s' "$UNICODE_MSG"
+  printf '%s\n\n' "$ALICE_PASS"
+} | "$BIN" send --usb-path "$ALICE" --stdin-payload "$PAYLOAD_BYTES" -- bob \
+  >"$WORK/framed1.txt" 2>"$WORK/framed1.err" ||
+  fail "send --stdin-payload exited non-zero: $(cat "$WORK/framed1.err")"
+grep -q "BEGIN RATCHET MESSAGE" "$WORK/framed1.txt" ||
+  fail "send --stdin-payload produced no wire block"
+
+FRAMED_BYTES="$(wc -c <"$WORK/framed1.txt")"
+{
+  cat "$WORK/framed1.txt"
+  printf '%s\n\n' "$BOB_PASS"
+} | "$BIN" recv --usb-path "$BOB" --stdin-payload "$FRAMED_BYTES" \
+  >"$WORK/framed-recv.txt" 2>"$WORK/framed-recv.err" ||
+  fail "recv --stdin-payload exited non-zero: $(cat "$WORK/framed-recv.err")"
+grep -qF "città 🚀" "$WORK/framed-recv.txt" ||
+  fail "the Unicode/multiline payload did not survive the framed round trip"
+grep -qF "(una riga vuota segue)" "$WORK/framed-recv.txt" ||
+  fail "the blank line inside the framed payload was not preserved"
+
+# The block must not carry the plaintext. The transport itself is pinned by the
+# GUI framing test and by this invocation passing no message argument at all;
+# an argv-visible payload would leave the same bytes in this file only after
+# encryption, which is not what that check is about.
+if grep -qF "prima riga" "$WORK/framed1.txt" ||
+   grep -qF "seconda riga" "$WORK/framed1.txt"; then
+  fail "the plaintext appears in the ciphertext block"
+fi
+
+# ---------------------------------------------------------------------------
 # Things that must fail.
 
 step "a tampered message must be rejected"
@@ -236,6 +324,19 @@ PY
 if printf '%s\n' "$BOB_PASS" |
      "$BIN" recv --usb-path "$BOB" "$(cat "$WORK/tampered.txt")" >"$WORK/tampered-out.txt" 2>&1; then
   fail "a tampered message was accepted"
+fi
+
+step "--stdin-payload rejects a short stream and a conflicting argument"
+# The child must never take a partial payload as if it ended at the declared
+# length; that would make the framing silently shift the passphrase.
+if printf 'x' | "$BIN" send --usb-path "$ALICE" --stdin-payload 8 -- bob \
+     >/dev/null 2>&1; then
+  fail "a short --stdin-payload stream was accepted"
+fi
+# A positional message plus the stdin channel is ambiguous, not a preference.
+if printf 'x' | "$BIN" send --usb-path "$ALICE" --stdin-payload 1 -- bob msg \
+     >/dev/null 2>&1; then
+  fail "--stdin-payload and a positional message were accepted together"
 fi
 
 step "a wrong passphrase must be rejected"

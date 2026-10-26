@@ -7,6 +7,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -178,6 +179,7 @@ OpenedVault unlock_vault(const fs::path& path, const std::string& label) {
 std::string read_bounded(std::istream& input, std::size_t max_bytes,
                          const char* what) {
   std::string out;
+  StringWipe wipe(out);
   out.reserve(std::min<std::size_t>(max_bytes, std::size_t{64} * 1024u));
   std::array<char, 8192> chunk{};
   while (input) {
@@ -186,8 +188,38 @@ std::string read_bounded(std::istream& input, std::size_t max_bytes,
     if (got > max_bytes - out.size()) {
       throw Error(std::string(what) + " exceeds its input size limit");
     }
-    out.append(chunk.data(), got);
+    // A pipe's length is not known up front, so this string can reallocate.
+    // append_string_wiped zeroes the previous block before releasing it: a
+    // message typed into stdin is plaintext, and the old block used to stay
+    // readable on the heap until the allocator reused it.
+    append_string_wiped(out, std::string_view(chunk.data(), got));
   }
+  wipe.dismiss();
+  return out;
+}
+
+std::string read_exact(std::istream& input, std::size_t bytes, const char* what) {
+  if (bytes > static_cast<std::size_t>(
+                  std::numeric_limits<std::streamsize>::max())) {
+    throw Error(std::string(what) + " is too large to read");
+  }
+  std::string out;
+  out.resize(bytes);
+  // The guard covers a short read, an I/O exception and the pathological case
+  // where the caller asked for a length the stream never supplies.
+  StringWipe wipe(out);
+  std::size_t got = 0;
+  while (got < bytes) {
+    input.read(out.data() + got,
+               static_cast<std::streamsize>(bytes - got));
+    const std::streamsize chunk = input.gcount();
+    if (chunk <= 0) {
+      throw Error(std::string(what) +
+                  " ended before its declared length");
+    }
+    got += static_cast<std::size_t>(chunk);
+  }
+  wipe.dismiss();
   return out;
 }
 

@@ -148,6 +148,9 @@ jobs:
           "$GITHUB_WORKSPACE/test/smoke.sh" "$wrapper"
 
       - name: Upload the signed release files as a workflow artifact
+        # A tag run keeps this for 30 days as a crash-diagnosis copy beside the
+        # published Release; a workflow_dispatch run is a packaging rehearsal,
+        # downloaded by hand and then short-lived, so it gets a week.
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: Ratchet-USB-x86_64-release
@@ -157,6 +160,7 @@ jobs:
             build/SHA256SUMS
             build/SHA256SUMS.minisig
           if-no-files-found: error
+          retention-days: ${{ startsWith(github.ref, 'refs/tags/') && 30 || 7 }}
 
       - name: Attach the signed files to the GitHub Release
         # Only a tag publishes a release. A workflow_dispatch run stops after
