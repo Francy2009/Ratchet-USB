@@ -362,11 +362,22 @@ TEST("SecureBuffer resize down and back up keeps one locked allocation") {
   CHECK_EQ(static_cast<unsigned>(buf[17]), 0u);
 }
 
+// The length is read through a volatile so the compiler cannot constant-fold
+// it into append()'s inlined memcpy. With a literal argument GCC 13 in Release
+// inlines the call and then diagnoses the fortified memcpy with
+// -Wstringop-overflow, turning a test of the bounds check into a build error.
+// A runtime value keeps the check under test and leaves the compiler nothing
+// provable to complain about.
+std::size_t huge_length() noexcept {
+  static volatile std::size_t value = std::numeric_limits<std::size_t>::max();
+  return value;
+}
+
 TEST("SecureBuffer append refuses a length that would wrap size_t") {
   SecureBuffer buf;
   const uint8_t byte = 1;
   buf.append(&byte, 1);
-  CHECK_THROWS(buf.append(&byte, std::numeric_limits<std::size_t>::max()));
+  CHECK_THROWS(buf.append(&byte, huge_length()));
   // The failed call must not have changed the value.
   CHECK_EQ(buf.size(), std::size_t{1});
   CHECK_EQ(static_cast<unsigned>(buf[0]), 1u);
