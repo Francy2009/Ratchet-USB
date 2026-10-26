@@ -9,6 +9,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -80,6 +81,45 @@ bool memory_locking_degraded() noexcept;
 // stops showing them is a great deal better than leaving them on the heap
 // until the allocator happens to reuse the block.
 void wipe_string(std::string& text);
+
+// Zeroes a byte vector's contents, then releases its storage.
+//
+// The file path uses this for the raw bytes of an attached file: once they have
+// been framed into the plaintext that goes to the ratchet there is no reason
+// for the copy on the heap to survive, including when framing throws.
+void wipe_vector(std::vector<uint8_t>& bytes) noexcept;
+
+// Appends to an ordinary std::string, wiping the old allocation before it is
+// released when growth is needed.
+//
+// This is not SecureString: the current buffer is still ordinary, unlocked
+// heap memory, so the value can reach swap. It only stops a reallocation from
+// leaving the previous copy of a message body on the heap for the allocator to
+// hand to somebody else. Used for the TUI's editable buffer and for input read
+// from a pipe, where the final length is not known up front.
+void append_string_wiped(std::string& out, std::string_view text);
+
+// Wipes a std::string when it goes out of scope, including on an exception or
+// an early return. `dismiss()` releases the value from the guard when ownership
+// is intentionally handed off.
+class StringWipe {
+ public:
+  explicit StringWipe(std::string& text) noexcept : text_(text) {}
+  ~StringWipe() {
+    if (armed_) {
+      wipe_string(text_);
+    }
+  }
+
+  StringWipe(const StringWipe&) = delete;
+  StringWipe& operator=(const StringWipe&) = delete;
+
+  void dismiss() noexcept { armed_ = false; }
+
+ private:
+  std::string& text_;
+  bool armed_ = true;
+};
 
 // Fixed-size buffer for key material.
 //
@@ -178,14 +218,7 @@ class SecureString {
     // Growing the vector may reallocate, leaving the old bytes on the heap.
     // Reserving in chunks, locking the new block and wiping the previous one
     // keeps that from scattering copies of the passphrase around.
-    if (buf_.size() == buf_.capacity()) {
-      std::vector<char> bigger;
-      bigger.reserve(buf_.capacity() == 0 ? 64 : buf_.capacity() * 2);
-      lock_region(bigger.data(), bigger.capacity());
-      bigger.insert(bigger.end(), buf_.begin(), buf_.end());
-      unlock_region(buf_.data(), buf_.capacity());
-      buf_.swap(bigger);
-    }
+    grow(1);
     buf_.push_back(c);
   }
 
@@ -213,6 +246,43 @@ class SecureString {
   }
 
  private:
+  // Makes room for `extra` more bytes without ever leaving an unwiped copy of
+  // the old contents behind. Full reserve()+insert() is used rather than
+  // vector::resize() because the old block has to be zeroed before it is
+  // released, and the new block has to be locked before the secret is copied
+  // into it.
+  //
+  // If the copy throws (memory exhaustion), the new block is unlocked, wiped
+  // and freed by the handler below and the old buffer is left untouched. The
+  // previous version leaked the page reference in exactly that case: the page
+  // stayed locked with no owner left to unlock it, and
+  // memory_locking_degraded() never learned about it.
+  void grow(std::size_t extra) {
+    const std::size_t old_size = buf_.size();
+    if (extra > buf_.max_size() - old_size) {
+      throw Error("internal: secure string size overflow");
+    }
+    const std::size_t needed = old_size + extra;
+    if (needed <= buf_.capacity()) {
+      return;
+    }
+    const std::size_t doubled =
+        buf_.capacity() > buf_.max_size() / 2 ? buf_.max_size()
+                                              : buf_.capacity() * 2;
+    const std::size_t new_capacity = doubled > needed ? doubled : needed;
+    std::vector<char> bigger;
+    bigger.reserve(new_capacity);
+    (void)lock_region(bigger.data(), bigger.capacity());
+    try {
+      bigger.insert(bigger.end(), buf_.begin(), buf_.end());
+    } catch (...) {
+      unlock_region(bigger.data(), bigger.capacity());
+      throw;
+    }
+    unlock_region(buf_.data(), buf_.capacity());
+    buf_.swap(bigger);
+  }
+
   std::vector<char> buf_;
 };
 
@@ -251,17 +321,17 @@ class SecureBuffer {
   uint8_t& operator[](std::size_t i) noexcept { return buf_[i]; }
   const uint8_t& operator[](std::size_t i) const noexcept { return buf_[i]; }
 
-  // Resize while preserving the lock-on-grow guarantee.  AEAD decryptors use
+  // Resize while preserving the lock-on-grow guarantee. AEAD decryptors use
   // this so plaintext is written directly into locked memory.
+  //
+  // Shrinking zeroes the bytes being dropped first. vector::resize() on the way
+  // down only changes the size, so a plaintext tail used to stay readable in
+  // the locked allocation until something happened to overwrite it.
   void resize(std::size_t n) {
-    if (n > buf_.capacity()) {
-      std::vector<uint8_t> bigger;
-      bigger.reserve(n);
-      lock_region(bigger.data(), bigger.capacity());
-      bigger.insert(bigger.end(), buf_.begin(), buf_.end());
-      unlock_region(buf_.data(), buf_.capacity());
-      buf_.swap(bigger);
+    if (n < buf_.size()) {
+      sodium_memzero(buf_.data() + n, buf_.size() - n);
     }
+    reserve(n);
     buf_.resize(n);
   }
 
@@ -270,16 +340,32 @@ class SecureBuffer {
       return;
     }
     const std::size_t old_size = buf_.size();
-    if (old_size + n > buf_.capacity()) {
-      std::vector<uint8_t> bigger;
-      bigger.reserve(std::max(old_size + n, buf_.capacity() * 2));
-      lock_region(bigger.data(), bigger.capacity());
-      bigger.insert(bigger.end(), buf_.begin(), buf_.end());
-      unlock_region(buf_.data(), buf_.capacity());
-      buf_.swap(bigger);
+    if (n > buf_.max_size() - old_size) {
+      throw Error("internal: secure buffer size overflow");
     }
-    resize(old_size + n);
+    reserve(old_size + n);
+    buf_.resize(old_size + n);
     std::memcpy(buf_.data() + old_size, p, n);
+  }
+
+  // Makes room for `n` bytes, preserving the lock-on-grow and wipe-on-release
+  // guarantees. Growth is exception-safe: if copying the old contents throws,
+  // the new block is unlocked, wiped and released; the old block stays intact.
+  void reserve(std::size_t n) {
+    if (n <= buf_.capacity()) {
+      return;
+    }
+    std::vector<uint8_t> bigger;
+    bigger.reserve(n);
+    (void)lock_region(bigger.data(), bigger.capacity());
+    try {
+      bigger.insert(bigger.end(), buf_.begin(), buf_.end());
+    } catch (...) {
+      unlock_region(bigger.data(), bigger.capacity());
+      throw;
+    }
+    unlock_region(buf_.data(), buf_.capacity());
+    buf_.swap(bigger);
   }
 
   void clear() noexcept {

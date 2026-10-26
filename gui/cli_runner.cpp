@@ -8,11 +8,14 @@
 CliRunner::CliRunner(QObject* parent) : QObject(parent) {
   binary_ = discoverBinary();
 
+  // The child speaks UTF-8: the CLI's messages, contact aliases and decrypted
+  // text all are. fromLocal8Bit() happened to work in a UTF-8 locale and
+  // mangled every non-ASCII message in one that was not.
   connect(&process_, &QProcess::readyReadStandardOutput, this, [this] {
-    emit outputChunk(QString::fromLocal8Bit(process_.readAllStandardOutput()));
+    emit outputChunk(QString::fromUtf8(process_.readAllStandardOutput()));
   });
   connect(&process_, &QProcess::readyReadStandardError, this, [this] {
-    emit logChunk(QString::fromLocal8Bit(process_.readAllStandardError()));
+    emit logChunk(QString::fromUtf8(process_.readAllStandardError()));
   });
   connect(&process_,
           QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
@@ -74,6 +77,11 @@ bool CliRunner::run(const QStringList& args, const QByteArray& stdin_data) {
     return false;
   }
 
+  // QProcess copies stdin_data into its own write buffer, which neither this
+  // code nor Qt zeroes when the buffer is released. The caller can wipe its
+  // copy; the passphrase/payload still exists in the QProcess object until the
+  // child has consumed it. There is no public API to reach that buffer, so it
+  // is documented as a limit rather than claimed as erased.
   if (!stdin_data.isEmpty()) {
     process_.write(stdin_data);
   }

@@ -6,8 +6,10 @@
 #include <sys/prctl.h>
 #endif
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <new>
 #include <cstdio>
 #include <fstream>
@@ -295,6 +297,172 @@ TEST("a cleared SecureBuffer re-locks the storage it allocates next") {
   if (mlock_is_effective()) {
     CHECK(locked_kb_for(buf.data()) > 0);
   }
+}
+
+TEST("SecureString moves its buffer instead of copying it") {
+  SecureString source;
+  for (int i = 0; i < 200; ++i) {
+    source.push_back(static_cast<char>('A' + (i % 26)));
+  }
+  const std::string expected(source.data(), source.size());
+
+  SecureString moved(std::move(source));
+  // The moved-from buffer is documented as empty; checking it is the point of
+  // the test, not an accidental use.
+  CHECK(source.empty());  // NOLINT(bugprone-use-after-move)
+  CHECK_EQ(moved.size(), expected.size());
+  CHECK_EQ(std::string(moved.data(), moved.size()), expected);
+
+  SecureString assigned;
+  assigned.push_back('x');
+  assigned = std::move(moved);
+  CHECK(moved.empty());  // NOLINT(bugprone-use-after-move)
+  CHECK_EQ(std::string(assigned.data(), assigned.size()), expected);
+}
+
+TEST("SecureBuffer moves its buffer instead of copying it") {
+  SecureBuffer source;
+  const std::vector<uint8_t> chunk(128, 0x3C);
+  source.append(chunk.data(), chunk.size());
+  const std::vector<uint8_t> expected(source.data(), source.data() + source.size());
+
+  SecureBuffer moved(std::move(source));
+  CHECK(source.empty());  // NOLINT(bugprone-use-after-move)
+  CHECK(moved.size() == expected.size());
+  CHECK(std::equal(moved.data(), moved.data() + moved.size(), expected.begin()));
+
+  SecureBuffer assigned;
+  assigned = std::move(moved);
+  CHECK(moved.empty());  // NOLINT(bugprone-use-after-move)
+  CHECK(assigned.size() == expected.size());
+  CHECK(std::equal(assigned.data(), assigned.data() + assigned.size(),
+                   expected.begin()));
+}
+
+TEST("SecureBuffer resize down and back up keeps one locked allocation") {
+  SecureBuffer buf;
+  const std::vector<uint8_t> chunk(256, 0x7E);
+  buf.append(chunk.data(), chunk.size());
+  const long before = locked_kb_for(buf.data());
+
+  buf.resize(17);
+  CHECK_EQ(buf.size(), std::size_t{17});
+  if (mlock_is_effective()) {
+    CHECK_EQ(locked_kb_for(buf.data()), before);
+  }
+
+  // Growing again inside the old capacity must not allocate an unlocked block.
+  buf.resize(200);
+  CHECK_EQ(buf.size(), std::size_t{200});
+  if (mlock_is_effective()) {
+    CHECK_EQ(locked_kb_for(buf.data()), before);
+  }
+  // The byte after the shrunk region was re-initialised by resize(), so the
+  // old 0x7E is not what comes back.
+  CHECK_EQ(static_cast<unsigned>(buf[17]), 0u);
+}
+
+TEST("SecureBuffer append refuses a length that would wrap size_t") {
+  SecureBuffer buf;
+  const uint8_t byte = 1;
+  buf.append(&byte, 1);
+  CHECK_THROWS(buf.append(&byte, std::numeric_limits<std::size_t>::max()));
+  // The failed call must not have changed the value.
+  CHECK_EQ(buf.size(), std::size_t{1});
+  CHECK_EQ(static_cast<unsigned>(buf[0]), 1u);
+}
+
+TEST("SecureBytes rejects an assignment of the wrong length") {
+  SecureBytes<32> secret;
+  const uint8_t src[31] = {};
+  CHECK_THROWS(secret.assign(src, sizeof src));
+}
+
+TEST("StringWipe zeroes on scope exit and on an exception") {
+  std::string text = "synthetic plaintext 0123456789";
+  const std::size_t n = text.size();
+  const char* const p = text.data();
+  {
+    StringWipe guard(text);
+  }
+  CHECK(text.empty());
+  for (std::size_t i = 0; i < n; ++i) {
+    CHECK_EQ(p[i], '\0');
+  }
+
+  std::string thrown = "synthetic secret on an error path";
+  const std::size_t m = thrown.size();
+  const char* const q = thrown.data();
+  bool caught = false;
+  try {
+    StringWipe guard(thrown);
+    throw Failure("simulated failure");
+  } catch (const Failure&) {
+    caught = true;
+  }
+  CHECK(caught);
+  CHECK(thrown.empty());
+  for (std::size_t i = 0; i < m; ++i) {
+    CHECK_EQ(q[i], '\0');
+  }
+
+  std::string kept = "keep me";
+  {
+    StringWipe guard(kept);
+    guard.dismiss();
+  }
+  CHECK_EQ(kept, std::string("keep me"));
+}
+
+TEST("append_string_wiped grows without losing the text") {
+  std::string text;
+  for (int i = 0; i < 200; ++i) {
+    append_string_wiped(text, "piece/");
+  }
+  CHECK_EQ(text.size(), std::size_t{200} * 6);
+  CHECK_EQ(text.substr(0, 12), std::string("piece/piece/"));
+  CHECK_EQ(text.substr(text.size() - 6), std::string("piece/"));
+  wipe_string(text);
+}
+
+TEST("wipe_vector releases the bytes it zeroed") {
+  std::vector<uint8_t> bytes(64, 0xA5);
+  wipe_vector(bytes);
+  CHECK(bytes.empty());
+  CHECK_EQ(bytes.capacity(), std::size_t{0});
+}
+
+// A lock that the OS refuses is a lock failure, not bookkeeping degradation,
+// and must not leave a page reference that later unlocks somebody else's page.
+// Simulated in a child so the lowered RLIMIT_MEMLOCK does not affect the test
+// runner. When the environment grants CAP_IPC_LOCK (or mlock is otherwise
+// still permitted) the test cannot force a failure and says so.
+TEST("a refused lock is not reported as degraded bookkeeping") {
+#if defined(__linux__)
+  const pid_t pid = fork();
+  CHECK(pid >= 0);
+  if (pid == 0) {
+    const struct rlimit no_memlock = {0, 0};
+    if (setrlimit(RLIMIT_MEMLOCK, &no_memlock) != 0) {
+      _exit(0);  // cannot simulate here; the runner itself may be restricted
+    }
+    PageBlock block;
+    if (lock_region(block.at(0), 32)) {
+      _exit(0);  // mlock still succeeded; nothing was simulated
+    }
+    // The same page now has two references that both failed to lock. Releasing
+    // both must not underflow the count or crash; a second release of a page
+    // with no reference is the dangerous case.
+    (void)lock_region(block.at(32), 32);
+    unlock_region(block.at(32), 32);
+    unlock_region(block.at(0), 32);
+    _exit(memory_locking_degraded() ? 3 : 0);
+  }
+  int status = 0;
+  CHECK(waitpid(pid, &status, 0) == pid);
+  CHECK(WIFEXITED(status));
+  CHECK_EQ(WEXITSTATUS(status), 0);
+#endif
 }
 
 TEST("SecureBytes still zeroes its bytes on destruction") {

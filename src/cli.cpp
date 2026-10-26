@@ -24,10 +24,13 @@ const std::vector<CommandSpec>& specs() {
   static const std::vector<CommandSpec> table = {
       {"init",
        {"--usb-path", "--force", "--otpk-count", "--argon2-time",
-        "--argon2-mem-kb", "--from-mnemonic", "--passphrase-words"},
+        "--argon2-mem-kb", "--from-mnemonic", "--passphrase-words",
+        "--structured-output"},
        0},
       {"unlock", {"--usb-path"}, 0},
-      {"passphrase", {"--usb-path", "--passphrase-words"}, 0},
+      {"passphrase",
+       {"--usb-path", "--passphrase-words", "--structured-output"},
+       0},
       {"anchor", {"--usb-path"}, 0},
       {"migrate", {"--usb-path", "--commit"}, 0},
       {"card",
@@ -38,8 +41,8 @@ const std::vector<CommandSpec>& specs() {
       {"trust", {"--usb-path"}, 1},
       {"reset-session", {"--usb-path"}, 1},
       {"remove", {"--usb-path", "--yes"}, 1},
-      {"send", {"--usb-path", "--file"}, 2},
-      {"recv", {"--usb-path", "--stage-file"}, 1},
+      {"send", {"--usb-path", "--file", "--stdin-payload"}, 2},
+      {"recv", {"--usb-path", "--stage-file", "--stdin-payload"}, 1},
       {"ui", {"--usb-path", "--lang", "--idle-lock"}, 0},
   };
   return table;
@@ -187,12 +190,21 @@ void print_usage(std::ostream& os) {
      << "; init and\n"
      << "                       passphrase only). More words means more entropy\n"
      << "                       to write down and type.\n"
+     << "  --structured-output  Emit the machine-readable result block on stdout\n"
+     << "                       instead of the human word grids. For a GUI that\n"
+     << "                       already owns the terminal. It never puts a phrase\n"
+     << "                       in argv or a file; init and passphrase only.\n"
      << "  --fingerprint        Print only the identity fingerprint (card only).\n"
      << "  --card <file>        Read a contact card from a file (add only).\n"
      << "  --file <file>        Encrypt a file instead of text (send only).\n"
      << "  --stage-file         Stage a received file in the private temporary\n"
      << "                       folder and print its path, without asking on a\n"
      << "                       terminal whether to open it (recv only).\n"
+     << "  --stdin-payload <n>  Read exactly <n> bytes from standard input as the\n"
+     << "                       message (send) or block (recv), before the\n"
+     << "                       passphrase. For front ends that must not put the\n"
+     << "                       plaintext in the child's argv; requires --usb-path\n"
+     << "                       or RATCHET_USB_PATH.\n"
      << "  --yes                Skip the interactive confirmation (remove only).\n"
      << "  --lang en|it         Language of the interface (ui only). Without\n"
      << "                       it, an Italian locale gets Italian and\n"
@@ -289,6 +301,9 @@ Options parse_args(const std::vector<std::string_view>& args) {
     } else if (arg == "--from-mnemonic") {
       opts.from_mnemonic = true;
       note("--from-mnemonic");
+    } else if (arg == "--structured-output") {
+      opts.structured_output = true;
+      note("--structured-output");
     } else if (arg == "--passphrase-words") {
       const uint32_t words =
           parse_u32(next("--passphrase-words"), "--passphrase-words");
@@ -308,6 +323,14 @@ Options parse_args(const std::vector<std::string_view>& args) {
     } else if (arg == "--stage-file") {
       opts.stage_received = true;
       note("--stage-file");
+    } else if (arg == "--stdin-payload") {
+      const uint32_t bytes =
+          parse_u32(next("--stdin-payload"), "--stdin-payload");
+      if (bytes == 0) {
+        throw Error("--stdin-payload expects a positive byte count");
+      }
+      opts.stdin_payload_bytes = static_cast<std::size_t>(bytes);
+      note("--stdin-payload");
     } else if (arg == "--lang") {
       opts.lang = std::string(next("--lang"));
       if (!i18n::is_valid_choice(opts.lang)) {

@@ -616,6 +616,9 @@ void Driver::receive_message() {
         session::receive(vault().store, identity_sk, identity_pk, block);
     identity_sk.wipe();
     wipe_string(block);
+    // A decrypted body that is not a file is moved into the pager below; a
+    // failed file decode, save or render used to skip the wipe entirely.
+    StringWipe wipe_plaintext(result.plaintext);
 
     save();
     const bool unverified =
@@ -644,7 +647,6 @@ void Driver::receive_message() {
       model_.show_message(result.alias, std::move(result.plaintext),
                           result.session_established, unverified);
     }
-    wipe_string(result.plaintext);
   } catch (const std::exception& e) {
     wipe_string(block);
     report(e);
@@ -672,11 +674,17 @@ void Driver::send_file() {
     // text message uses. The raw bytes and the framed plaintext are zeroed as
     // soon as they are no longer needed; only the ciphertext block survives.
     std::vector<uint8_t> raw = file::load_file(fs::path(path));
+    // Zero and release the file bytes on every path out, including a throwing
+    // extension check or framing step.
+    struct RawWipe {
+      std::vector<uint8_t>& bytes;
+      ~RawWipe() { wipe_vector(bytes); }
+    } raw_wipe{raw};
     const std::string ext = file::extension_for(fs::path(path), raw);
     wipe_string(path);
     std::string payload = file::encode_file_payload(raw, ext);
-    sodium_memzero(raw.data(), raw.size());
-    raw.clear();
+    StringWipe wipe_payload(payload);
+    wipe_vector(raw);
 
     IdentitySigningSecretKey identity_sk;
     IdentitySigningPublicKey identity_pk;
@@ -737,8 +745,8 @@ void Driver::copy_block() {
 void Driver::paste_from_clipboard() {
   try {
     std::string text = clipboard::paste();
+    StringWipe wipe_text(text);
     model_.paste_text(text);
-    wipe_string(text);
   } catch (const std::exception& e) {
     report(e);
   }

@@ -32,12 +32,30 @@ std::mutex& locker_mutex() {
   return m;
 }
 
+// One page's bookkeeping.
+//
+// `refs` counts live secret regions on the page. `locked` records whether our
+// own sodium_mlock() call succeeded -- munlock() is only called when it did,
+// so a failed lock can never release a page somebody else locked.
+//
+// `dump_excluded` records that we asked libsodium to take the page out of a
+// core dump. It is an attempt, not a confirmation: libsodium 1.0.22 does
+// `madvise(MADV_DONTDUMP)` before `mlock()` and ignores the madvise result, so
+// there is no portable way to observe whether the flag stuck. On Linux the
+// call is unconditional, which is why the restore path below is attempted even
+// when `locked` is false.
+struct PageState {
+  std::size_t refs = 0;
+  bool locked = false;
+  bool dump_excluded = false;
+};
+
 // Keyed by the page's address as an integer, but every page is *reached* by
 // pointer arithmetic from the caller's own pointer -- see first_page below.
 // Rebuilding a pointer out of an integer would be both a lint violation and a
 // genuine aliasing hazard.
-std::unordered_map<const void*, std::size_t>& page_refs() {
-  static std::unordered_map<const void*, std::size_t> refs;
+std::unordered_map<const void*, PageState>& page_refs() {
+  static std::unordered_map<const void*, PageState> refs;
   return refs;
 }
 
@@ -55,6 +73,30 @@ char* first_page(void* p, std::size_t ps) {
   const auto offset =
       static_cast<std::size_t>(reinterpret_cast<uintptr_t>(bytes) & (ps - 1));
   return bytes - offset;
+}
+
+// Undoes the dump exclusion that sodium_mlock() attempts on Linux.
+//
+// The page is passed to madvise() whole and page-aligned, never as an
+// arbitrary data() pointer: madvise() rejects a range whose start is not
+// page-aligned, so handing it the address of a 32-byte SecureBytes would fail
+// with EINVAL (and, if it had been accepted, would affect the other secrets on
+// the page). This only runs from unlock_region when the last reference to the
+// page is gone, so dump exclusion is never lifted while another secret is
+// still living there.
+//
+// Best-effort on purpose. A page can be shared with unrelated allocations that
+// called sodium_mlock() outside this bookkeeping; there is no way to know
+// whether the exclusion flag was already set before our first lock. The
+// restore is therefore deliberately *after* the last of our own secrets is
+// gone, and a failure is not treated as fatal.
+void restore_dump_exclusion(void* page, std::size_t ps) noexcept {
+#if defined(MADV_DODUMP)
+  (void)::madvise(page, ps, MADV_DODUMP);
+#else
+  (void)page;
+  (void)ps;
+#endif
 }
 
 // Set when an exception stopped the bookkeeping from completing. From that
@@ -97,8 +139,16 @@ bool lock_region(void* p, std::size_t n) noexcept {
   try {
     const std::lock_guard<std::mutex> guard(locker_mutex());
     for (char* page = start; page < end; page += ps) {
-      if (page_refs()[page]++ == 0) {
-        if (sodium_mlock(page, ps) != 0) {
+      PageState& state = page_refs()[page];
+      if (state.refs++ == 0) {
+        // libsodium 1.0.22's sodium_mlock() first asks the kernel to exclude
+        // the page from core dumps and only then calls mlock(). The madvise
+        // result is ignored there, so `dump_excluded` records an attempt; the
+        // restore path in unlock_region() is what undoes it. The failure of
+        // mlock() itself is separate and is what makes the lock advisory.
+        state.dump_excluded = true;
+        state.locked = sodium_mlock(page, ps) == 0;
+        if (!state.locked) {
           ok = false;
         }
       }
@@ -135,11 +185,29 @@ void unlock_region(void* p, std::size_t n) noexcept {
       if (it == page_refs().end()) {
         continue;
       }
-      if (--it->second == 0) {
-        // Nothing else is living on this page any more, so it is finally safe
-        // to hand it back. sodium_munlock would zero the whole page here,
-        // which is not ours to do: the page may hold unrelated data.
-        ::munlock(page, ps);
+      PageState& state = it->second;
+      if (state.refs == 0) {
+        // Defensive: a page with no live owner should not be in the table.
+        // Leave it alone rather than underflowing the count.
+        continue;
+      }
+      if (--state.refs == 0) {
+        // Nothing else we track is living on this page any more, so it is
+        // finally safe to undo both effects of the lock. sodium_munlock would
+        // zero the whole page here, which is not ours to do: the page may hold
+        // unrelated data. The bytes we do own were already zeroed above.
+        //
+        // Dump exclusion is lifted only here, at the last reference, never
+        // while another secret on the page is alive. This is attempted even
+        // when `locked` is false because sodium_mlock() asks for DONTDUMP
+        // before it tries mlock() and can therefore leave the flag set even
+        // when the lock itself failed.
+        if (state.dump_excluded) {
+          restore_dump_exclusion(page, ps);
+        }
+        if (state.locked) {
+          ::munlock(page, ps);
+        }
         page_refs().erase(it);
       }
     }
@@ -151,8 +219,14 @@ void unlock_region(void* p, std::size_t n) noexcept {
 }
 
 bool memory_locking_degraded() noexcept {
-  const std::lock_guard<std::mutex> guard(locker_mutex());
-  return g_accounting_degraded;
+  try {
+    const std::lock_guard<std::mutex> guard(locker_mutex());
+    return g_accounting_degraded;
+  } catch (...) {
+    // If even the mutex cannot be taken, the bookkeeping is by definition not
+    // trustworthy. Reporting degradation is the safe answer.
+    return true;
+  }
 }
 
 void wipe_string(std::string& text) {
@@ -160,6 +234,39 @@ void wipe_string(std::string& text) {
     sodium_memzero(text.data(), text.size());
   }
   text.clear();
+}
+
+void wipe_vector(std::vector<uint8_t>& bytes) noexcept {
+  if (!bytes.empty()) {
+    sodium_memzero(bytes.data(), bytes.size());
+  }
+  std::vector<uint8_t>().swap(bytes);
+}
+
+void append_string_wiped(std::string& out, std::string_view text) {
+  if (text.empty()) {
+    return;
+  }
+  if (text.size() > out.max_size() - out.size()) {
+    throw Error("internal: string size overflow");
+  }
+  const std::size_t needed = out.size() + text.size();
+  if (needed > out.capacity()) {
+    const std::size_t doubled =
+        out.capacity() > out.max_size() / 2 ? out.max_size()
+                                            : out.capacity() * 2;
+    std::string bigger;
+    bigger.reserve(doubled > needed ? doubled : needed);
+    bigger.append(out);
+    if (!out.empty()) {
+      sodium_memzero(out.data(), out.size());
+    }
+    out.swap(bigger);
+    // `bigger` now owns the old allocation, whose used bytes are zeroed. The
+    // unused tail of that allocation is not ours to write through the string
+    // interface; it is released with the allocation.
+  }
+  out.append(text);
 }
 
 bool harden_process() noexcept {

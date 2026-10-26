@@ -33,7 +33,7 @@ Checks: >
 
 # Only diagnose the project's own headers; anything under /usr/include is not
 # ours to fix and would drown the real findings.
-HeaderFilterRegex: '.*/(include/ratchet|src|test)/.*'
+HeaderFilterRegex: '.*/(include/ratchet|src|gui|test)/.*'
 
 WarningsAsErrors: '*'
 

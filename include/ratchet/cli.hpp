@@ -34,6 +34,10 @@ struct Options {
   std::size_t replenish_otpk = 0;
   bool fingerprint_only = false;
   bool from_mnemonic = false;
+  // init/passphrase --structured-output: replace the human word grids with the
+  // machine-readable block in ratchet/gui_format.hpp. The default output is
+  // untouched. The block is on stdout; it is not put in argv, a file or a log.
+  bool structured_output = false;
   bool commit = false;
   // remove --yes: skip the interactive confirmation. The GUI asks with its own
   // dialog first and has no terminal to type the confirmation into.
@@ -50,6 +54,16 @@ struct Options {
   std::string card_file;
   std::string file_path;  // send --file: encrypt a file instead of text
   std::optional<std::string> message;
+  // send/recv --stdin-payload: the exact number of bytes to read from standard
+  // input as the message or block *before* the vault passphrase.
+  //
+  // This exists for front ends that must not put plaintext in the child's argv
+  // (the desktop GUI): argv is visible in /proc to every process of the same
+  // user, while a pipe is not. A length is needed because a message can contain
+  // newlines and blank lines, so no delimiter would be unambiguous. The option
+  // is rejected for every other command; it is not a second way to type a
+  // message.
+  std::optional<std::size_t> stdin_payload_bytes;
   // Terminal interface only.
   std::string lang;  // empty means "work it out from the locale"
   int idle_lock_seconds = kDefaultIdleLockSeconds;

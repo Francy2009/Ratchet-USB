@@ -20,8 +20,13 @@ add_executable(ratchet-gui
                cli_runner.cpp
                cli_runner.hpp
                host_env.cpp
-               host_env.hpp)
+               host_env.hpp
+               payload_input.cpp
+               payload_input.hpp
+               gui_output.cpp
+               gui_output.hpp)
 
+target_include_directories(ratchet-gui PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(ratchet-gui PRIVATE Qt6::Widgets)
 
 if(RATCHET_HARDENED AND NOT MSVC)

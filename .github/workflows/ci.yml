@@ -473,7 +473,8 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsodium-dev cmake clang-tidy curl perl make g++
+          sudo apt-get install -y libsodium-dev cmake clang-tidy curl perl make g++ \
+            qt6-base-dev libgl1-mesa-dev
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
@@ -484,17 +485,20 @@ jobs:
         run: ./ci/install-openssl.sh "$OPENSSL_PREFIX"
 
       - name: Generate the compilation database
+        # Qt6 is installed above, so the GUI sources are part of the database.
+        # The CLI-only build remains covered by the no-gui job.
         run: >
           cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          -DRATCHET_BUILD_GUI=ON
           -DOPENSSL_ROOT_DIR="$OPENSSL_PREFIX"
 
       - name: Run clang-tidy
-        # Only the .cpp files are passed in; the headers are analysed through
-        # the translation units that include them, per HeaderFilterRegex in
+        # The .cpp files are passed in; the headers are analysed through the
+        # translation units that include them, per HeaderFilterRegex in
         # .clang-tidy. The check list and warnings-as-errors live in that file
         # rather than on this command line, so running the linter locally
-        # gives the same answer CI does.
-        run: find src -name '*.cpp' -print0 | xargs -0 clang-tidy -p build --quiet
+        # gives the same answer CI does. src stays in the set; gui is added.
+        run: find src gui -name '*.cpp' -print0 | xargs -0 clang-tidy -p build --quiet
 
   # ---------------------------------------------------------------------
   # Coverage is a report, not a gate: it shows which branches the suite never
@@ -603,12 +607,12 @@ jobs:
         run: ./test/smoke.sh build/ratchet-usb
 
   # ---------------------------------------------------------------------
-  # The GUI's host-environment cleanup is what makes "Apri cartella" work from
-  # the AppImage. It needs only QtCore + QtTest, so test it without building
-  # the GUI itself.
+  # The GUI helper, payload framing, structured-output parser and the real
+  # window against a fake CLI. These build without the installed GUI target so
+  # the job stays a widget/test build; launch tests run offscreen.
   # ---------------------------------------------------------------------
   gui-tests:
-    name: GUI host-environment tests
+    name: GUI helper and launch tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -637,11 +641,16 @@ jobs:
           -DRATCHET_BUILD_GUI=OFF
           -DOPENSSL_ROOT_DIR="$OPENSSL_PREFIX"
 
-      - name: Build the GUI helper tests
-        run: cmake --build build --target ratchet_gui_tests -j"$(nproc)"
+      - name: Build the GUI tests
+        run: >
+          cmake --build build -j"$(nproc)"
+          --target ratchet_gui_tests
+          ratchet_gui_payload_tests
+          ratchet_gui_output_tests
+          ratchet_gui_launch_tests
 
-      - name: Run the GUI helper tests
-        run: ctest --test-dir build -R ratchet_gui_tests --output-on-failure
+      - name: Run the GUI tests
+        run: ctest --test-dir build -R 'ratchet_gui' --output-on-failure
 
   # ---------------------------------------------------------------------
   # A single gate for branch protection to point at, so adding a job above

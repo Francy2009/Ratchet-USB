@@ -43,15 +43,22 @@ python3 test/vectors/reference.py --check
   passphrase, rekey, contact removal, and removal followed by a fresh session
   on both sides.
 - **Terminal interface** (`test/smoke_ui.py`): a real pty conversation.
-- **GUI helper** (`test/test_host_env.cpp`): the AppImage host-environment
-  cleanup that makes "Apri cartella" work.
+- **GUI helper, transport and structured output**
+  (`test/test_host_env.cpp`, `test/test_payload_input.cpp`,
+  `test/test_gui_output.cpp`, `test/test_gui_launch.cpp`,
+  `test/test_gui_format.cpp`): the AppImage host-environment cleanup that makes
+  "Apri cartella" work, the byte framing that keeps a message on stdin, strict
+  parsing of the opt-in structured result (missing/incomplete/malformed blocks
+  are rejected), and a headless run of the real window against a fake CLI that
+  asserts the plaintext is not in the child's argv and that exit codes and
+  unexpected termination are reported.
 - **Fuzzing** (`test/fuzz/`): parsers, protocol state machine, terminal key
   handling, and the CLI grammar. Committed corpora are replayed on every CI run.
 - **Rust**: vendored SPQR and the bridge have their own `cargo test`, plus
   `cargo-audit` and the license inventory check.
 - **CI matrix**: gcc/clang, Debug/Release, ASan/UBSan, Valgrind, clang-tidy,
-  libsodium's native HKDF and the RFC 5869 fallback, no-GUI build, GUI helper
-  tests.
+  libsodium's native HKDF and the RFC 5869 fallback, no-GUI build, GUI helper,
+  parser and offscreen launch tests.
 
 ## Coverage
 

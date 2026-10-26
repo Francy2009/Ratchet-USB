@@ -26,10 +26,13 @@ only layer.
 
 What the design does aim at:
 
-- New suite-3 sessions use an X25519 + ML-KEM-768 hybrid opening, then
-  combine keys from the classical Double Ratchet and Signal SPQR on every
-  message. Existing suite-2 sessions continue with their original hybrid
-  opening and classical Double Ratchet. The transport cannot read plaintext.
+- Cards produced by this build advertise suite 4. A new session opened from one
+  uses the X-Wing combiner for its X25519 + ML-KEM-768 opening, then combines
+  keys from the classical Double Ratchet and Signal SPQR on every message.
+  Suite-3 cards keep the previous opening combiner and still use Triple
+  Ratchet; suite-2 cards use the original hybrid opening and classical Double
+  Ratchet. An established session keeps the suite and combiner it agreed and
+  does not switch while it is active. The transport cannot read plaintext.
 - Ratchet forward secrecy limits what a newly compromised session state can
   reveal about past messages. Copies of older vault files can retain older
   keys, especially on flash storage.
@@ -172,9 +175,29 @@ What it changes, stated plainly:
   decrypted bytes into the same private `0700` directory as a `0600` file, and
   the GUI opens that folder in the file manager. The refusal to open types a
   desktop might execute is the same code path, so it applies here too.
-- **Child arguments are separated explicitly.** Message text, blocks and aliases
-  are passed after a literal `--`, so a value that begins with `-` is taken as a
-  value and never reinterpreted as a command-line option.
+- **Child arguments are separated explicitly.** Aliases are passed after a
+  literal `--`, so a value that begins with `-` is taken as a value and never
+  reinterpreted as a command-line option. Message text and received blocks are
+  **not** passed in `argv` at all: the GUI writes their exact UTF-8 bytes to the
+  child's stdin, followed by the passphrase, and the CLI reads them with
+  `--stdin-payload <byte-count>`. A byte count rather than a delimiter keeps
+  multiline text, blank lines, embedded NULs and Unicode intact.
+- **Generated phrases arrive as a validated block, not by scraping headings.**
+  `init` and `passphrase` accept `--structured-output`, which replaces the
+  human word grids with a fielded result on stdout. The GUI checks the marker,
+  version, command, status, every field and the word counts before showing
+  anything; a missing or malformed block is an error, never a partial phrase.
+  The program does not put the block in argv, the environment, a temporary file
+  or a log. It is written to the child's stdout, so it still lives in QProcess
+  memory until it is consumed, and the GUI clears its own copy after the dialog.
+- **Qt's own copies are not wiped.** Clearing a widget drops the visible value
+  and this program's reference, but `QLineEdit::clear()` and
+  `QPlainTextEdit::clear()` do not zero the allocation. Qt may also hold
+  implicit copies (accessibility, a signal, `QProcess`'s stdin write buffer),
+  `QLineEdit` exposes no way to clear its undo history, and the Copy button
+  hands text to the clipboard manager, which is outside this process. These are
+  documented limits, not claims of erasure; a host that can read the GUI's
+  memory is already out of scope.
 
 What is explicitly **out of scope**, in the sense that the design does not try
 to defend against it:

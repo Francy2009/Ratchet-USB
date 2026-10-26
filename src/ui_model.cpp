@@ -80,6 +80,10 @@ void Model::show_block(std::string_view heading, std::string block) {
 
 void Model::show_message(const std::string& from, std::string body, bool session_opened,
                          bool unverified) {
+  // The body is a by-value copy of the decrypted plaintext. Wrapping it can
+  // throw (it grows a vector of lines), and the explicit wipe at the end used
+  // to be skipped on that path; the guard covers every return.
+  StringWipe wipe_body(body);
   pager_heading_ = std::string(i18n::t(lang_, Str::MessageFrom)) + " " + from;
   pager_notes_.clear();
   if (session_opened) {
@@ -212,7 +216,12 @@ void Model::move_selection(int delta, std::size_t count) {
   }
 }
 
-void Model::insert(std::string_view utf8) { text_.append(utf8); }
+void Model::insert(std::string_view utf8) {
+  // The editable buffer is an ordinary std::string on unlocked pages, but a
+  // reallocation used to leave the previous copy of what was typed on the heap
+  // unwiped. append_string_wiped zeroes that block before releasing it.
+  append_string_wiped(text_, utf8);
+}
 
 void Model::backspace() {
   if (text_.empty()) {
