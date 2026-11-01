@@ -59,7 +59,11 @@ struct Options {
   // verified when the two differ, so a card replaced (or upgraded from legacy
   // to hybrid) while the dialog was open cannot inherit a confirmation the
   // user gave for a different key.
-  std::string expect_fingerprint;
+  //
+  // Optional rather than an empty string, so "not supplied" and "supplied
+  // empty" stay distinguishable: the second is a caller error and must not
+  // silently skip the comparison.
+  std::optional<std::string> expect_fingerprint;
   // trust --show-fingerprint: print the fingerprint and what trusting would
   // mean, print nothing else, and leave the vault exactly as it was. The GUI
   // runs this first so the string its dialog shows comes from the CLI, then

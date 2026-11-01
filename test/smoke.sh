@@ -248,13 +248,13 @@ grep -qx "kind=text" "$WORK/spoof-block.txt" ||
   fail "a spoofing body changed the kind: $(cat "$WORK/spoof-block.txt")"
 grep -q "^command=recv$" "$WORK/spoof-block.txt" ||
   fail "the block is not the recv block"
-grep -q "^marker=hex-colon$" "$WORK/spoof-block.txt" ||
+grep -q "^marker=percent-hex$" "$WORK/spoof-block.txt" ||
   fail "the block does not announce how the body was escaped"
 [[ "$(grep -c "^$MARKER_BEGIN$" "$WORK/spoof-recv.txt")" == "1" ]] ||
   fail "the begin marker occurs more than once on stdout"
 [[ "$(grep -c "^$MARKER_END$" "$WORK/spoof-recv.txt")" == "1" ]] ||
   fail "the end marker occurs more than once on stdout"
-grep -q "2d:2d:2d:2d:2d" "$WORK/spoof-recv.txt" ||
+grep -q "%2d:2d:2d:2d:2d" "$WORK/spoof-recv.txt" ||
   fail "the body's own marker was not escaped"
 
 # The same message without --structured-output writes what it always wrote:

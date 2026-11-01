@@ -340,7 +340,14 @@ TEST("cli: trust takes --confirmed and --show-fingerprint, and nothing else") {
   const Options expecting = parse(
       {"trust", "alice", "--confirmed", "--expect-fingerprint", "ab:cd"});
   CHECK(expecting.confirmed);
-  CHECK_EQ(expecting.expect_fingerprint, std::string("ab:cd"));
+  CHECK(expecting.expect_fingerprint.has_value());
+  CHECK_EQ(*expecting.expect_fingerprint, std::string("ab:cd"));
+  // Supplied empty is not the same as not supplied: cmd_trust compares it and
+  // refuses, instead of skipping the check.
+  const Options empty = parse(
+      {"trust", "alice", "--confirmed", "--expect-fingerprint", ""});
+  CHECK(empty.expect_fingerprint.has_value());
+  CHECK(empty.expect_fingerprint->empty());
   CHECK_THROWS(parse({"trust", "alice", "--expect-fingerprint"}));
 
   // They are for `trust` alone: another command taking them would be a flag

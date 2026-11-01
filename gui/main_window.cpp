@@ -1328,8 +1328,7 @@ void MainWindow::handleFinished(int exit_code, bool normal_exit) {
       return;
     }
     showResultDialog(true, commandTitle(command),
-                     tr("Operazione completata."),
-                     recvBody(commandStdout_));
+                     tr("Operazione completata."), parsed.body);
     return;
   }
 
@@ -1352,27 +1351,6 @@ void MainWindow::handleFinished(int exit_code, bool normal_exit) {
   }
 }
 
-QString MainWindow::recvBody(const QString& stdout_text) {
-  // The message body is everything the command wrote before the structured
-  // block, and the block is the last thing in the stream. Warning lines go to
-  // stderr and are shown by showFileDialog, not mixed into what the sender
-  // wrote.
-  const qsizetype block = stdout_text.lastIndexOf(
-      QString::fromLatin1(ratchet::gui_format::kBegin));
-  if (block < 0) {
-    // No block: the whole stream is the message, trailing spaces included.
-    return stdout_text;
-  }
-  // The CLI writes one newline between the body and the block. That newline is
-  // framing, not text; everything before it is what the sender wrote, so it is
-  // kept byte for byte rather than trimmed.
-  QString body = stdout_text.left(block);
-  if (body.endsWith(QLatin1Char('\n'))) {
-    body.chop(1);
-  }
-  return body;
-}
-
 void MainWindow::showRecvFile(const ratchet::gui::ParsedRecvResult& parsed,
                               const QString& stderr_text) {
   // A file is always announced, even when it was not staged: the one thing the
@@ -1383,7 +1361,7 @@ void MainWindow::showRecvFile(const ratchet::gui::ParsedRecvResult& parsed,
     detail = stderr_text;
   } else {
     detail = stderr_text;
-    const QString body = recvBody(commandStdout_);
+    const QString& body = parsed.body;
     if (!body.isEmpty()) {
       if (!detail.isEmpty() && !detail.endsWith(QLatin1Char('\n'))) {
         detail += QLatin1Char('\n');

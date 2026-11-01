@@ -48,6 +48,10 @@ struct ParsedRecvResult {
   QString ext;
   bool staged = false;
   QString path;
+  // The message body: what the CLI wrote before the block, with the framing
+  // newline removed and the writer's escape undone when the block names an
+  // escape this parser can reverse. Valid when ok is true.
+  QString body;
   QString error;  // safe to show
 };
 

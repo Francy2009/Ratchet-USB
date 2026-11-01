@@ -572,12 +572,10 @@ int cmd_trust(const Options& opts) {
   const fs::path usb = require_usb_path(opts);
   const std::string name =
       require_value(opts.name, "Contact alias: ", "an alias is required");
-  // Checked as well as compared: an alias typed with a trailing newline (a
-  // pasted one) would otherwise be unmatched and refused, and one carrying an
-  // invisible character should be refused rather than echoed back.
-  if (const char* problem = contact_alias_problem(name)) {
-    throw Error(problem);
-  }
+  // Not validated here on purpose: a vault written by an older build can hold
+  // an alias this build would refuse to import, and the owner still has to be
+  // able to mark that contact verified. The alias is matched as it is stored
+  // and only ever *printed* through escape_control_chars.
   const fs::path path = vault::vault_path(usb);
 
   OpenedVault opened = unlock_vault(path);
@@ -585,7 +583,8 @@ int cmd_trust(const Options& opts) {
 
   const int idx = store.find_contact(name);
   if (idx < 0) {
-    throw Error("no contact named '" + name + "'");
+    throw Error("no contact named '" + terminal::escape_control_chars(name) +
+                "'");
   }
   const store::Contact& contact = store.contacts[static_cast<std::size_t>(idx)];
   // What is printed, never what is compared or stored: the vault keeps the
@@ -608,8 +607,8 @@ int cmd_trust(const Options& opts) {
   // legacy card upgraded to a hybrid one, would make this command mark a key
   // the user never looked at. The confirmation belongs to the string that was
   // shown, so a different one is refused instead of inherited.
-  if (!opts.expect_fingerprint.empty() &&
-      opts.expect_fingerprint != shown_fingerprint) {
+  if (opts.expect_fingerprint.has_value() &&
+      *opts.expect_fingerprint != shown_fingerprint) {
     throw Error("the fingerprint of '" + shown_name +
                 "' is not the one that was shown, so nothing was marked as "
                 "verified; run trust again and compare the new value");
@@ -649,7 +648,8 @@ int cmd_trust(const Options& opts) {
     if (!terminal::confirm_enter_or_escape(
             "Press ENTER once you have compared the fingerprint, or Esc to "
             "cancel: ")) {
-      throw Error("cancelled; '" + name + "' was not marked as verified");
+      throw Error("cancelled; '" + shown_name +
+                  "' was not marked as verified");
     }
   }
 
@@ -967,11 +967,11 @@ int cmd_recv(const Options& opts) {
     // The front-end mode: the body first, then the block, and the block begins
     // on a line of its own. The body goes out exactly as it arrived except for
     // two rewrites -- control characters escaped (so a window is not handed a
-    // terminal sequence) and any literal marker spelled in hex (so the only
-    // marker in the stream is the real one). The text is the sender's; the
-    // block, not this, is what a reader parses.
+    // terminal sequence) and the escape used to keep a literal marker out of
+    // the stream (so the only marker is the real one). The text is the
+    // sender's; the block, not this, is what a reader parses.
     std::cout << alias << ": ";
-    gui_format::write_body_without_markers(
+    gui_format::write_body_escaped(
         std::cout, terminal::escape_control_chars(result.plaintext));
     std::cout << "\n";
     structured_result.kind = gui_format::kRecvText;

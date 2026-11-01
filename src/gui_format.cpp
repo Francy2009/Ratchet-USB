@@ -1,5 +1,6 @@
 #include "ratchet/gui_format.hpp"
 
+#include <algorithm>
 #include <cstdint>
 
 #include "ratchet/passphrase.hpp"
@@ -149,15 +150,13 @@ bool write_recv_result(std::ostream& os, const RecvResult& result) {
   // for the block by a reader that took the first occurrence. The block is
   // written last, so the reader can simply take the last occurrence -- but an
   // unambiguous stream is cheaper to reason about than that contract, so the
-  // body carries the marker as its hex-colon spelling and a `marker=` line in
-  // the block restores it. RecvResult::body holds it; the field is optional,
-  // and a reader that ignores it still gets a stream where the marker occurs
-  // exactly once.
+  // body is escaped (see write_body_escaped) and the block names the mode so
+  // the reader can put the text back.
   os << kBegin << '\n'
      << "version=" << kVersion << '\n'
      << "command=recv\n"
      << "kind=" << result.kind << '\n'
-     << "marker=hex-colon" << '\n';
+     << "marker=percent-hex" << '\n';
   if (file) {
     os << "ext=" << result.ext << '\n'
        << "staged=" << (result.staged ? "yes" : "no") << '\n';
@@ -169,7 +168,7 @@ bool write_recv_result(std::ostream& os, const RecvResult& result) {
   return os.good();
 }
 
-void write_body_without_markers(std::ostream& os, std::string_view body) {
+void write_body_escaped(std::ostream& os, std::string_view body) {
   static constexpr char kHex[] = "0123456789abcdef";
   // Both markers share the "-----" framing, so one scan finds either.
   constexpr std::string_view kMarkerStart = "-----";
@@ -179,6 +178,10 @@ void write_body_without_markers(std::ostream& os, std::string_view body) {
         body.compare(i, kBegin.size(), kBegin) == 0;
     const bool is_end = body.compare(i, kEnd.size(), kEnd) == 0;
     if (is_begin || is_end) {
+      // The escape character, then the marker's colon-hex spelling. The '%' is
+      // what makes this reversible: without it, a message that already
+      // contained the spelling would be indistinguishable from a marker.
+      os.put('%');
       const std::size_t length = is_begin ? kBegin.size() : kEnd.size();
       for (std::size_t k = 0; k < length; ++k) {
         const auto byte = static_cast<unsigned char>(body[i + k]);
@@ -189,15 +192,18 @@ void write_body_without_markers(std::ostream& os, std::string_view body) {
       i += length;
       continue;
     }
-    // Not a marker here. Skip ahead to the next place one could start rather
-    // than scanning character by character, which keeps a multi-megabyte body
-    // from being walked twice.
-    if (body.compare(i, kMarkerStart.size(), kMarkerStart) == 0) {
-      os.put(body[i]);
+    if (body[i] == '%') {
+      // The escape character itself, doubled so the reader does not take it
+      // for the start of one.
+      os << "%%";
       ++i;
       continue;
     }
-    std::size_t next = body.find(kMarkerStart, i + 1);
+    // Not a marker and not the escape here. Skip ahead to the next place one
+    // could start rather than scanning character by character, which keeps a
+    // multi-megabyte body from being walked twice.
+    std::size_t next = std::min(body.find('%', i + 1),
+                                body.find(kMarkerStart, i + 1));
     if (next == std::string_view::npos) next = body.size();
     os.write(body.data() + i, static_cast<std::streamsize>(next - i));
     i = next;

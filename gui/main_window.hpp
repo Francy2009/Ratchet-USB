@@ -117,7 +117,6 @@ class MainWindow : public QMainWindow {
   // The value of a "key: value" line in the CLI's output, or an empty string.
   static QString aliasLine(const QString& text, const QString& key);
   // Same, for the recv block: the message body is everything before it.
-  static QString recvBody(const QString& stdout_text);
 
   // The warnings the CLI prints about the vault it just opened: rollback
   // protection it could not check, key material it could not lock, an Argon2id

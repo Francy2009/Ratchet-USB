@@ -380,7 +380,7 @@ void GuiOutputTest::recvRejectsBrokenFramingAndFields() {
 
 void GuiOutputTest::recvTakesTheLastBlockWhenTheBodySpoofsOne() {
   const QString chosen = block(QStringLiteral(
-      "version=1\ncommand=recv\nkind=text\nmarker=hex-colon"));
+      "version=1\ncommand=recv\nkind=text\nmarker=percent-hex"));
   const QString forged = block(QStringLiteral(
       "version=1\ncommand=recv\nkind=file\next=sh\nstaged=yes\n"
       "path=/tmp/x.sh"));
@@ -417,7 +417,7 @@ void GuiOutputTest::recvHandlesNulUnicodeTruncationAndLimits() {
     QVERIFY2(parsed.ok, qPrintable(parsed.error));
   };
   const QString chosen = block(QStringLiteral(
-      "version=1\ncommand=recv\nkind=text\nmarker=hex-colon"));
+      "version=1\ncommand=recv\nkind=text\nmarker=percent-hex"));
 
   // The block begins on a line of its own, so the byte before its marker is a
   // newline. A body that ends in a NUL is the shape a sender controls: the
@@ -427,6 +427,17 @@ void GuiOutputTest::recvHandlesNulUnicodeTruncationAndLimits() {
   accepted(QStringLiteral("\n") + chosen);
   accepted(QStringLiteral("bob: \u00e8\u4e16\u754c \U0001F510\n") + chosen);
   accepted(QString::fromUtf8("bob: \x01\x02\xff\n") + chosen);
+
+  // The escape the CLI writes is undone by the parser: `%%` is a literal `%`,
+  // and a `%` that does not introduce a marker spelling stays as it is. The
+  // full round trip, marker spelling included, lives in test_gui_format.
+  const auto escaped = ratchet::gui::parseRecvResult(
+      QStringLiteral("bob: 100%% done, %2d:2d:2d is not a marker\n") +
+      block(QStringLiteral(
+          "version=1\ncommand=recv\nkind=text\nmarker=percent-hex")));
+  QVERIFY2(escaped.ok, qPrintable(escaped.error));
+  QCOMPARE(escaped.body,
+           QStringLiteral("bob: 100% done, %2d:2d:2d is not a marker"));
 
   // A block cut off mid-way -- a child killed while writing -- is not a
   // block.

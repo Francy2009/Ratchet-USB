@@ -341,15 +341,34 @@ ParsedRecvResult parseRecvResult(const QString& stdout_text) {
   }
 
   // Optional, so a CLI from before the field existed still parses; when it is
-  // there it has to be one this parser understands.
-  if (fields.contains(QStringLiteral("marker")) &&
-      fields.value(QStringLiteral("marker")) !=
-          QString::fromLatin1(gui_format::kMarkerHexColon)) {
+  // there it has to be one this parser understands. `hex-colon` is what the
+  // previous build wrote: accepted, but its escape cannot be reversed, so those
+  // bodies are shown as written.
+  const QString marker_mode = fields.value(QStringLiteral("marker"));
+  const QString percent_hex =
+      QString::fromLatin1(gui_format::kMarkerPercentHex);
+  if (!marker_mode.isEmpty() && marker_mode != percent_hex &&
+      marker_mode != QString::fromLatin1(gui_format::kMarkerHexColonLegacy)) {
     return failRecv(QStringLiteral("structured result has an unknown marker mode"));
+  }
+
+  // The body is everything before the block. The CLI writes one newline
+  // between the two; that newline is framing, not text, so it is the only byte
+  // removed. When the block says the body was escaped, undoing it here is what
+  // makes the window show the message the sender wrote rather than its
+  // spelling.
+  QString message = stdout_text.left(begin_pos);
+  if (message.endsWith(QLatin1Char('\n'))) {
+    message.chop(1);
+  }
+  if (marker_mode == percent_hex) {
+    message = QString::fromStdString(
+        gui_format::unescape_body(message.toStdString()));
   }
 
   const QString kind = fields.value(QStringLiteral("kind"));
   ParsedRecvResult result;
+  result.body = message;
   if (kind == QLatin1String("text")) {
     if (fields.contains(QStringLiteral("ext")) ||
         fields.contains(QStringLiteral("staged")) ||

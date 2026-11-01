@@ -192,18 +192,19 @@ TEST("gui format: staged paths and extensions are validated") {
 TEST("gui format: recv body cannot spell the block's marker") {
   // terminal::escape_control_chars leaves printable characters alone, so a
   // sender can put the begin marker in a message verbatim. The body writer
-  // spells both markers in hex, which is what makes the stream hold exactly
-  // one of each.
+  // escapes both markers, which is what makes the stream hold exactly one of
+  // each -- and the escape character makes the rewrite reversible.
   const std::string body = std::string("before\n") + std::string(gui_format::kBegin) +
                            "\nafter " + std::string(gui_format::kEnd) + "\n";
   std::ostringstream out;
-  gui_format::write_body_without_markers(out, body);
+  gui_format::write_body_escaped(out, body);
   const std::string written = out.str();
   CHECK(written.find(gui_format::kBegin) == std::string::npos);
   CHECK(written.find(gui_format::kEnd) == std::string::npos);
   CHECK(written.find("before\n") == 0);
-  // The hex spelling is 18 bytes ("-----BEGIN RATCHET") as 2-digit pairs.
-  CHECK(written.find("2d:2d:2d:2d:2d") != std::string::npos);
+  // The marker is `%` plus its colon-hex spelling, 18 bytes as 2-digit pairs.
+  CHECK(written.find("%2d:2d:2d:2d:2d") != std::string::npos);
+  CHECK_EQ(gui_format::unescape_body(written), body);
 
   // With the block after it, the marker occurs once and on its own line.
   std::ostringstream full;
@@ -229,14 +230,30 @@ TEST("gui format: recv body passes NUL, Unicode and control bytes through") {
   CHECK(body.size() == 15);
   CHECK(body.find('\0') != std::string::npos);
   std::ostringstream out;
-  gui_format::write_body_without_markers(out, body);
+  gui_format::write_body_escaped(out, body);
   CHECK(out.str() == body);
 
   // A body with no marker is copied unchanged, length included.
   const std::string long_body(200000, 'x');
   std::ostringstream large;
-  gui_format::write_body_without_markers(large, long_body);
+  gui_format::write_body_escaped(large, long_body);
   CHECK(large.str().size() == long_body.size());
+}
+
+TEST("gui format: the body escape is reversible, spelling and all") {
+  // A message can contain the escape character itself and the exact hex
+  // spelling the writer uses for a marker. Doubling `%` is what keeps the two
+  // apart: after unescaping, the body is byte for byte what was sent.
+  const std::string body = std::string("50% off, literal %2d:2d:2d\n") +
+                           std::string(gui_format::kBegin) + "\n" +
+                           std::string(gui_format::kEnd);
+  std::ostringstream out;
+  gui_format::write_body_escaped(out, body);
+  const std::string written = out.str();
+  CHECK(written.find(gui_format::kBegin) == std::string::npos);
+  CHECK(written.find("50%% off") != std::string::npos);
+  CHECK(written.find("%%2d:2d:2d") != std::string::npos);
+  CHECK_EQ(gui_format::unescape_body(written), body);
 }
 
 TEST("gui format: recv body rewrites every marker, not just the first") {
@@ -246,7 +263,7 @@ TEST("gui format: recv body rewrites every marker, not just the first") {
     body += "text";
   }
   std::ostringstream out;
-  gui_format::write_body_without_markers(out, body);
+  gui_format::write_body_escaped(out, body);
   CHECK(out.str().find(gui_format::kBegin) == std::string::npos);
   // Nothing but the markers was touched: every "text" survives.
   std::size_t count = 0;
