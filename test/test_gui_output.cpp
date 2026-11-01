@@ -446,20 +446,23 @@ void GuiOutputTest::recvHandlesNulUnicodeTruncationAndLimits() {
                        QString(5000, QLatin1Char('a'));
   QVERIFY(!ratchet::gui::parseRecvResult(block(huge)).ok);
 
-  // A long staged path is accepted. A path past 4096 characters is refused by
-  // the parser -- but by its block-size cap, which is the limit that bounds it;
-  // the separate 4096-byte path check cannot be reached with a longer one
-  // inside a 4096-character block.
+  // A long staged path is accepted.
   QString path = QStringLiteral("/tmp/") + QString(2048, QLatin1Char('a')) +
                  QStringLiteral(".png");
   QCOMPARE(path.size(), qsizetype{2057});
   accepted(block(QStringLiteral("version=1\ncommand=recv\nkind=file\next=png\n"
                                 "staged=yes\npath=") +
                  path));
+  // A path past 4096 bytes cannot be exercised on its own: a block that long
+  // is refused by the block-size cap first, which is the limit that bounds it.
+  // The path stays absolute so the refusal is about size and not about the
+  // "must start with /" check.
+  const QString huge_path = QStringLiteral("/") + QString(5000, QLatin1Char('a')) +
+                            QStringLiteral(".png");
   QVERIFY(!ratchet::gui::parseRecvResult(
                block(QStringLiteral("version=1\ncommand=recv\nkind=file\n"
                                     "ext=png\nstaged=yes\npath=") +
-                     QLatin1Char('a') + path))
+                     huge_path))
                .ok);
 
   // The extension field is exactly 1..16 characters.

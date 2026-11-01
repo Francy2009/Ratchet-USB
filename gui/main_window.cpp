@@ -1359,9 +1359,18 @@ QString MainWindow::recvBody(const QString& stdout_text) {
   // wrote.
   const qsizetype block = stdout_text.lastIndexOf(
       QString::fromLatin1(ratchet::gui_format::kBegin));
-  const QString body =
-      block < 0 ? stdout_text : stdout_text.left(block);
-  return body.trimmed();
+  if (block < 0) {
+    // No block: the whole stream is the message, trailing spaces included.
+    return stdout_text;
+  }
+  // The CLI writes one newline between the body and the block. That newline is
+  // framing, not text; everything before it is what the sender wrote, so it is
+  // kept byte for byte rather than trimmed.
+  QString body = stdout_text.left(block);
+  if (body.endsWith(QLatin1Char('\n'))) {
+    body.chop(1);
+  }
+  return body;
 }
 
 void MainWindow::showRecvFile(const ratchet::gui::ParsedRecvResult& parsed,
@@ -1491,8 +1500,13 @@ void MainWindow::showTrustDialog(const QString& alias, const QString& shown_alia
   }
 
   confirmTrustedContact_ = alias;
+  // The fingerprint the dialog showed goes back to the CLI. It recomputes the
+  // contact's own fingerprint and refuses when they differ, so a card that
+  // changed while the dialog was open cannot inherit this confirmation.
   launchWithPassphrase(QStringLiteral("trust"),
-                       {QStringLiteral("--confirmed")}, {alias});
+                       {QStringLiteral("--confirmed"),
+                        QStringLiteral("--expect-fingerprint"), fingerprint},
+                       {alias});
 }
 
 QString MainWindow::vaultWarningsFromLog(const QString& text) {

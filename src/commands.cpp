@@ -603,6 +603,17 @@ int cmd_trust(const Options& opts) {
       contact.card && contact.card->pq_bundle
           ? hybrid_fingerprint(contact.identity_pub, contact.card->pq_identity_pub)
           : fingerprint(contact.identity_pub);
+  // A front end that showed a fingerprint passes it back here. Between the two
+  // commands the vault can change: a card replaced under the same alias, or a
+  // legacy card upgraded to a hybrid one, would make this command mark a key
+  // the user never looked at. The confirmation belongs to the string that was
+  // shown, so a different one is refused instead of inherited.
+  if (!opts.expect_fingerprint.empty() &&
+      opts.expect_fingerprint != shown_fingerprint) {
+    throw Error("the fingerprint of '" + shown_name +
+                "' is not the one that was shown, so nothing was marked as "
+                "verified; run trust again and compare the new value");
+  }
   std::cerr << "\nFingerprint for '" << shown_name << "':\n\n"
             << shown_fingerprint
             << "\n\nCompare this with the value the person behind '"

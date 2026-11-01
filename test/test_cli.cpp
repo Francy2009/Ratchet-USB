@@ -335,6 +335,14 @@ TEST("cli: trust takes --confirmed and --show-fingerprint, and nothing else") {
   CHECK(shown.show_fingerprint);
   CHECK_EQ(shown.name, std::string("alice"));
 
+  // The front end hands back the value it showed, so cmd_trust can refuse to
+  // mark a contact whose fingerprint changed in the meantime.
+  const Options expecting = parse(
+      {"trust", "alice", "--confirmed", "--expect-fingerprint", "ab:cd"});
+  CHECK(expecting.confirmed);
+  CHECK_EQ(expecting.expect_fingerprint, std::string("ab:cd"));
+  CHECK_THROWS(parse({"trust", "alice", "--expect-fingerprint"}));
+
   // They are for `trust` alone: another command taking them would be a flag
   // that parses and then does nothing.
   CHECK_THROWS(parse({"add", "alice", "--confirmed"}));

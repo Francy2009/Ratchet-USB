@@ -38,7 +38,10 @@ const std::vector<CommandSpec>& specs() {
        0},
       {"add", {"--usb-path", "--card"}, 1},
       {"contacts", {"--usb-path"}, 0},
-      {"trust", {"--usb-path", "--confirmed", "--show-fingerprint"}, 1},
+      {"trust",
+       {"--usb-path", "--confirmed", "--show-fingerprint",
+        "--expect-fingerprint"},
+       1},
       {"reset-session", {"--usb-path"}, 1},
       {"remove", {"--usb-path", "--yes"}, 1},
       {"send", {"--usb-path", "--file", "--stdin-payload"}, 2},
@@ -219,6 +222,11 @@ void print_usage(std::ostream& os) {
      << "  --show-fingerprint   Print the contact's fingerprint and what marking\n"
      << "                       it verified means, and change nothing in the\n"
      << "                       vault (trust only).\n"
+     << "  --expect-fingerprint <fp>\n"
+     << "                       With --confirmed: refuse to mark the contact\n"
+     << "                       verified unless its fingerprint is still this\n"
+     << "                       one, which is the value the front end showed\n"
+     << "                       (trust only).\n"
      << "  --lang en|it         Language of the interface (ui only). Without\n"
      << "                       it, an Italian locale gets Italian and\n"
      << "                       anything else gets English.\n"
@@ -349,6 +357,9 @@ Options parse_args(const std::vector<std::string_view>& args) {
     } else if (arg == "--show-fingerprint") {
       opts.show_fingerprint = true;
       note("--show-fingerprint");
+    } else if (arg == "--expect-fingerprint") {
+      opts.expect_fingerprint = std::string(next("--expect-fingerprint"));
+      note("--expect-fingerprint");
     } else if (arg == "--stage-file") {
       opts.stage_received = true;
       note("--stage-file");

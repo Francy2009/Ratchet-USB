@@ -54,6 +54,12 @@ struct Options {
   // is printed either way, and the vault save is the same. Only the desktop GUI
   // sets it, after `trust --show-fingerprint` and its own dialog.
   bool confirmed = false;
+  // trust --expect-fingerprint <fp>: the value the front end actually showed.
+  // cmd_trust recomputes the contact's fingerprint and refuses to mark it
+  // verified when the two differ, so a card replaced (or upgraded from legacy
+  // to hybrid) while the dialog was open cannot inherit a confirmation the
+  // user gave for a different key.
+  std::string expect_fingerprint;
   // trust --show-fingerprint: print the fingerprint and what trusting would
   // mean, print nothing else, and leave the vault exactly as it was. The GUI
   // runs this first so the string its dialog shows comes from the CLI, then
