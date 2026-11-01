@@ -93,6 +93,78 @@ struct Result {
 // (or with an invalid field) as an error.
 bool write_result(std::ostream& os, const Result& result);
 
+// --- recv --------------------------------------------------------------------
+//
+// A received message has two outcomes: a text body, which is plaintext and is
+// truncated and control-escaped before it is printed, and a framed file, whose
+// presence the desktop GUI has to act on (it offers to open the folder the
+// file was staged in). The GUI used to recognise the second by matching a
+// pattern in the CLI's human stderr -- which begins with the sender's alias,
+// a value the sender chose, so an alias spelling that pattern out opened the
+// file dialog for a message that was not a file.
+//
+// `recv --structured-output` therefore ends its stdout with this block:
+//
+//     -----BEGIN RATCHET GUI RESULT-----
+//     version=1
+//     command=recv
+//     kind=text|file
+//     ext=<sanitised extension, file only>
+//     staged=yes|no
+//     path=<path, only when staged>
+//     marker=hex-colon
+//     ----------------------------------
+//     -----END RATCHET GUI RESULT-----
+//
+// Every value on the right-hand side comes from this program, not from the
+// message: the kind is what the framing byte said, the extension is the
+// sanitised one decoded from the frame, and the path is what this process
+// staged. The alias is deliberately not in the block. stdout carries the
+// message body first (a GUI printing it to a terminal path still gets the text
+// it always got), then the block, which begins on a line of its own and is the
+// last thing written.
+//
+// The body is chosen by the sender, so it can contain the begin marker itself.
+// Two things keep the two apart: the block is the *last* occurrence in stdout
+// (the reader takes the last marker, not the first), and -- when the writer is
+// used -- every literal occurrence in the body is written as its hex spelling
+// (`-----BEGIN RATCHET GUI RESULT-----` becomes
+// `2d2d2d2d2d424547494e...`), which `marker=hex-colon` announces so the reader
+// can put it back. A stream where the marker occurs exactly once needs no
+// disambiguation at all, which is why the field is optional for the parser but
+// always written by this build.
+inline constexpr std::string_view kRecvText = "text";
+inline constexpr std::string_view kRecvFile = "file";
+inline constexpr std::string_view kMarkerHexColon = "hex-colon";
+
+struct RecvResult {
+  std::string_view kind;        // kRecvText or kRecvFile
+  std::string_view ext;         // file only, validated like a phrase below
+  bool staged = false;          // the file was written to `path`
+  std::string_view path;        // only meaningful when staged is true
+};
+
+// Writes `body` with every occurrence of the begin and end markers replaced by
+// their hex spelling, so the only literal marker in the stream is the real
+// block's. Nothing else is touched: NUL bytes, control characters and UTF-8
+// pass through, which is what keeps the body the text that was received.
+void write_body_without_markers(std::ostream& os, std::string_view body);
+
+// True when `ext` is what a staged file name may carry: 1..16 characters of
+// [a-z0-9], which is what file::decode_file_payload already sanitises to and
+// what mkostemps embeds in the name.
+bool valid_extension(std::string_view ext) noexcept;
+
+// True when `path` is a plane absolute path with no byte that could end the
+// line or start a control sequence: no space, no newline, no control byte, no
+// escape. A staged name is "mkdtemp(" + the base + "/ratchet-file-XXXXXX." +
+// ext, so anything else has not come from this program.
+bool valid_staged_path(std::string_view path) noexcept;
+
+// Writes the recv block, with the same all-or-nothing validation as
+// write_result.
+bool write_recv_result(std::ostream& os, const RecvResult& result);
+
 }  // namespace ratchet::gui_format
 
 #endif  // RATCHET_GUI_FORMAT_HPP

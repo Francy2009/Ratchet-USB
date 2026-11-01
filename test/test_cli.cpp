@@ -104,6 +104,17 @@ TEST("cli: numeric options are parsed") {
   CHECK_EQ(opts.params.mem_cost_kb, static_cast<uint32_t>(65536));
 }
 
+TEST("cli: prekey counts are bounded before any key is generated") {
+  // The count is multiplied by X25519 and ML-KEM-768 key generation, so an
+  // absurd value has to be refused by the parser rather than by the allocator.
+  CHECK_EQ(parse({"init", "--otpk-count", "1000"}).otpk_count,
+           std::size_t{1000});
+  CHECK_THROWS(parse({"init", "--otpk-count", "1001"}));
+  CHECK_EQ(parse({"card", "--replenish-otpk", "1000"}).replenish_otpk,
+           std::size_t{1000});
+  CHECK_THROWS(parse({"card", "--replenish-otpk", "1001"}));
+}
+
 // --- the generated passphrase ------------------------------------------------
 
 TEST("cli: passphrase-words is parsed and bounded") {
@@ -306,4 +317,27 @@ TEST("cli: defaults are what the help text advertises") {
   CHECK_EQ(opts.replenish_otpk, static_cast<std::size_t>(0));
   CHECK_EQ(opts.passphrase_words, passphrase::kDefaultWords);
   CHECK(opts.usb_path.empty());
+}
+
+// --- trust confirmations -----------------------------------------------------
+
+TEST("cli: trust takes --confirmed and --show-fingerprint, and nothing else") {
+  // Default: neither flag, so cmd_trust asks the person at the terminal.
+  const Options plain = parse({"trust", "alice"});
+  CHECK(!plain.confirmed);
+  CHECK(!plain.show_fingerprint);
+
+  const Options confirmed = parse({"trust", "alice", "--confirmed"});
+  CHECK(confirmed.confirmed);
+  CHECK_EQ(confirmed.name, std::string("alice"));
+
+  const Options shown = parse({"trust", "alice", "--show-fingerprint"});
+  CHECK(shown.show_fingerprint);
+  CHECK_EQ(shown.name, std::string("alice"));
+
+  // They are for `trust` alone: another command taking them would be a flag
+  // that parses and then does nothing.
+  CHECK_THROWS(parse({"add", "alice", "--confirmed"}));
+  CHECK_THROWS(parse({"send", "alice", "hi", "--show-fingerprint"}));
+  CHECK_THROWS(parse({"remove", "alice", "--confirmed"}));
 }

@@ -59,8 +59,8 @@ step "creating Alice's vault"
   fail "alice init exited non-zero"
 [[ -f "$ALICE/vault.bin" ]] || fail "alice init left no vault.bin"
 ALICE_PASS="$(extract_phrase "$WORK/alice-init.txt")"
-[[ "$(wc -w <<<"$ALICE_PASS")" -eq 6 ]] ||
-  fail "expected a 6-word vault passphrase, got: '$ALICE_PASS'"
+[[ "$(wc -w <<<"$ALICE_PASS")" -eq 12 ]] ||
+  fail "expected a 12-word vault passphrase, got: '$ALICE_PASS'"
 
 step "creating Bob's vault"
 "$BIN" init --usb-path "$BOB" --otpk-count 3 "${CHEAP[@]}" </dev/null \
@@ -68,8 +68,8 @@ step "creating Bob's vault"
   fail "bob init exited non-zero"
 [[ -f "$BOB/vault.bin" ]] || fail "bob init left no vault.bin"
 BOB_PASS="$(extract_phrase "$WORK/bob-init.txt")"
-[[ "$(wc -w <<<"$BOB_PASS")" -eq 6 ]] ||
-  fail "expected a 6-word vault passphrase, got: '$BOB_PASS'"
+[[ "$(wc -w <<<"$BOB_PASS")" -eq 12 ]] ||
+  fail "expected a 12-word vault passphrase, got: '$BOB_PASS'"
 
 # The two vaults must not have landed on the same passphrase by accident.
 [[ "$ALICE_PASS" != "$BOB_PASS" ]] ||
@@ -101,8 +101,8 @@ if grep -q "BEGIN RATCHET GUI RESULT" "$WORK/structured-init.err"; then
 fi
 STRUCT_PASS="$(sed -n 's/^passphrase=//p' "$WORK/structured-init.txt")"
 STRUCT_RECOVERY="$(sed -n 's/^recovery=//p' "$WORK/structured-init.txt")"
-[[ "$(wc -w <<<"$STRUCT_PASS")" -eq 6 ]] ||
-  fail "structured init passphrase is not 6 words"
+[[ "$(wc -w <<<"$STRUCT_PASS")" -eq 12 ]] ||
+  fail "structured init passphrase is not 12 words"
 [[ "$(wc -w <<<"$STRUCT_RECOVERY")" -eq 12 ]] ||
   fail "structured init recovery phrase is not 12 words"
 if grep -qF "Vault passphrase (write" "$WORK/structured-init.txt" ||
@@ -115,8 +115,8 @@ printf '%s\n\n\n' "$STRUCT_PASS" |
   >"$WORK/structured-rekey.txt" 2>"$WORK/structured-rekey.err" ||
   fail "structured passphrase change exited non-zero"
 STRUCT_NEW="$(sed -n 's/^passphrase=//p' "$WORK/structured-rekey.txt")"
-[[ "$(wc -w <<<"$STRUCT_NEW")" -eq 6 ]] ||
-  fail "structured rekey passphrase is not 6 words"
+[[ "$(wc -w <<<"$STRUCT_NEW")" -eq 12 ]] ||
+  fail "structured rekey passphrase is not 12 words"
 [[ "$STRUCT_NEW" != "$STRUCT_PASS" ]] ||
   fail "structured rekey did not change the passphrase"
 
@@ -153,16 +153,147 @@ printf '%s\n' "$BOB_PASS" |
   "$BIN" add --usb-path "$BOB" alice --card "$WORK/alice.card" >/dev/null 2>&1 ||
   fail "bob failed to import alice's card"
 
+# trust is an authorization, so it refuses to run off a terminal without
+# --confirmed, and the refusal must leave the contact unverified. The vault is
+# opened (and the fingerprint printed) first; the contact must still be
+# unverified afterwards.
 printf '%s\n' "$ALICE_PASS" |
-  "$BIN" trust --usb-path "$ALICE" bob >/dev/null 2>&1 ||
+  "$BIN" trust --usb-path "$ALICE" bob >/dev/null 2>"$WORK/trust-unconfirmed.err" &&
+  fail "trust succeeded without a confirmation"
+grep -q "interactive confirmation" "$WORK/trust-unconfirmed.err" ||
+  fail "trust failed without saying why: $(cat "$WORK/trust-unconfirmed.err")"
+printf '%s\n' "$ALICE_PASS" |
+  "$BIN" contacts --usb-path "$ALICE" 2>/dev/null |
+  grep -q "bob \[unverified\]" ||
+  fail "trust without a confirmation marked bob as verified"
+
+# --show-fingerprint decides nothing; it prints the value the user compares.
+printf '%s\n' "$ALICE_PASS" |
+  "$BIN" trust --usb-path "$ALICE" bob --show-fingerprint \
+  >"$WORK/trust-shown.txt" 2>/dev/null ||
+  fail "trust --show-fingerprint exited non-zero"
+grep -q "^alias: bob$" "$WORK/trust-shown.txt" ||
+  fail "trust --show-fingerprint did not name the contact"
+grep -q "^fingerprint: " "$WORK/trust-shown.txt" ||
+  fail "trust --show-fingerprint printed no fingerprint"
+grep -q "^verified: no$" "$WORK/trust-shown.txt" ||
+  fail "trust --show-fingerprint reported the wrong state"
+printf '%s\n' "$ALICE_PASS" |
+  "$BIN" contacts --usb-path "$ALICE" 2>/dev/null |
+  grep -q "bob \[unverified\]" ||
+  fail "trust --show-fingerprint changed the vault"
+
+printf '%s\n' "$ALICE_PASS" |
+  "$BIN" trust --usb-path "$ALICE" bob --confirmed >/dev/null 2>&1 ||
   fail "alice failed to verify bob"
 printf '%s\n' "$BOB_PASS" |
-  "$BIN" trust --usb-path "$BOB" alice >/dev/null 2>&1 ||
+  "$BIN" trust --usb-path "$BOB" alice --confirmed >/dev/null 2>&1 ||
   fail "bob failed to verify alice"
 
 printf '%s\n' "$ALICE_PASS" |
   "$BIN" contacts --usb-path "$ALICE" 2>/dev/null | grep -q bob ||
   fail "bob is missing from alice's contact list"
+
+# ---------------------------------------------------------------------------
+# recv --structured-output: the block a front end reads, with a body chosen to
+# imitate it.
+#
+# These are the first messages of the session: Bob's session starts from Alice's
+# opening, so he has to read this one first. (A second opening from Alice would
+# be refused, which is the replay guard doing its job.) Both sides have also to
+# verify each other before anything is sent.
+
+step "verifying both sides before the framing checks"
+printf '%s\n' "$ALICE_PASS" |
+  "$BIN" trust --usb-path "$ALICE" bob --confirmed >/dev/null 2>&1 ||
+  fail "alice could not verify bob"
+printf '%s\n' "$BOB_PASS" |
+  "$BIN" trust --usb-path "$BOB" alice --confirmed >/dev/null 2>&1 ||
+  fail "bob could not verify alice"
+
+# The body is the sender's text, so it carries both GUI markers, a fake block
+# that claims a file, and Unicode. None of it may change what the block says.
+step "a body that imitates the result block cannot change what recv reports"
+MARKER_BEGIN="-----BEGIN RATCHET GUI RESULT-----"
+MARKER_END="-----END RATCHET GUI RESULT-----"
+FAKE_PAYLOAD="$(printf '%s\nversion=1\ncommand=recv\nkind=file\next=sh\nstaged=yes\npath=/tmp/evil.sh\n%s' \
+  "$MARKER_BEGIN" "$MARKER_END")"
+SPOOF_PAYLOAD="before
+${FAKE_PAYLOAD}after
+${MARKER_END}
+${MARKER_BEGIN}
+unicode: caffè"
+
+# errexit does not fire for a command on the left of a pipe, so the status is
+# checked first and the error is only printed when it failed.
+SPOOF_BYTES="$(printf '%s' "$SPOOF_PAYLOAD" | wc -c)"
+if ! { printf '%s' "$SPOOF_PAYLOAD"; printf '%s\n\n' "$ALICE_PASS"; } |
+  "$BIN" send --usb-path "$ALICE" bob --stdin-payload "$SPOOF_BYTES" \
+  >"$WORK/spoof1.txt" 2>"$WORK/spoof1.err"; then  true; fi
+[[ -s "$WORK/spoof1.txt" ]] ||
+  fail "alice could not send the spoofing body: $(cat "$WORK/spoof1.err" 2>/dev/null)"
+
+printf '%s\n%s' "$(cat "$WORK/spoof1.txt")" "$BOB_PASS" |
+  "$BIN" recv --usb-path "$BOB" --stdin-payload \
+  "$(wc -c <"$WORK/spoof1.txt")" --stage-file --structured-output \
+  >"$WORK/spoof-recv.txt" 2>"$WORK/spoof-recv.err" ||
+  fail "bob recv --structured-output exited non-zero: $(cat "$WORK/spoof-recv.err")"
+
+# The block is the last thing on stdout, and it says "text": the message was a
+# message, whatever its body spelled.
+tail -n 6 "$WORK/spoof-recv.txt" >"$WORK/spoof-block.txt"
+[[ "$(tail -n 1 "$WORK/spoof-block.txt")" == "$MARKER_END" ]] ||
+  fail "the structured block does not close stdout: $(cat "$WORK/spoof-block.txt")"
+grep -qx "kind=text" "$WORK/spoof-block.txt" ||
+  fail "a spoofing body changed the kind: $(cat "$WORK/spoof-block.txt")"
+grep -q "^command=recv$" "$WORK/spoof-block.txt" ||
+  fail "the block is not the recv block"
+grep -q "^marker=hex-colon$" "$WORK/spoof-block.txt" ||
+  fail "the block does not announce how the body was escaped"
+[[ "$(grep -c "^$MARKER_BEGIN$" "$WORK/spoof-recv.txt")" == "1" ]] ||
+  fail "the begin marker occurs more than once on stdout"
+[[ "$(grep -c "^$MARKER_END$" "$WORK/spoof-recv.txt")" == "1" ]] ||
+  fail "the end marker occurs more than once on stdout"
+grep -q "2d:2d:2d:2d:2d" "$WORK/spoof-recv.txt" ||
+  fail "the body's own marker was not escaped"
+
+# The same message without --structured-output writes what it always wrote:
+# "alias: body" and no block at all. The previous block was not consumed by
+# Bob -- it was a message like any other -- so this is simply the next one.
+PLAIN_PAYLOAD="$(printf 'plain text %s' "$$")"
+PLAIN_BYTES="$(printf '%s' "$PLAIN_PAYLOAD" | wc -c)"
+if ! { printf '%s' "$PLAIN_PAYLOAD"; printf '%s\n\n' "$ALICE_PASS"; } |
+  "$BIN" send --usb-path "$ALICE" bob --stdin-payload "$PLAIN_BYTES" \
+  >"$WORK/plain1.txt" 2>/dev/null; then
+  fail "alice could not send the plain message"
+fi
+printf '%s\n%s' "$(cat "$WORK/plain1.txt")" "$BOB_PASS" |
+  "$BIN" recv --usb-path "$BOB" --stdin-payload "$(wc -c <"$WORK/plain1.txt")" \
+  --stage-file >"$WORK/plain1-recv.txt" 2>/dev/null ||
+  fail "bob recv (human output) exited non-zero"
+[[ "$(cat "$WORK/plain1-recv.txt")" == "alice: $PLAIN_PAYLOAD" ]] ||
+  fail "the human recv output changed: $(cat "$WORK/plain1-recv.txt")"
+
+# A file whose type the desktop may execute is announced, reported as a file
+# and never staged. `.sh` is in the refused list.
+printf '%s\n' "#!/bin/sh" >"$WORK/script.sh"
+printf '%s\n' "$BOB_PASS" |
+  "$BIN" send --usb-path "$BOB" alice --file "$WORK/script.sh" \
+  >"$WORK/script-msg.txt" 2>/dev/null ||
+  fail "bob could not send a .sh file"
+printf '%s\n%s' "$(cat "$WORK/script-msg.txt")" "$ALICE_PASS" |
+  "$BIN" recv --usb-path "$ALICE" --stdin-payload \
+  "$(wc -c <"$WORK/script-msg.txt")" --stage-file --structured-output \
+  >"$WORK/script-recv.txt" 2>"$WORK/script-recv.err" || true
+grep -q "^kind=file$" "$WORK/script-recv.txt" ||
+  fail "a refused .sh file is not reported as a file"
+grep -q "^ext=sh$" "$WORK/script-recv.txt" ||
+  fail "the .sh extension is missing from the block"
+grep -q "^staged=no$" "$WORK/script-recv.txt" ||
+  fail "a .sh file was staged"
+grep -q "not opening it" "$WORK/script-recv.err" ||
+  fail "the refusal to open a .sh file is not reported"
+
 
 # ---------------------------------------------------------------------------
 # The conversation itself.
@@ -380,8 +511,8 @@ printf '%s\n\n\n' "$ALICE_PASS" |
   "$BIN" passphrase --usb-path "$ALICE" >"$WORK/alice-rekey.txt" 2>"$WORK/rekey.err" ||
   fail "passphrase change exited non-zero: $(cat "$WORK/rekey.err")"
 NEW_PASS="$(extract_phrase "$WORK/rekey.err")"
-[[ "$(wc -w <<<"$NEW_PASS")" -eq 6 ]] ||
-  fail "expected a 6-word new passphrase, got: '$NEW_PASS'"
+[[ "$(wc -w <<<"$NEW_PASS")" -eq 12 ]] ||
+  fail "expected a 12-word new passphrase, got: '$NEW_PASS'"
 [[ "$NEW_PASS" != "$ALICE_PASS" ]] ||
   fail "the passphrase did not change"
 
@@ -443,13 +574,13 @@ printf '%s\n' "$NEW_PASS" |
   "$BIN" add --usb-path "$ALICE" bob --card "$WORK/bob2.card" >/dev/null 2>&1 ||
   fail "alice could not re-add bob"
 printf '%s\n' "$NEW_PASS" |
-  "$BIN" trust --usb-path "$ALICE" bob >/dev/null 2>&1 ||
+  "$BIN" trust --usb-path "$ALICE" bob --confirmed >/dev/null 2>&1 ||
   fail "alice could not re-trust bob"
 printf '%s\n' "$BOB_PASS" |
   "$BIN" add --usb-path "$BOB" alice --card "$WORK/alice2.card" >/dev/null 2>&1 ||
   fail "bob could not re-add alice"
 printf '%s\n' "$BOB_PASS" |
-  "$BIN" trust --usb-path "$BOB" alice >/dev/null 2>&1 ||
+  "$BIN" trust --usb-path "$BOB" alice --confirmed >/dev/null 2>&1 ||
   fail "bob could not re-trust alice"
 printf '%s\n' "$NEW_PASS" |
   "$BIN" send --usb-path "$ALICE" bob "after remove" >"$WORK/remsg.txt" 2>/dev/null ||

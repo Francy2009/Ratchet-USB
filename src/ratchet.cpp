@@ -122,21 +122,23 @@ std::string aead_decrypt(const SecureBytes<32>& mk, const std::vector<uint8_t>& 
     throw Error("message authentication failed (wrong key or a tampered message)");
   }
 
-  std::size_t unpadded_len = pt_len;
-  if (pt_len > 0) {
-    // Check for ISO/IEC 7816-4 padding delimiter: 0x80 preceded by plaintext,
-    // followed by zero or more 0x00 bytes.
-    if (pt[pt_len - 1] == 0x00 || pt[pt_len - 1] == 0x80) {
-      std::size_t i = pt_len;
-      while (i > 0 && pt[i - 1] == 0x00) {
-        --i;
-      }
-      if (i == 0 || pt[i - 1] != 0x80) {
-        throw Error("message padding is invalid (tampered message)");
-      }
-      unpadded_len = i - 1;
-    }
+  // Check for ISO/IEC 7816-4 padding: 0x80 preceded by plaintext, followed by
+  // zero or more 0x00 bytes. Every payload this build encrypts ends in exactly
+  // that shape, so the last byte of a genuine plaintext is always 0x00 or the
+  // delimiter itself. Anything else cannot come from a peer speaking this
+  // padding scheme, and is refused rather than passed through a branch no
+  // honest sender can reach.
+  if (pt_len == 0 || (pt[pt_len - 1] != 0x00 && pt[pt_len - 1] != 0x80)) {
+    throw Error("message padding is invalid (tampered message)");
   }
+  std::size_t i = pt_len;
+  while (i > 0 && pt[i - 1] == 0x00) {
+    --i;
+  }
+  if (i == 0 || pt[i - 1] != 0x80) {
+    throw Error("message padding is invalid (tampered message)");
+  }
+  const std::size_t unpadded_len = i - 1;
 
   // The unavoidable unprotected copy: the caller needs an ordinary string to
   // print or frame. If this allocation throws, the SecureBuffer destructor

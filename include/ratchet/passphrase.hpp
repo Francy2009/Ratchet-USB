@@ -23,11 +23,12 @@
 //
 //     words   entropy   note
 //       5     55 bits   below the 64-bit floor usually asked of a generated
-//                       secret; this is why five words are not the default
-//       6     66 bits   the default: clears that floor, and is comparable to
-//                       the classic "five diceware words" (5 * log2(7776) is
-//                       about 64.6 bits) while staying short to write down
+//                       secret, which is why five words are not the minimum
+//       6     66 bits   the minimum: clears that floor, but a vault file can be
+//                       copied and attacked offline, so it is not the default
 //       8     88 bits   comfortable margin, more to write down and to type
+//      12    132 bits   the default: a wide margin for a vault that may be
+//                       copied and attacked offline
 //
 // More words trade typing for margin, and `--passphrase-words` exposes the
 // range. Argon2id is what stands between a stolen vault and an offline guess,
@@ -36,7 +37,7 @@
 namespace ratchet::passphrase {
 
 inline constexpr std::size_t kBitsPerWord = 11;  // log2(2048)
-inline constexpr std::size_t kDefaultWords = 6;
+inline constexpr std::size_t kDefaultWords = 12;
 inline constexpr std::size_t kMinWords = 6;
 inline constexpr std::size_t kMaxWords = 12;
 

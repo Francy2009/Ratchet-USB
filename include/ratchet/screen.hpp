@@ -57,7 +57,9 @@ std::size_t display_width(std::string_view text);
 // place of what was dropped. Returns `text` unchanged when it already fits.
 std::string truncate_to_width(std::string_view text, std::size_t max_width);
 
-// Rewrites every C0 control character and DEL as a visible \xNN escape.
+// Rewrites every C0 control character and DEL as a visible \xNN escape, and
+// every Unicode format character (bidi controls and marks, isolates,
+// byte-order mark, C1 controls) as a visible \uXXXX escape.
 //
 // This is terminal::escape_control_chars with newline and tab included rather
 // than spared. A message body printed by `recv` legitimately spans lines; a

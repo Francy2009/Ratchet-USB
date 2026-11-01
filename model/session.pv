@@ -9,7 +9,46 @@
    accepts it when the contact minimum allows it and the ciphertext
    decrypts under the bound key, which is the same rule as the C++ code.
    The attacker does not have that key, so the xwing queries are true.
-   This file is not a proof of the C++ or Rust program. *)
+   This file is not a proof of the C++ or Rust program.
+
+   ---------------------------------------------------------------------------
+   What this version adds: one ratchet step and a phase-1 compromise
+   ---------------------------------------------------------------------------
+   The previous model keyed every message with the same static `mk`, so it
+   could not state forward secrecy at all: any compromise that reached a
+   message key reached all of them. This version models one ratchet step:
+
+     * the opening is keyed by `mk`;
+     * the follow-up is keyed by `ratchet(mk)`, one one-way step on;
+     * after the protocol, `phase 1` reveals `ratchet(ratchet(mk))` -- the
+       state *after* the follow-up, standing for a compromise of the current
+       chain;
+     * after the compromise, a fresh ratchet step (`ec2`) heals: its key is
+       not derivable from the revealed state, which is post-compromise
+       security.
+
+   `ratchet` has no inverse, so the revealed state does not walk back to
+   either message key and both plaintexts stay secret. That is forward
+   secrecy: the compromise exposes future messages, not past ones. The
+   `attacker` queries below are expected to remain true, including the one on
+   the healed message.
+
+   ---------------------------------------------------------------------------
+   UNVERIFIED, and how long to run it
+   ---------------------------------------------------------------------------
+   This file was edited without a ProVerif installation at hand, so it has
+   NOT been run. Before trusting it, run it and check the `phase` syntax
+   against your ProVerif version (older releases spell it slightly
+   differently).
+
+       proverif model/session.pv
+
+   Expected run time: the model is tiny -- a handful of constants and three
+   processes, no unbounded replication of the ratchet -- so each query
+   should finish in well under a second and the whole file in the order of
+   1-10 seconds on an ordinary laptop, worst case a few tens of seconds.
+   If it runs for minutes, something is wrong: most likely an accidental
+   infinite state space from a process that can loop. *)
 
 free net: channel.
 
@@ -28,8 +67,15 @@ reduc forall s: suite, n: bitstring, p: bitstring, m: bitstring, k: key;
 fun combine(key, key): key.
 fun bind(key, bitstring, bitstring): key.
 
+(* One ratchet step. A plain function with no inverse equation, which is what
+   the attacker is assumed unable to invert -- the whole of forward secrecy. *)
+fun ratchet(key): key.
+
 free secretPlain: bitstring [private].
 free followupPlain: bitstring [private].
+(* Sent after the phase-1 compromise, under a key derived from a fresh ratchet
+   step. It staying secret is post-compromise security. *)
+free healedPlain: bitstring [private].
 const openingCounter: bitstring [data].
 const followupCounter: bitstring [data].
 const publishedPrekey: bitstring [data].
@@ -61,6 +107,7 @@ query event(AcceptedFollowup(xwing)) ==> false.
 query m: bitstring; event(AcceptedUnderSwappedIdentity(m)) ==> false.
 query attacker(secretPlain).
 query attacker(followupPlain).
+query attacker(healedPlain).
 query event(HonestDone()) ==> false.
 
 letfun suite_at_least(offered: suite, minimum: suite) =
@@ -81,7 +128,7 @@ let initiator(mk: key) =
   event Sent(secretPlain);
   out(net, (triple, senc(triple, openingCounter, publishedPrekey, secretPlain, mk), publishedPrekey));
   event Sent(followupPlain);
-  out(net, (triple, senc(triple, followupCounter, noPrekey, followupPlain, mk))).
+  out(net, (triple, senc(triple, followupCounter, noPrekey, followupPlain, ratchet(mk)))).
 
 (* One device. verified is local state, not a network field. The prekey is
    consumed only after AEAD success. A later opening that names it again is
@@ -99,7 +146,7 @@ let responder(mk: key, verified: bool) =
       event Committed(m);
       in(net, (next: suite, nextblob: bitstring));
       if next = offered && suite_at_least(next, triple) then
-        let m2 = sdec(nextblob, next, followupCounter, noPrekey, mk) in
+        let m2 = sdec(nextblob, next, followupCounter, noPrekey, ratchet(mk)) in
         event AcceptedFollowup(next);
         event Committed(m2);
         event HonestDone();
@@ -135,4 +182,14 @@ process
     responder(mk, true) |
     responder(mk, false) |
     swapped(mkSwap)
-  )
+  );
+  (* After the protocol, the attacker learns the current chain key -- the state
+     after the follow-up -- but not the two keys the messages were made with. *)
+  phase 1;
+  out(net, ratchet(ratchet(mk)));
+  (* Post-compromise security: a fresh ratchet step after the compromise. `ec2`
+     is new, so the attacker, who holds only ratchet(ratchet(mk)), cannot
+     derive mkHealed and the message keyed by it stays secret. *)
+  new ec2: key;
+  let mkHealed = bind(combine(ratchet(ratchet(mk)), ec2), responderId, initiatorId) in
+  out(net, senc(triple, followupCounter, noPrekey, healedPlain, mkHealed))

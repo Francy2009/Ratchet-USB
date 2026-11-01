@@ -10,6 +10,8 @@
 #include <cstring>
 #include <string>
 
+#include "ratchet/secure.hpp"
+
 namespace ratchet::screen {
 namespace {
 
@@ -176,22 +178,23 @@ std::size_t banner_width() { return banner().front().size(); }
 
 std::string sanitize_line(std::string_view text) {
   static constexpr char kHex[] = "0123456789abcdef";
-  std::string out;
-  out.reserve(text.size());
+  // The C0 pass is per byte; the Unicode pass that follows catches the
+  // invisible format characters (bidi overrides, isolates, marks, the BOM and
+  // the C1 controls), which a frame would otherwise draw as nothing while they
+  // reorder the rest of the row.
+  std::string c0;
+  c0.reserve(text.size());
   for (const char ch : text) {
     const auto byte = static_cast<unsigned char>(ch);
-    // 0x80-0x9F are left alone for the same reason terminal.cpp leaves them
-    // alone: in UTF-8 they are continuation bytes, and escaping them would
-    // mangle every alias that is not pure ASCII.
     if (byte < 0x20 || byte == 0x7F) {
-      out += "\\x";
-      out.push_back(kHex[byte >> 4]);
-      out.push_back(kHex[byte & 0x0F]);
+      c0 += "\\x";
+      c0.push_back(kHex[byte >> 4]);
+      c0.push_back(kHex[byte & 0x0F]);
     } else {
-      out.push_back(ch);
+      c0.push_back(ch);
     }
   }
-  return out;
+  return escape_unicode_format_chars(c0);
 }
 
 std::size_t display_width(std::string_view text) {

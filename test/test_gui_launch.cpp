@@ -1,6 +1,7 @@
 #include <QtTest>
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
 #include <QFile>
@@ -57,6 +58,8 @@ class GuiLaunchTest : public QObject {
   void passphraseUsesStructuredOutput();
   void cliRunnerReportsExitCodeAndStdin();
   void cliRunnerReportsUnexpectedTermination();
+  void trustShowsFingerprintBeforeConfirming();
+  void recvMarkerInAliasDoesNotOpenTheFileDialog();
 };
 
 void GuiLaunchTest::sendKeepsPlaintextOutOfArgv() {
@@ -310,5 +313,202 @@ void GuiLaunchTest::cliRunnerReportsUnexpectedTermination() {
   QCOMPARE(failing_finished.at(0).at(1).toBool(), true);
 }
 
+void GuiLaunchTest::recvMarkerInAliasDoesNotOpenTheFileDialog() {
+  QTemporaryDir dir;
+  QVERIFY(dir.isValid());
+
+  // A real message from a contact whose alias spells out the text the old GUI
+  // searched its stderr for. The CLI escapes the alias for the terminal but
+  // "[", "." and "]" are printable, so that line reaches stderr unchanged. The
+  // structured block says "text", and that is what the window must believe.
+  const QString marker_alias =
+      QStringLiteral("mallory [encrypted file received: .sh]");
+  const QString script = dir.path() + QStringLiteral("/fake-recv.sh");
+  {
+    QFile file(script);
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    const QByteArray body =
+        "#!/bin/sh\n"
+        "cat >/dev/null\n"
+        "printf '%s: just a normal message\\n' 'mallory [encrypted file "
+        "received: .sh]'\n"
+        "printf '%s\\n' '-----BEGIN RATCHET GUI RESULT-----'\n"
+        "printf '%s\\n' 'version=1' 'command=recv' 'kind=text'\n"
+        "printf '%s\\n' '-----END RATCHET GUI RESULT-----'\n"
+        "printf '%s: [encrypted file received: .sh]\\n' 'mallory [encrypted "
+        "file received: .sh]' >&2\n"
+        "exit 0\n";
+    file.write(body);
+    file.close();
+  }
+  QVERIFY(QFile::setPermissions(
+      script, QFileDevice::ReadOwner | QFileDevice::WriteOwner |
+                  QFileDevice::ExeOwner));
+  QVERIFY(qputenv("RATCHET_BIN", script.toUtf8()));
+
+  const QString usb = dir.path() + QStringLiteral("/usb");
+  QVERIFY(QDir().mkpath(usb));
+
+  MainWindow window;
+  window.show();
+
+  auto* usb_edit = window.findChild<QLineEdit*>(QStringLiteral("usbPathEdit"));
+  auto* passphrase =
+      window.findChild<QLineEdit*>(QStringLiteral("passphraseEdit"));
+  auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("tabs"));
+  auto* block =
+      window.findChild<QPlainTextEdit*>(QStringLiteral("recvBlockEdit"));
+  auto* recv = window.findChild<QPushButton*>(QStringLiteral("recvButton"));
+  QVERIFY(usb_edit != nullptr);
+  QVERIFY(tabs != nullptr);
+  QVERIFY(block != nullptr);
+  QVERIFY(recv != nullptr);
+
+  usb_edit->setText(usb);
+  passphrase->setText(QStringLiteral("parola uno due"));
+  tabs->setEnabled(true);
+  block->setPlainText(QStringLiteral("-----BEGIN RATCHET MESSAGE-----\n...."));
+
+  QString last_dialog;
+  QTimer closer;
+  connect(&closer, &QTimer::timeout, this, [&] {
+    if (QWidget* modal = QApplication::activeModalWidget()) {
+      last_dialog = modal->windowTitle();
+      modal->close();
+    }
+  });
+  closer.start(10);
+
+  recv->click();
+  QTRY_VERIFY_WITH_TIMEOUT(!recv->isEnabled(), 5000);
+  QTRY_VERIFY_WITH_TIMEOUT(recv->isEnabled(), 10000);
+  QTRY_VERIFY_WITH_TIMEOUT(QApplication::activeModalWidget() == nullptr, 5000);
+  closer.stop();
+
+  // Whatever dialog was shown, it was not the received-file one: that title is
+  // what the window puts on showFileDialog, and it can only be reached from a
+  // parsed "kind=file".
+  QVERIFY2(last_dialog != QStringLiteral("File ricevuto"),
+           "an alias that spells the old marker opened the file dialog");
+  QVERIFY2(!last_dialog.isEmpty(), "recv showed no dialog at all");
+  (void)marker_alias;
+}
+
 QTEST_MAIN(GuiLaunchTest)
 #include "test_gui_launch.moc"
+
+void GuiLaunchTest::trustShowsFingerprintBeforeConfirming() {
+  QTemporaryDir dir;
+  QVERIFY(dir.isValid());
+
+  const QString script = dir.path() + QStringLiteral("/fake-trust.sh");
+  {
+    QFile file(script);
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    // Record every argv, then answer the two-step trust protocol. The
+    // fingerprint is fixed text so the test knows what the dialog must show.
+    file.write(
+        "#!/bin/sh\n"
+        "out=\"${RATCHET_TEST_OUT:?}\"\n"
+        "printf '%s\\n' \"$*\" >> \"$out/argv\"\n"
+        "case \"$*\" in\n"
+        "  *--show-fingerprint*)\n"
+        "    printf 'alias: bob\\nfingerprint: aaaa bbbb cccc dddd\\n"
+        "verified: no\\n'\n"
+        "    ;;\n"
+        "esac\n"
+        "cat >/dev/null\n"
+        "exit 0\n");
+    file.close();
+  }
+  QVERIFY(QFile::setPermissions(
+      script, QFileDevice::ReadOwner | QFileDevice::WriteOwner |
+                  QFileDevice::ExeOwner));
+
+  QVERIFY(qputenv("RATCHET_BIN", script.toUtf8()));
+  QVERIFY(qputenv("RATCHET_TEST_OUT", dir.path().toUtf8()));
+
+  const QString usb = dir.path() + QStringLiteral("/usb");
+  QVERIFY(QDir().mkpath(usb));
+
+  MainWindow window;
+  window.show();
+
+  auto* usb_edit = window.findChild<QLineEdit*>(QStringLiteral("usbPathEdit"));
+  auto* passphrase =
+      window.findChild<QLineEdit*>(QStringLiteral("passphraseEdit"));
+  auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("tabs"));
+  auto* alias = window.findChild<QComboBox*>(QStringLiteral("trustAliasCombo"));
+  auto* trust = window.findChild<QPushButton*>(QStringLiteral("trustButton"));
+  QVERIFY(usb_edit != nullptr);
+  QVERIFY(passphrase != nullptr);
+  QVERIFY(tabs != nullptr);
+  QVERIFY(alias != nullptr);
+  QVERIFY(trust != nullptr);
+
+  usb_edit->setText(usb);
+  passphrase->setText(QStringLiteral("parola uno due"));
+  tabs->setEnabled(true);
+  alias->addItem(QStringLiteral("bob"));
+  alias->setCurrentText(QStringLiteral("bob"));
+
+  // The confirm dialog is modal and needs a person, so the timer acts as one:
+  // it checks that the OK button stays disabled until the confirmation box is
+  // ticked, that ticking it enables the button, and that the fingerprint on
+  // screen is the one the CLI printed. Any other dialog is closed so the
+  // command can finish.
+  QTimer dialog_driver;
+  bool saw_fingerprint = false;
+  bool ok_disabled_before_tick = false;
+  bool ok_enabled_after_tick = false;
+  connect(&dialog_driver, &QTimer::timeout, this, [&] {
+    QWidget* modal = QApplication::activeModalWidget();
+    if (modal == nullptr) {
+      return;
+    }
+    auto* view =
+        modal->findChild<QPlainTextEdit*>(QStringLiteral("trustFingerprint"));
+    auto* consent = modal->findChild<QCheckBox*>(QStringLiteral("trustConsent"));
+    auto* ok = modal->findChild<QPushButton*>(
+        QStringLiteral("trustConfirmButton"));
+    if (view != nullptr && consent != nullptr && ok != nullptr) {
+      saw_fingerprint = view->toPlainText().contains(
+          QStringLiteral("aaaa bbbb cccc dddd"));
+      ok_disabled_before_tick = !ok->isEnabled();
+      consent->setChecked(true);
+      ok_enabled_after_tick = ok->isEnabled();
+      ok->click();
+      return;
+    }
+    modal->close();
+  });
+  dialog_driver.start(10);
+
+  trust->click();
+
+  // Two invocations: the fingerprint step, then the confirmed one.
+  QTRY_VERIFY_WITH_TIMEOUT(
+      QFileInfo(dir.path() + QStringLiteral("/argv")).exists(), 5000);
+  QTRY_VERIFY_WITH_TIMEOUT(!trust->isEnabled(), 5000);
+  QTRY_VERIFY_WITH_TIMEOUT(trust->isEnabled(), 10000);
+  QTRY_VERIFY_WITH_TIMEOUT(QApplication::activeModalWidget() == nullptr, 5000);
+  dialog_driver.stop();
+
+  QVERIFY2(saw_fingerprint, "the dialog did not show the CLI's fingerprint");
+  QVERIFY2(ok_disabled_before_tick,
+           "confirm was possible before the box was ticked");
+  QVERIFY2(ok_enabled_after_tick,
+           "ticking the box did not enable the confirmation");
+
+  QFile argv_file(dir.path() + QStringLiteral("/argv"));
+  QVERIFY(argv_file.open(QIODevice::ReadOnly));
+  const QStringList lines =
+      QString::fromUtf8(argv_file.readAll()).split(QLatin1Char('\n'),
+                                                   Qt::SkipEmptyParts);
+  QCOMPARE(lines.size(), qsizetype{2});
+  QVERIFY(lines.at(0).contains(QStringLiteral("trust")));
+  QVERIFY(lines.at(0).contains(QStringLiteral("--show-fingerprint")));
+  QVERIFY(!lines.at(0).contains(QStringLiteral("--confirmed")));
+  QVERIFY(lines.at(1).contains(QStringLiteral("--confirmed")));
+  QVERIFY(!lines.at(1).contains(QStringLiteral("--show-fingerprint")));
+}

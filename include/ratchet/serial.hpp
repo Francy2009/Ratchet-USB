@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -51,7 +52,14 @@ class Writer {
   void bytes(const uint8_t* p, std::size_t n) { buffer_append(out_, p, n); }
 
   // Length-prefixed field, for anything whose size is not fixed by the format.
+  // The prefix is 32 bits on the wire: a larger field would have its count
+  // truncated and then be written whole, quietly corrupting every format this
+  // writer serves. Nothing that reaches it today is that large, but the guard
+  // turns that silent corruption into a loud refusal.
   void blob(const uint8_t* p, std::size_t n) {
+    if (n > std::numeric_limits<uint32_t>::max()) {
+      throw Error("internal: field exceeds the 32-bit length prefix");
+    }
     u32(static_cast<uint32_t>(n));
     bytes(p, n);
   }
