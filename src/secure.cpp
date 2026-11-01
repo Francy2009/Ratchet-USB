@@ -289,11 +289,23 @@ void append_string_wiped(std::string& out, std::string_view text) {
 }
 
 bool is_unicode_format_char(uint32_t codepoint) noexcept {
+  // U+200C (zero-width non-joiner) and U+200D (zero-width joiner) are absent on
+  // purpose: they join, they do not reorder, and both are load-bearing in
+  // ordinary text -- U+200C in Persian, Arabic and several Indic scripts, U+200D
+  // in emoji sequences. Refusing them would reject names their owners spell
+  // that way. Every other character here has no such function: it draws as
+  // nothing and either reorders the line or splits it.
   return (codepoint >= 0x80 && codepoint <= 0x9F) ||     // C1 controls
+         codepoint == 0x061C ||                          // Arabic letter mark
+         codepoint == 0x200B ||                          // zero-width space
          codepoint == 0x200E ||                          // left-to-right mark
          codepoint == 0x200F ||                          // right-to-left mark
          (codepoint >= 0x202A && codepoint <= 0x202E) ||  // embeddings, override
+         codepoint == 0x2028 ||                          // line separator
+         codepoint == 0x2029 ||                          // paragraph separator
+         codepoint == 0x2060 ||                          // word joiner
          (codepoint >= 0x2066 && codepoint <= 0x2069) ||  // isolates
+         (codepoint >= 0x206A && codepoint <= 0x206F) ||  // deprecated formats
          codepoint == 0xFEFF;                            // byte-order mark
 }
 

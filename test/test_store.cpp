@@ -241,6 +241,10 @@ TEST("contact_alias_problem accepts ordinary names, including non-ASCII ones") {
   CHECK(contact_alias_problem("世界") == nullptr);
   CHECK(contact_alias_problem(std::string("a") + "\U0001F468\u200D\U0001F4BB") ==
         nullptr);
+  // A zero-width non-joiner is how a Persian name is spelled; it joins and
+  // does not reorder, so it is allowed like the word joiner above.
+  CHECK(contact_alias_problem(std::string("می") + "\u200C" + "خواهم") ==
+        nullptr);
   CHECK(contact_alias_problem("a b-c_d.e") == nullptr);
 }
 
@@ -254,6 +258,10 @@ TEST("contact_alias_problem refuses each listed format character") {
   const char* const refused[] = {
       "\u200E", "\u200F", "\u202A", "\u202B", "\u202C", "\u202D", "\u202E",
       "\u2066", "\u2067", "\u2068", "\u2069", "\uFEFF", "\u0080", "\u009F",
+      // Invisible but not reordering: the Arabic letter mark, the zero-width
+      // space, the word joiner, the line and paragraph separators, and the
+      // deprecated format characters.
+      "\u061C", "\u200B", "\u2060", "\u2028", "\u2029", "\u206A", "\u206F",
   };
   for (const char* character : refused) {
     const std::string alias = std::string("alice") + character;

@@ -329,6 +329,7 @@ void GuiLaunchTest::recvMarkerInAliasDoesNotOpenTheFileDialog() {
     QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
     const QByteArray body =
         "#!/bin/sh\n"
+        "printf '%s\\n' \"$@\" > \"$0.argv\"\n"
         "cat >/dev/null\n"
         "printf '%s: just a normal message\\n' 'mallory [encrypted file "
         "received: .sh]'\n"
@@ -392,6 +393,15 @@ void GuiLaunchTest::recvMarkerInAliasDoesNotOpenTheFileDialog() {
            "an alias that spells the old marker opened the file dialog");
   QVERIFY2(!last_dialog.isEmpty(), "recv showed no dialog at all");
   (void)marker_alias;
+
+  // The window reads the result from the structured block, so it has to ask
+  // the CLI for one. Without this flag the block is never written and a
+  // received file is silently never staged.
+  QFile argv_file(script + QStringLiteral(".argv"));
+  QVERIFY(argv_file.open(QIODevice::ReadOnly));
+  const QString argv = QString::fromUtf8(argv_file.readAll());
+  QVERIFY2(argv.contains(QStringLiteral("--structured-output")),
+           "recv did not ask the CLI for the structured result block");
 }
 
 QTEST_MAIN(GuiLaunchTest)

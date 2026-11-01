@@ -558,7 +558,11 @@ QWidget* MainWindow::buildMessagesTab() {
     // passphrase and the block on separate, length-delimited parts of the
     // stream.
     QByteArray payload = block.toUtf8();
-    launchWithPayload(QStringLiteral("recv"), {"--stage-file"}, {}, payload);
+    // --structured-output is what makes the CLI append the block that says
+    // whether what arrived was a file and where it was staged; without it
+    // parseRecvResult has nothing to read and a received file is never offered.
+    launchWithPayload(QStringLiteral("recv"),
+                      {"--stage-file", "--structured-output"}, {}, payload);
     ratchet::gui::wipeByteArray(payload);
   });
   recv_layout->addWidget(recvBlockEdit_);
@@ -651,6 +655,9 @@ void MainWindow::doLock() {
   // ciphertext block are kept: they are the user's input, not vault output, and
   // dropping them would make a retry after unlocking start from nothing.
   clearSensitiveState(/*include_unsent_input=*/false);
+  // The warning described the vault that was open. Leaving it on screen next to
+  // "Non connesso" would report a state that no longer exists.
+  setVaultWarnings(QString());
   statusLabel_->setText(tr("Non connesso"));
 }
 
@@ -1188,7 +1195,12 @@ void MainWindow::handleFinished(int exit_code, bool normal_exit) {
     }
     showResultDialog(false, tr("Operazione non riuscita"),
                      tr("Il comando '%1' e' fallito.").arg(command), detail);
-    if (command == QLatin1String("unlock")) setUnlocked(false);
+    if (command == QLatin1String("unlock")) {
+      setUnlocked(false);
+      // The unlock failed, so whatever the previous vault said about its own
+      // protection no longer describes anything on screen.
+      setVaultWarnings(QString());
+    }
     return;
   }
 
@@ -1388,16 +1400,28 @@ QString MainWindow::aliasLine(const QString& text, const QString& key) {
 
 void MainWindow::showTrustDialog(const QString& alias, const QString& shown_alias,
                                  const QString& fingerprint, bool have_result) {
-  if (!have_result ||
-      (shown_alias != alias && !alias.isEmpty())) {
-    // The first step failed, or printed something for a different contact.
-    // That is a normal command failure and already has its own dialog; the
-    // user is simply not asked to confirm anything.
-    if (have_result && !shown_alias.isEmpty()) {
-      warn(tr("La CLI ha stampato l'impronta di '%1', non di '%2': "
-              "nessun contatto e' stato segnato come verificato.")
-               .arg(shown_alias, alias));
+  if (!have_result) {
+    // The first step failed. That is a normal command failure and already has
+    // its own dialog; the user is simply not asked to confirm anything.
+    return;
+  }
+  if (shown_alias.isEmpty()) {
+    // stdout carried something, but not the alias line the first step is
+    // supposed to print. Fail closed -- and say so, because the dialog simply
+    // not opening is otherwise indistinguishable from a bug.
+    if (!alias.isEmpty()) {
+      warn(tr("La CLI non ha stampato l'alias di '%1': nessun contatto e' "
+              "stato segnato come verificato.")
+               .arg(alias));
     }
+    return;
+  }
+  if (shown_alias != alias && !alias.isEmpty()) {
+    // The value the CLI printed belongs to a different contact. Confirming it
+    // would mark the wrong one verified.
+    warn(tr("La CLI ha stampato l'impronta di '%1', non di '%2': "
+            "nessun contatto e' stato segnato come verificato.")
+             .arg(shown_alias, alias));
     return;
   }
   if (fingerprint.isEmpty()) {
@@ -1438,7 +1462,8 @@ void MainWindow::showTrustDialog(const QString& alias, const QString& shown_alia
 
   auto* note = new QLabel(tr(
       "Da questo momento il vault accetta i messaggi di '%1'. E' "
-      "un'autorizzazione, non una nota: non c'e' un comando che la revochi."));
+      "un'autorizzazione, non una nota: non c'e' un comando che la revochi.")
+                             .arg(alias));
   note->setTextFormat(Qt::PlainText);
   note->setWordWrap(true);
   layout->addWidget(note);

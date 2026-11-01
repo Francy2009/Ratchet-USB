@@ -112,12 +112,19 @@ void append_string_wiped(std::string& out, std::string_view text);
 //
 // U+202A..U+202E (the embedding and override controls, including the
 // right-to-left override that can make "gnp.exe" read as "exe.png"), U+2066..
-// U+2069 (the isolates), U+200E/U+200F (the marks) and U+FEFF (the byte-order
+// U+2069 (the isolates), U+200E/U+200F and U+061C (the marks), U+200B and
+// U+2060 (the zero-width space and the word joiner), U+2028/U+2029 (the line
+// and paragraph separators, which split a line without a newline byte),
+// U+206A..U+206F (the deprecated format characters) and U+FEFF (the byte-order
 // mark, which is invisible mid-string) are *format* characters: a terminal and
-// a GUI render them as nothing, but they reorder the text drawn around them. A
-// contact alias is chosen by somebody else, so without this an alias can be
-// made to display as a different string -- a fingerprint, a warning, a file
-// name -- without containing a single control byte.
+// a GUI render them as nothing, but they reorder or split the text drawn
+// around them. A contact alias is chosen by somebody else, so without this an
+// alias can be made to display as a different string -- a fingerprint, a
+// warning, a file name -- without containing a single control byte.
+//
+// U+200C and U+200D are deliberately absent: they join rather than reorder,
+// and they are how Persian, Arabic, several Indic scripts and emoji sequences
+// are spelled. Refusing them would reject names their owners write that way.
 //
 // These two helpers are the policy shared by every path that validates or
 // prints borrowed text: contact aliases are refused at import, and text that is
@@ -125,7 +132,8 @@ void append_string_wiped(std::string& out, std::string_view text);
 // controls (U+0080..U+009F) travel in UTF-8 as two bytes and are equally
 // invisible, so they are escaped the same way.
 
-// A C1 control, a bidi control or mark, or the byte-order mark.
+// A C1 control, a bidi control or mark, a zero-width character, a line or
+// paragraph separator, or the byte-order mark.
 bool is_unicode_format_char(uint32_t codepoint) noexcept;
 
 // Rewrites those characters as visible \uXXXX escapes. Every other byte,

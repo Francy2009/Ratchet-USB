@@ -221,7 +221,13 @@ TEST("gui format: recv body cannot spell the block's marker") {
 TEST("gui format: recv body passes NUL, Unicode and control bytes through") {
   // Only the markers are rewritten. A NUL, an ESC and a multi-byte character
   // are the received text, and the block is what the reader parses.
-  const std::string body = std::string("a\x00b\xc3\xa8\xf0\x9f\x94\x90\x1b[31mc", 14);
+  // The escape is closed before the 'b': in "\x00b" the 'b' is a hex digit, so
+  // the compiler would read the single byte 0x0b and the body would carry no
+  // NUL at all -- which is what this test used to assert.
+  const std::string body =
+      std::string("a\x00" "b\xc3\xa8\xf0\x9f\x94\x90\x1b[31mc", 15);
+  CHECK(body.size() == 15);
+  CHECK(body.find('\0') != std::string::npos);
   std::ostringstream out;
   gui_format::write_body_without_markers(out, body);
   CHECK(out.str() == body);

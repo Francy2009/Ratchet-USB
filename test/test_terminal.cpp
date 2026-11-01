@@ -69,10 +69,13 @@ TEST("escape_control_chars neutralises a right-to-left override") {
 
 TEST("escape_control_chars neutralises every bidi character it lists") {
   // U+200E/U+200F, the U+202A..U+202E embeddings, U+2066..U+2069 isolates and
-  // U+FEFF, plus the C1 controls spelled as UTF-8 (U+0080 and U+009F).
+  // U+FEFF, plus the C1 controls spelled as UTF-8 (U+0080 and U+009F), the
+  // Arabic letter mark, the zero-width space, the word joiner, the line
+  // separator and a deprecated format character.
   const std::string payload =
       "a\u200Eb\u200Fc\u202Ad\u202Be\u202Cf\u202Dg\u202Eh"
-      "\u2066i\u2067j\u2068k\u2069l\uFEFFm\u0080n\u009Fo";
+      "\u2066i\u2067j\u2068k\u2069l\uFEFFm\u0080n\u009Fo"
+      "\u061Cp\u200Bq\u2060r\u2028s\u206At";
   const std::string escaped = terminal::escape_control_chars(payload);
   CHECK(!has_unicode_format_chars(escaped));
   CHECK(escaped.find("\\u200e") != std::string::npos);
@@ -81,6 +84,11 @@ TEST("escape_control_chars neutralises every bidi character it lists") {
   CHECK(escaped.find("\\ufeff") != std::string::npos);
   CHECK(escaped.find("\\u0080") != std::string::npos);
   CHECK(escaped.find("\\u009f") != std::string::npos);
+  CHECK(escaped.find("\\u061c") != std::string::npos);
+  CHECK(escaped.find("\\u200b") != std::string::npos);
+  CHECK(escaped.find("\\u2060") != std::string::npos);
+  CHECK(escaped.find("\\u2028") != std::string::npos);
+  CHECK(escaped.find("\\u206a") != std::string::npos);
   // The readable letters are still there, in order.
   CHECK(escaped.find('a') != std::string::npos);
   CHECK(escaped.find('o') != std::string::npos);

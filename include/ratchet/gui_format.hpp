@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <ostream>
+#include <string>
 #include <string_view>
 
 // The opt-in machine-readable result the desktop GUI asks the CLI for.
@@ -141,7 +142,10 @@ struct RecvResult {
   std::string_view kind;        // kRecvText or kRecvFile
   std::string_view ext;         // file only, validated like a phrase below
   bool staged = false;          // the file was written to `path`
-  std::string_view path;        // only meaningful when staged is true
+  // Owned, not a view. The path is produced by staging while the command runs
+  // and read back when the block is written at the end of it; a view into the
+  // local string would dangle by then, which is exactly what it did.
+  std::string path;             // only meaningful when staged is true
 };
 
 // Writes `body` with every occurrence of the begin and end markers replaced by
