@@ -60,11 +60,22 @@ bool stdout_is_tty();
 // printed moments earlier -- repaint them with something else, set the window
 // title, or on terminals that allow it write the system clipboard with OSC 52.
 //
-// Bytes 0x80-0x9F are deliberately left alone. They are the C1 controls only
-// in a non-UTF-8 terminal; in UTF-8, which is what anything current uses, they
-// are continuation bytes, and escaping them would mangle every message that is
-// not pure ASCII.
+// A raw byte 0x80-0x9F is deliberately left alone: it is a C1 control only in
+// a non-UTF-8 terminal, and in UTF-8 it is a continuation byte, so escaping
+// byte by byte would mangle every message that is not pure ASCII. The
+// characters those bytes spell in UTF-8 are a different matter: a well-formed
+// U+0080..U+009F, and the bidi controls and marks, the isolates and the
+// byte-order mark, draw as nothing but reorder the text around them, so they
+// are rewritten as visible \uXXXX escapes (see escape_unicode_format_chars in
+// secure.hpp).
 std::string escape_control_chars(std::string_view text);
+
+// Like escape_control_chars, but also escapes newline and tab. Use this for a
+// value that is printed inside one line -- an alias, a warning label -- where a
+// newline would let the value forge further lines (a second `fingerprint:`
+// line, say). Messages keep escape_control_chars: their newlines and tabs are
+// meant to reach the terminal.
+std::string escape_line_control_chars(std::string_view text);
 
 // escape_control_chars, but only when stdout is a terminal. A redirect to a
 // file or a pipe gets the bytes exactly as the sender wrote them, because

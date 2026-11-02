@@ -66,9 +66,18 @@ bool lock_region(void* p, std::size_t n) noexcept;
 // unlocking a page only once nothing else holds it.
 void unlock_region(void* p, std::size_t n) noexcept;
 
-// True once an exception has prevented the page accounting from completing --
-// under memory exhaustion, essentially. From that point pages may stay locked
-// longer than they need to, which is the safe direction to be wrong in.
+// Records that the OS refused a lock on a region now holding secret material,
+// so the "locked into RAM" guarantee is off for it. lock_region() has already
+// warned once per process; this makes the condition queryable instead of
+// merely printed. The secure buffers call it when a lock on a fresh block
+// fails, where an unreported failure would break their contract in silence.
+void note_lock_unavailable() noexcept;
+
+// True when page locking is not fully effective: an exception stopped the page
+// accounting from completing, or the OS refused a lock and a region holding
+// secrets was left swappable. From that point pages may stay locked longer
+// than they need to, and unlocked pages may reach swap -- the first is the
+// safe direction to be wrong in, the second is what callers should surface.
 bool memory_locking_degraded() noexcept;
 
 // Zeroes a std::string's buffer, then empties it.
@@ -98,6 +107,73 @@ void wipe_vector(std::vector<uint8_t>& bytes) noexcept;
 // hand to somebody else. Used for the TUI's editable buffer and for input read
 // from a pipe, where the final length is not known up front.
 void append_string_wiped(std::string& out, std::string_view text);
+
+// --- Unicode format characters ---------------------------------------------
+//
+// U+202A..U+202E (the embedding and override controls, including the
+// right-to-left override that can make "gnp.exe" read as "exe.png"), U+2066..
+// U+2069 (the isolates), U+200E/U+200F and U+061C (the marks), U+200B and
+// U+2060 (the zero-width space and the word joiner), U+2028/U+2029 (the line
+// and paragraph separators, which split a line without a newline byte),
+// U+206A..U+206F (the deprecated format characters) and U+FEFF (the byte-order
+// mark, which is invisible mid-string) are *format* characters: a terminal and
+// a GUI render them as nothing, but they reorder or split the text drawn
+// around them. A contact alias is chosen by somebody else, so without this an
+// alias can be made to display as a different string -- a fingerprint, a
+// warning, a file name -- without containing a single control byte.
+//
+// U+200C and U+200D are deliberately absent: they join rather than reorder,
+// and they are how Persian, Arabic, several Indic scripts and emoji sequences
+// are spelled. Refusing them would reject names their owners write that way.
+//
+// These two helpers are the policy shared by every path that validates or
+// prints borrowed text: contact aliases are refused at import, and text that is
+// printed has these code points rewritten as visible \uXXXX escapes. C1
+// controls (U+0080..U+009F) travel in UTF-8 as two bytes and are equally
+// invisible, so they are escaped the same way.
+
+// A C1 control, a bidi control or mark, a zero-width character, a line or
+// paragraph separator, or the byte-order mark.
+bool is_unicode_format_char(uint32_t codepoint) noexcept;
+
+// Rewrites those characters as visible \uXXXX escapes. Every other byte,
+// including one that is not part of any valid UTF-8 sequence, is copied
+// through unchanged, so ordinary text (and a legacy 8-bit encoding) keeps
+// working.
+std::string escape_unicode_format_chars(std::string_view text);
+
+// True when `text` contains at least one of the characters above.
+bool has_unicode_format_chars(std::string_view text);
+
+// --- contact aliases --------------------------------------------------------
+
+// The longest alias a contact may be given, in bytes (a Unicode code point
+// costs up to four of them).
+inline constexpr std::size_t kMaxContactAliasBytes = 128;
+
+// What both front ends report when an alias is refused, so the CLI, the
+// terminal interface and the desktop GUI say the same thing.
+inline constexpr std::string_view kContactAliasLimitError =
+    "contact alias exceeds the 128-byte limit";
+inline constexpr std::string_view kContactAliasEmptyError =
+    "contact alias must not be empty";
+inline constexpr std::string_view kContactAliasFormatCharsError =
+    "contact alias contains an invisible formatting character (bidi or "
+    "zero-width), which could make it display as something else; remove it "
+    "and try again";
+inline constexpr std::string_view kContactAliasControlCharsError =
+    "contact alias contains a control character (such as a newline or an "
+    "escape), which could make it display as something else; remove it and "
+    "try again";
+
+// Why `alias` cannot be used, as a message to show, or nullptr when it can.
+//
+// An alias is what the interface calls somebody else, and it is chosen by
+// whoever sent the card. An empty alias, one past the length limit, or one
+// carrying a format character is refused rather than escaped: the user picked
+// this string and typed it, so silently drawing a different one would be worse
+// than telling them to fix it.
+const char* contact_alias_problem(std::string_view alias) noexcept;
 
 // Wipes a std::string when it goes out of scope, including on an exception or
 // an early return. `dismiss()` releases the value from the guard when ownership
@@ -183,7 +259,11 @@ class SecureBytes {
   }
 
  private:
-  void lock() { lock_region(data_, N); }
+  void lock() {
+    if (!lock_region(data_, N)) {
+      note_lock_unavailable();
+    }
+  }
 
   uint8_t data_[N]{};
 };
@@ -272,7 +352,13 @@ class SecureString {
     const std::size_t new_capacity = doubled > needed ? doubled : needed;
     std::vector<char> bigger;
     bigger.reserve(new_capacity);
-    (void)lock_region(bigger.data(), bigger.capacity());
+    if (!lock_region(bigger.data(), bigger.capacity())) {
+      // The block is about to hold the secret unlocked. lock_region has
+      // already warned once per process; recording it here is what lets the
+      // process report "secrets are not swap-protected" instead of leaving
+      // the broken lock contract invisible.
+      note_lock_unavailable();
+    }
     try {
       bigger.insert(bigger.end(), buf_.begin(), buf_.end());
     } catch (...) {
@@ -357,7 +443,13 @@ class SecureBuffer {
     }
     std::vector<uint8_t> bigger;
     bigger.reserve(n);
-    (void)lock_region(bigger.data(), bigger.capacity());
+    if (!lock_region(bigger.data(), bigger.capacity())) {
+      // The block is about to hold the secret unlocked. lock_region has
+      // already warned once per process; recording it here is what lets the
+      // process report "secrets are not swap-protected" instead of leaving
+      // the broken lock contract invisible.
+      note_lock_unavailable();
+    }
     try {
       bigger.insert(bigger.end(), buf_.begin(), buf_.end());
     } catch (...) {

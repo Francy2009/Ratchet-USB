@@ -11,6 +11,8 @@
 
 #include <memory>
 
+#include "gui_output.hpp"
+
 class QCheckBox;
 class QCloseEvent;
 class QComboBox;
@@ -105,6 +107,24 @@ class MainWindow : public QMainWindow {
 
   QString stageAddCardFile();
 
+  // The two steps of marking a contact verified. The first runs
+  // `trust --show-fingerprint`; its output comes back through the normal child
+  // reporting and leads here. The second runs `trust --confirmed`, and only
+  // after the box has been ticked: the checkbox is disabled until the value is
+  // on screen, so a click-through cannot confirm what nobody read.
+  void showTrustDialog(const QString& alias, const QString& shown_alias,
+                       const QString& fingerprint, bool have_result);
+  // The value of a "key: value" line in the CLI's output, or an empty string.
+  static QString aliasLine(const QString& text, const QString& key);
+  // Same, for the recv block: the message body is everything before it.
+
+  // The warnings the CLI prints about the vault it just opened: rollback
+  // protection it could not check, key material it could not lock, an Argon2id
+  // cost below the recommendation. Shown in the panel and in a dialog, because
+  // a command that succeeded never otherwise shows its stderr.
+  static QString vaultWarningsFromLog(const QString& text);
+  void setVaultWarnings(const QString& warnings);
+
   QIcon eyeIcon(bool open) const;
   void togglePassphraseReveal();
   void warn(const QString& message);
@@ -113,7 +133,8 @@ class MainWindow : public QMainWindow {
   // into a scrollable read-only box with a Copy button, so a large block never
   // stretches the window.
   void showResultDialog(bool ok, const QString& title, const QString& message,
-                        const QString& detail);
+                        const QString& detail,
+                        const QString& command = QString());
   QString extractError(const QString& text) const;
   QString commandTitle(const QString& command) const;
 
@@ -121,6 +142,10 @@ class MainWindow : public QMainWindow {
   // its folder in the file manager (the same staging ratchet-usb uses).
   void showFileDialog(const QString& ext, const QString& path,
                       const QString& detail);
+  // The dispatch behind both recv paths (a staged file, and a file type the
+  // CLI refused to open, which exits non-zero).
+  void showRecvFile(const ratchet::gui::ParsedRecvResult& parsed,
+                    const QString& stderr_text);
 
   // Opens `dir` in the host file manager. Host programs are launched with a
   // cleaned environment so they do not load this process's bundled libraries.
@@ -139,6 +164,7 @@ class MainWindow : public QMainWindow {
   QLineEdit* passphraseEdit_ = nullptr;
   QToolButton* revealButton_ = nullptr;
   QLabel* statusLabel_ = nullptr;
+  QLabel* vaultWarningLabel_ = nullptr;
   QPushButton* unlockButton_ = nullptr;
   QPushButton* lockButton_ = nullptr;
   QLabel* binaryLabel_ = nullptr;
@@ -164,6 +190,12 @@ class MainWindow : public QMainWindow {
   QString commandStderr_;
   bool silentCommand_ = false;
   bool unlocked_ = false;
+  // Set when the running `trust` command is the --show-fingerprint step, so
+  // its result opens the confirmation dialog instead of the generic one.
+  bool trustFingerprintPending_ = false;
+  // The alias being confirmed; the follow-up `trust --confirmed` and its
+  // contact-list refresh both use it.
+  QString confirmTrustedContact_;
 };
 
 #endif  // RATCHET_GUI_MAIN_WINDOW_HPP

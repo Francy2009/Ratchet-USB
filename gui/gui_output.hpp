@@ -35,6 +35,28 @@ struct ParsedGuiResult {
 ParsedGuiResult parseGuiResult(const QString& text,
                                const QString& expected_command);
 
+// The block `ratchet-usb recv --structured-output` appends after the message
+// body. Unlike the two above there is nothing secret in it -- the sender's
+// alias is not part of it -- so the values are kept, but only after the same
+// strict checks: one whole-line block at the very end of stdout, known fields
+// only, no duplicates, and a kind of "text" or "file". A "file" result is
+// valid only with a safe extension, and with a staged path exactly when it says
+// it staged one.
+struct ParsedRecvResult {
+  bool ok = false;
+  bool is_file = false;
+  QString ext;
+  bool staged = false;
+  QString path;
+  // The message body: what the CLI wrote before the block, with the framing
+  // newline removed and the writer's escape undone when the block names an
+  // escape this parser can reverse. Valid when ok is true.
+  QString body;
+  QString error;  // safe to show
+};
+
+ParsedRecvResult parseRecvResult(const QString& stdout_text);
+
 }  // namespace ratchet::gui
 
 #endif  // RATCHET_GUI_OUTPUT_HPP

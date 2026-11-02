@@ -12,6 +12,13 @@ namespace {
 
 constexpr qsizetype kMaxBlockChars = 4096;
 constexpr qsizetype kMaxFieldChars = 1024;
+constexpr qsizetype kMaxExtensionChars = 16;
+
+ParsedRecvResult failRecv(const QString& why) {
+  ParsedRecvResult result;
+  result.error = why;
+  return result;
+}
 
 ParsedGuiResult fail(const QString& why) {
   ParsedGuiResult result;
@@ -260,6 +267,156 @@ ParsedGuiResult parseGuiResult(const QString& text,
   result.value.status = GuiResult::Status::Ok;
   result.value.passphrase = passphrase;
   result.value.recovery = std::move(recovery);
+  result.ok = true;
+  return result;
+}
+
+ParsedRecvResult parseRecvResult(const QString& stdout_text) {
+  const QString begin = QString::fromLatin1(gui_format::kBegin);
+  const QString end = QString::fromLatin1(gui_format::kEnd);
+  // The message body is the sender's text and may spell the marker itself --
+  // terminal::escape_control_chars leaves printable characters alone, so a
+  // copy-pasted "-----BEGIN RATCHET GUI RESULT-----" arrives intact. The block
+  // is the last thing the command writes, so the *last* whole-line begin
+  // marker is the real one; a body that puts a marker earlier can only be
+  // mistaken for the block by a reader that took the first.
+  const qsizetype begin_pos = stdout_text.lastIndexOf(begin);
+  if (begin_pos < 0 || !starts_a_line(stdout_text, begin_pos)) {
+    return failRecv(QStringLiteral("structured result is missing"));
+  }
+  const qsizetype end_pos = stdout_text.indexOf(end, begin_pos + begin.size());
+  if (end_pos < 0 || !starts_a_line(stdout_text, end_pos)) {
+    return failRecv(QStringLiteral("structured result has no end marker"));
+  }
+  // The block closes the stream. Anything after the end marker means the block
+  // did not come from where it claims.
+  if (!stdout_text.mid(end_pos + end.size()).trimmed().isEmpty()) {
+    return failRecv(QStringLiteral("structured result is not at the end"));
+  }
+  // A second block after the chosen one would make "the last marker" and "the
+  // only block" disagree; refuse rather than pick.
+  if (stdout_text.indexOf(begin, end_pos + end.size()) >= 0) {
+    return failRecv(QStringLiteral("structured result appears more than once"));
+  }
+
+  const QString body =
+      stdout_text.mid(begin_pos + begin.size(), end_pos - (begin_pos + begin.size()));
+  if (body.size() > kMaxBlockChars) {
+    return failRecv(QStringLiteral("structured result is too large"));
+  }
+  QStringList lines = body.split(QLatin1Char('\n'));
+  if (!lines.isEmpty() && lines.first().isEmpty()) lines.removeFirst();
+  if (!lines.isEmpty() && lines.last().isEmpty()) lines.removeLast();
+  if (lines.isEmpty()) {
+    return failRecv(QStringLiteral("structured result is empty"));
+  }
+
+  QHash<QString, QString> fields;
+  for (const QString& line : lines) {
+    if (line.isEmpty() || line.contains(QLatin1Char('\r'))) {
+      return failRecv(QStringLiteral("structured result has a malformed line"));
+    }
+    const qsizetype equals = line.indexOf(QLatin1Char('='));
+    if (equals <= 0) {
+      return failRecv(QStringLiteral("structured result has a malformed field"));
+    }
+    const QString key = line.left(equals);
+    const QString value = line.mid(equals + 1);
+    if (key != QLatin1String("version") && key != QLatin1String("command") &&
+        key != QLatin1String("kind") && key != QLatin1String("ext") &&
+        key != QLatin1String("staged") && key != QLatin1String("path") &&
+        key != QLatin1String("marker")) {
+      return failRecv(QStringLiteral("structured result has an unknown field"));
+    }
+    if (fields.contains(key)) {
+      return failRecv(QStringLiteral("structured result has a duplicate field"));
+    }
+    fields.insert(key, value);
+  }
+
+  if (fields.value(QStringLiteral("version")) !=
+          QString::fromLatin1(gui_format::kVersion) ||
+      fields.value(QStringLiteral("command")) != QLatin1String("recv")) {
+    return failRecv(QStringLiteral("structured result is for another command"));
+  }
+
+  // Optional, so a CLI from before the field existed still parses; when it is
+  // there it has to be one this parser understands. `hex-colon` is what the
+  // previous build wrote: accepted, but its escape cannot be reversed, so those
+  // bodies are shown as written.
+  const QString marker_mode = fields.value(QStringLiteral("marker"));
+  const QString percent_hex =
+      QString::fromLatin1(gui_format::kMarkerPercentHex);
+  if (!marker_mode.isEmpty() && marker_mode != percent_hex &&
+      marker_mode != QString::fromLatin1(gui_format::kMarkerHexColonLegacy)) {
+    return failRecv(QStringLiteral("structured result has an unknown marker mode"));
+  }
+
+  // The body is everything before the block. The CLI writes one newline
+  // between the two; that newline is framing, not text, so it is the only byte
+  // removed. When the block says the body was escaped, undoing it here is what
+  // makes the window show the message the sender wrote rather than its
+  // spelling.
+  QString message = stdout_text.left(begin_pos);
+  if (message.endsWith(QLatin1Char('\n'))) {
+    message.chop(1);
+  }
+  if (marker_mode == percent_hex) {
+    message = QString::fromStdString(
+        gui_format::unescape_body(message.toStdString()));
+  }
+
+  const QString kind = fields.value(QStringLiteral("kind"));
+  ParsedRecvResult result;
+  result.body = message;
+  if (kind == QLatin1String("text")) {
+    if (fields.contains(QStringLiteral("ext")) ||
+        fields.contains(QStringLiteral("staged")) ||
+        fields.contains(QStringLiteral("path"))) {
+      return failRecv(QStringLiteral("a text result carries file fields"));
+    }
+    result.ok = true;
+    return result;
+  }
+  if (kind != QLatin1String("file")) {
+    return failRecv(QStringLiteral("structured result has an unknown kind"));
+  }
+
+  // Same alphabet and length as ratchet::gui_format::valid_extension.
+  const QString ext = fields.value(QStringLiteral("ext"));
+  if (ext.isEmpty() || ext.size() > kMaxExtensionChars) {
+    return failRecv(QStringLiteral("structured result has an invalid extension"));
+  }
+  for (const QChar c : ext) {
+    if (!((c >= QLatin1Char('a') && c <= QLatin1Char('z')) ||
+          (c >= QLatin1Char('0') && c <= QLatin1Char('9')))) {
+      return failRecv(QStringLiteral("structured result has an invalid extension"));
+    }
+  }
+  const QString staged = fields.value(QStringLiteral("staged"));
+  if (staged != QLatin1String("yes") && staged != QLatin1String("no")) {
+    return failRecv(QStringLiteral("structured result has an invalid staged value"));
+  }
+  const QString path = fields.value(QStringLiteral("path"));
+  if (staged == QLatin1String("yes")) {
+    if (path.isEmpty() || !path.startsWith(QLatin1Char('/')) ||
+        path.size() > 4096) {
+      return failRecv(QStringLiteral("structured result has an invalid path"));
+    }
+    for (const QChar c : path) {
+      if (c.unicode() < 0x20 || c.unicode() == 0x7F ||
+          c == QLatin1Char(' ')) {
+        return failRecv(QStringLiteral("structured result has an invalid path"));
+      }
+    }
+    result.staged = true;
+    result.path = path;
+  } else if (fields.contains(QStringLiteral("path"))) {
+    return failRecv(QStringLiteral("structured result reports a path but not "
+                                   "a staged file"));
+  }
+  result.is_file = true;
+  result.ext = ext;
   result.ok = true;
   return result;
 }

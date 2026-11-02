@@ -102,8 +102,8 @@ ratchet-usb recv
 Dopo `init`, il programma mostra due cose diverse, una volta ciascuna. La prima
 è una frase di recupero di 12 parole; conservala separatamente dalla chiavetta.
 La frase permette di ricostruire l'identità, ma non ripristina contatti, prekey
-o conversazioni. La seconda è la passphrase del vault, una frase casuale di sei
-parole (66 bit di entropia) con cui si deriva la chiave Argon2id. Scrivila e
+o conversazioni. La seconda è la passphrase del vault, una frase casuale di dodici
+parole (132 bit di entropia) con cui si deriva la chiave Argon2id. Scrivila e
 riscrivila una parola per riga quando il vault la chiede; non è la frase di
 recupero e non ripristina nulla. `passphrase` ne genera una nuova e ricifra lo
 stesso vault, conservando identità, contatti e sessioni; la vecchia passphrase

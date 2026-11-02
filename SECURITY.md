@@ -45,8 +45,8 @@ What the design does aim at:
   generation and ciphertext digest.
 - The vault uses Argon2id and ChaCha20-Poly1305. A stolen copy permits an
   offline passphrase-guessing attack, so passphrase strength matters. The vault
-  passphrase is a random word phrase the program generates (six words by
-  default, 66 bits of entropy, and `--passphrase-words` allows up to twelve);
+  passphrase is a random word phrase the program generates (twelve words by
+  default, 132 bits of entropy, and `--passphrase-words` allows six to twelve);
   it is shown once, entered one word per line, and kept out of argv and the
   shell history. It is not the 12-word recovery phrase. The vault's
   authenticated version byte records whether the passphrase is such a word

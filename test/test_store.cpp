@@ -229,3 +229,82 @@ TEST("clone_session reproduces a session exactly") {
   CHECK(a == b);
   CHECK(!a.empty());
 }
+
+// --- contact aliases ---------------------------------------------------------
+
+TEST("contact_alias_problem accepts ordinary names, including non-ASCII ones") {
+  // Accented letters, CJK and an emoji are all fine: they are visible text, and
+  // an interface that refused them would be unusable outside English. A word
+  // joiner (U+200D, inside an emoji sequence) is not on the list either.
+  CHECK(contact_alias_problem("alice") == nullptr);
+  CHECK(contact_alias_problem("città") == nullptr);
+  CHECK(contact_alias_problem("世界") == nullptr);
+  CHECK(contact_alias_problem(std::string("a") + "\U0001F468\u200D\U0001F4BB") ==
+        nullptr);
+  // A zero-width non-joiner is how a Persian name is spelled; it joins and
+  // does not reorder, so it is allowed like the word joiner above.
+  CHECK(contact_alias_problem(std::string("می") + "\u200C" + "خواهم") ==
+        nullptr);
+  CHECK(contact_alias_problem("a b-c_d.e") == nullptr);
+}
+
+TEST("contact_alias_problem refuses a right-to-left override") {
+  const std::string alias = std::string("photo") + "\u202E" + "gnp.exe";
+  CHECK(contact_alias_problem(alias) == kContactAliasFormatCharsError.data());
+  CHECK(has_unicode_format_chars(alias));
+}
+
+TEST("contact_alias_problem refuses each listed format character") {
+  const char* const refused[] = {
+      "\u200E", "\u200F", "\u202A", "\u202B", "\u202C", "\u202D", "\u202E",
+      "\u2066", "\u2067", "\u2068", "\u2069", "\uFEFF", "\u0080", "\u009F",
+      // Invisible but not reordering: the Arabic letter mark, the zero-width
+      // space, the word joiner, the line and paragraph separators, and the
+      // deprecated format characters.
+      "\u061C", "\u200B", "\u2060", "\u2028", "\u2029", "\u206A", "\u206F",
+  };
+  for (const char* character : refused) {
+    const std::string alias = std::string("alice") + character;
+    CHECK(contact_alias_problem(alias) ==
+          kContactAliasFormatCharsError.data());
+  }
+}
+
+TEST("contact_alias_problem refuses control characters that would forge lines") {
+  // The alias is printed beside the fingerprint and, for the GUI, inside a
+  // line-oriented block. A newline would let a sender add a second
+  // "fingerprint:" line of their own; ESC would let them move the cursor. Tab
+  // is refused too: no alias needs it.
+  const char* const refused[] = {
+      "\n", "\r", "\t", "\x1b", "\x07", "\x7f",
+  };
+  for (const char* character : refused) {
+    const std::string alias = std::string("alice") + character + "bob";
+    CHECK(contact_alias_problem(alias) ==
+          kContactAliasControlCharsError.data());
+  }
+  const std::string forged = "alice\nfingerprint: forged";
+  CHECK(contact_alias_problem(forged) ==
+        kContactAliasControlCharsError.data());
+}
+
+TEST("contact_alias_problem enforces the length limit and rejects emptiness") {
+  CHECK(contact_alias_problem("") == kContactAliasEmptyError.data());
+  CHECK(contact_alias_problem(std::string(kMaxContactAliasBytes, 'a')) ==
+        nullptr);
+  CHECK(contact_alias_problem(std::string(kMaxContactAliasBytes + 1, 'a')) ==
+        kContactAliasLimitError.data());
+}
+
+TEST("the format-character check does not trust malformed UTF-8 to hide one") {
+  // A byte that is not valid UTF-8 is not a format character, so it is copied
+  // through rather than treated as one -- but a real one after it still is.
+  const std::string lone_continuation("\x85");
+  CHECK(!has_unicode_format_chars(lone_continuation));
+  const std::string overlong("\xC0\xAF");
+  CHECK(!has_unicode_format_chars(overlong));
+  const std::string hidden = std::string("\xC0\xAF") + "\u202E";
+  CHECK(has_unicode_format_chars(hidden));
+  CHECK(contact_alias_problem(hidden) ==
+        kContactAliasFormatCharsError.data());
+}

@@ -76,8 +76,8 @@ def init_vault(drive):
     if result.returncode != 0:
         raise SystemExit("init failed: %s" % result.stderr)
     words = generated_words(result.stdout + result.stderr)
-    if len(words) != 6:
-        raise SystemExit("expected a 6-word passphrase, got %r" % (words,))
+    if len(words) != 12:
+        raise SystemExit("expected a 12-word passphrase, got %r" % (words,))
     return words
 
 
@@ -214,7 +214,11 @@ def main():
             handle.write(alice_card)
         cli(["add", "--usb-path", bob, "alice", "--card", card_file],
             stdin=feed(bob_words))
-        cli(["trust", "--usb-path", bob, "alice"], stdin=feed(bob_words))
+        # --confirmed: trust without a terminal, after the fingerprint it just
+        # printed; this script never compares it, so the flag is only to keep
+        # the test non-interactive. The default path is covered by smoke.sh.
+        cli(["trust", "--usb-path", bob, "alice", "--confirmed"],
+            stdin=feed(bob_words))
 
         # --- Alice does everything through the interface --------------------
         step("opening the interface on Alice's drive")

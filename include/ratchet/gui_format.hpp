@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <ostream>
+#include <string>
 #include <string_view>
 
 // The opt-in machine-readable result the desktop GUI asks the CLI for.
@@ -92,6 +93,143 @@ struct Result {
 // leave a partial block; the reader must treat a block without its END marker
 // (or with an invalid field) as an error.
 bool write_result(std::ostream& os, const Result& result);
+
+// --- recv --------------------------------------------------------------------
+//
+// A received message has two outcomes: a text body, which is plaintext and is
+// truncated and control-escaped before it is printed, and a framed file, whose
+// presence the desktop GUI has to act on (it offers to open the folder the
+// file was staged in). The GUI used to recognise the second by matching a
+// pattern in the CLI's human stderr -- which begins with the sender's alias,
+// a value the sender chose, so an alias spelling that pattern out opened the
+// file dialog for a message that was not a file.
+//
+// `recv --structured-output` therefore ends its stdout with this block:
+//
+//     -----BEGIN RATCHET GUI RESULT-----
+//     version=1
+//     command=recv
+//     kind=text|file
+//     ext=<sanitised extension, file only>
+//     staged=yes|no
+//     path=<path, only when staged>
+//     marker=percent-hex
+//     ----------------------------------
+//     -----END RATCHET GUI RESULT-----
+//
+// Every value on the right-hand side comes from this program, not from the
+// message: the kind is what the framing byte said, the extension is the
+// sanitised one decoded from the frame, and the path is what this process
+// staged. The alias is deliberately not in the block. stdout carries the
+// message body first (a GUI printing it to a terminal path still gets the text
+// it always got), then the block, which begins on a line of its own and is the
+// last thing written.
+//
+// The body is chosen by the sender, so it can contain the begin marker itself.
+// Two things keep the two apart: the block is the *last* occurrence in stdout
+// (the reader takes the last marker, not the first), and the body is escaped:
+// every literal occurrence of either marker is written as `%` followed by its
+// colon-hex spelling, and every literal `%` as `%%`. The `%` is what makes the
+// escape reversible -- a message that already contains the hex spelling is
+// written `%%2d:2d:...` and comes back unchanged, while `%2d:2d:...` can only
+// be the marker. `marker=percent-hex` announces the mode, and unescape_body()
+// puts the text back. A stream where the marker occurs exactly once needs no
+// disambiguation at all, which is why the field is optional for the parser but
+// always written by this build.
+inline constexpr std::string_view kRecvText = "text";
+inline constexpr std::string_view kRecvFile = "file";
+inline constexpr std::string_view kMarkerPercentHex = "percent-hex";
+// What the previous build wrote: the hex spelling with no escape character, so
+// a body that happened to contain it is indistinguishable from a marker. Kept
+// so a newer GUI still parses a block from an older CLI; those bodies cannot be
+// decoded and are shown as written.
+inline constexpr std::string_view kMarkerHexColonLegacy = "hex-colon";
+
+struct RecvResult {
+  std::string_view kind;        // kRecvText or kRecvFile
+  std::string_view ext;         // file only, validated like a phrase below
+  bool staged = false;          // the file was written to `path`
+  // Owned, not a view. The path is produced by staging while the command runs
+  // and read back when the block is written at the end of it; a view into the
+  // local string would dangle by then, which is exactly what it did.
+  std::string path;             // only meaningful when staged is true
+};
+
+// Writes `body` escaped: every occurrence of the begin and end markers becomes
+// `%` + its colon-hex spelling, and every literal `%` becomes `%%`, so the only
+// literal marker in the stream is the real block's and the escape is
+// reversible. Nothing else is touched: NUL bytes, control characters and UTF-8
+// pass through, which is what keeps the body the text that was received.
+void write_body_escaped(std::ostream& os, std::string_view body);
+
+// Reverses write_body_escaped() on the body that preceded the block. A `%` that
+// introduces neither `%` nor one of the two marker spellings is kept as it is,
+// so a stream from another producer is not mangled.
+//
+// Defined here rather than in the .cpp because the desktop GUI parses the block
+// and links no part of the core library; the writer and this reader must agree
+// on the spelling, and test_gui_output round-trips one through the other.
+inline std::string unescape_body(std::string_view written) {
+  static constexpr char kHex[] = "0123456789abcdef";
+  const auto marker_spelling = [](std::string_view marker) {
+    std::string out;
+    out.reserve(marker.size() * 3);
+    for (std::size_t i = 0; i < marker.size(); ++i) {
+      const auto byte = static_cast<unsigned char>(marker[i]);
+      if (i > 0) out.push_back(':');
+      out.push_back(kHex[byte >> 4]);
+      out.push_back(kHex[byte & 0x0F]);
+    }
+    return out;
+  };
+  const std::string begin_spelling = marker_spelling(kBegin);
+  const std::string end_spelling = marker_spelling(kEnd);
+  std::string out;
+  out.reserve(written.size());
+  std::size_t i = 0;
+  while (i < written.size()) {
+    if (written[i] != '%') {
+      out.push_back(written[i]);
+      ++i;
+      continue;
+    }
+    if (i + 1 < written.size() && written[i + 1] == '%') {
+      out.push_back('%');
+      i += 2;
+      continue;
+    }
+    if (written.compare(i + 1, begin_spelling.size(), begin_spelling) == 0) {
+      out += kBegin;
+      i += 1 + begin_spelling.size();
+      continue;
+    }
+    if (written.compare(i + 1, end_spelling.size(), end_spelling) == 0) {
+      out += kEnd;
+      i += 1 + end_spelling.size();
+      continue;
+    }
+    // A '%' that introduces nothing this writer emits. Keep it, so a stream
+    // from another producer is not mangled.
+    out.push_back('%');
+    ++i;
+  }
+  return out;
+}
+
+// True when `ext` is what a staged file name may carry: 1..16 characters of
+// [a-z0-9], which is what file::decode_file_payload already sanitises to and
+// what mkostemps embeds in the name.
+bool valid_extension(std::string_view ext) noexcept;
+
+// True when `path` is a plane absolute path with no byte that could end the
+// line or start a control sequence: no space, no newline, no control byte, no
+// escape. A staged name is "mkdtemp(" + the base + "/ratchet-file-XXXXXX." +
+// ext, so anything else has not come from this program.
+bool valid_staged_path(std::string_view path) noexcept;
+
+// Writes the recv block, with the same all-or-nothing validation as
+// write_result.
+bool write_recv_result(std::ostream& os, const RecvResult& result);
 
 }  // namespace ratchet::gui_format
 

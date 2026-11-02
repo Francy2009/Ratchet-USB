@@ -104,6 +104,12 @@ void restore_dump_exclusion(void* page, std::size_t ps) noexcept {
 // approximate in is "still locked", which is what both handlers below do.
 bool g_accounting_degraded = false;
 
+// Set when the OS refused a lock on a page that went on to hold secret
+// material. The process keeps working -- a container with a small
+// RLIMIT_MEMLOCK is a normal place to be -- but everything allocated after
+// the failure is unlocked, and this is what lets the process say so.
+bool g_lock_unavailable = false;
+
 // Reported once per process. A lock that could not be taken is not a reason to
 // refuse to run -- a container with a small RLIMIT_MEMLOCK is a normal place
 // to be -- but silently believing the memory is protected when it is not is
@@ -218,10 +224,23 @@ void unlock_region(void* p, std::size_t n) noexcept {
   }
 }
 
+void note_lock_unavailable() noexcept {
+  try {
+    const std::lock_guard<std::mutex> guard(locker_mutex());
+    g_lock_unavailable = true;
+  } catch (...) {
+    // The mutex could not be taken, most plausibly under memory exhaustion.
+    // Recording the flag without it is a benign race: the flag only ever goes
+    // from false to true, and a read that misses the transition reports
+    // "protected" for one more instant, never the reverse.
+    g_lock_unavailable = true;
+  }
+}
+
 bool memory_locking_degraded() noexcept {
   try {
     const std::lock_guard<std::mutex> guard(locker_mutex());
-    return g_accounting_degraded;
+    return g_accounting_degraded || g_lock_unavailable;
   } catch (...) {
     // If even the mutex cannot be taken, the bookkeeping is by definition not
     // trustworthy. Reporting degradation is the safe answer.
@@ -267,6 +286,152 @@ void append_string_wiped(std::string& out, std::string_view text) {
     // interface; it is released with the allocation.
   }
   out.append(text);
+}
+
+bool is_unicode_format_char(uint32_t codepoint) noexcept {
+  // U+200C (zero-width non-joiner) and U+200D (zero-width joiner) are absent on
+  // purpose: they join, they do not reorder, and both are load-bearing in
+  // ordinary text -- U+200C in Persian, Arabic and several Indic scripts, U+200D
+  // in emoji sequences. Refusing them would reject names their owners spell
+  // that way. Every other character here has no such function: it draws as
+  // nothing and either reorders the line or splits it.
+  return (codepoint >= 0x80 && codepoint <= 0x9F) ||     // C1 controls
+         codepoint == 0x061C ||                          // Arabic letter mark
+         codepoint == 0x200B ||                          // zero-width space
+         codepoint == 0x200E ||                          // left-to-right mark
+         codepoint == 0x200F ||                          // right-to-left mark
+         (codepoint >= 0x202A && codepoint <= 0x202E) ||  // embeddings, override
+         codepoint == 0x2028 ||                          // line separator
+         codepoint == 0x2029 ||                          // paragraph separator
+         codepoint == 0x2060 ||                          // word joiner
+         (codepoint >= 0x2066 && codepoint <= 0x2069) ||  // isolates
+         (codepoint >= 0x206A && codepoint <= 0x206F) ||  // deprecated formats
+         codepoint == 0xFEFF;                            // byte-order mark
+}
+
+namespace {
+
+// Decodes one UTF-8 sequence at `i`, advancing `i` past it. Returns false, and
+// leaves `i` untouched, for anything that is not a well-formed canonical
+// sequence: a stray continuation byte, an overlong form, a surrogate, a
+// codepoint past U+10FFFF, or a truncated sequence. Those are copied byte for
+// byte by the caller, which is what keeps a non-UTF-8 message intact.
+bool decode_utf8(std::string_view text, std::size_t& i, uint32_t& out) {
+  const auto byte = [&](std::size_t at) {
+    return static_cast<uint8_t>(text[at]);
+  };
+  const uint8_t lead = byte(i);
+  std::size_t length = 0;
+  uint32_t value = 0;
+  uint32_t minimum = 0;
+  if (lead < 0x80) {
+    out = lead;
+    ++i;
+    return true;
+  } else if ((lead & 0xE0) == 0xC0) {
+    length = 2;
+    value = lead & 0x1Fu;
+    minimum = 0x80;
+  } else if ((lead & 0xF0) == 0xE0) {
+    length = 3;
+    value = lead & 0x0Fu;
+    minimum = 0x800;
+  } else if ((lead & 0xF8) == 0xF0) {
+    length = 4;
+    value = lead & 0x07u;
+    minimum = 0x10000;
+  } else {
+    return false;
+  }
+  if (i + length > text.size()) {
+    return false;
+  }
+  for (std::size_t k = 1; k < length; ++k) {
+    const uint8_t next = byte(i + k);
+    if ((next & 0xC0) != 0x80) {
+      return false;
+    }
+    value = (value << 6) | (next & 0x3Fu);
+  }
+  if (value < minimum || value > 0x10FFFF ||
+      (value >= 0xD800 && value <= 0xDFFF)) {
+    return false;
+  }
+  out = value;
+  i += length;
+  return true;
+}
+
+}  // namespace
+
+std::string escape_unicode_format_chars(std::string_view text) {
+  static constexpr char kHex[] = "0123456789abcdef";
+  std::string out;
+  out.reserve(text.size());
+  std::size_t i = 0;
+  while (i < text.size()) {
+    const std::size_t start = i;
+    uint32_t codepoint = 0;
+    if (!decode_utf8(text, i, codepoint)) {
+      // Not UTF-8 at this byte. Copy it as it is and resynchronise at the
+      // next one; only a complete, valid character can be a format character.
+      out.push_back(text[start]);
+      i = start + 1;
+      continue;
+    }
+    if (!is_unicode_format_char(codepoint)) {
+      out.append(text.substr(start, i - start));
+      continue;
+    }
+    // The escape is fixed-width and four digits: 0x80..0xFFFF. The C1 range
+    // and every member above all fit.
+    out += "\\u";
+    out.push_back(kHex[(codepoint >> 12) & 0xFu]);
+    out.push_back(kHex[(codepoint >> 8) & 0xFu]);
+    out.push_back(kHex[(codepoint >> 4) & 0xFu]);
+    out.push_back(kHex[codepoint & 0xFu]);
+  }
+  return out;
+}
+
+bool has_unicode_format_chars(std::string_view text) {
+  std::size_t i = 0;
+  while (i < text.size()) {
+    const std::size_t start = i;
+    uint32_t codepoint = 0;
+    if (!decode_utf8(text, i, codepoint)) {
+      i = start + 1;
+      continue;
+    }
+    if (is_unicode_format_char(codepoint)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const char* contact_alias_problem(std::string_view alias) noexcept {
+  if (alias.empty()) {
+    return kContactAliasEmptyError.data();
+  }
+  if (alias.size() > kMaxContactAliasBytes) {
+    return kContactAliasLimitError.data();
+  }
+  // C0 controls and DEL are refused as well as the Unicode format characters.
+  // An alias is printed on a line of its own (or after "alias: "), so a
+  // newline or an escape in it can forge the next line or drive the terminal:
+  // "alice\nfingerprint: forged" shows a second fingerprint the user did not
+  // ask for. Tab is included; an alias needs no control character.
+  for (const char ch : alias) {
+    const auto c = static_cast<unsigned char>(ch);
+    if (c < 0x20 || c == 0x7F) {
+      return kContactAliasControlCharsError.data();
+    }
+  }
+  if (has_unicode_format_chars(alias)) {
+    return kContactAliasFormatCharsError.data();
+  }
+  return nullptr;
 }
 
 bool harden_process() noexcept {

@@ -20,6 +20,13 @@ namespace ratchet::cli {
 inline constexpr const char* kProgram = "ratchet-usb";
 inline constexpr const char* kVersion = "0.5.0-dev";
 inline constexpr std::size_t kDefaultOtpkCount = 10;
+// Upper bound on --otpk-count and --replenish-otpk. The count is multiplied by
+// the cost of generating X25519 and ML-KEM-768 keypairs, so an unbounded value
+// is a local denial of service: one absurd argument would have the process
+// allocate and derive for as long as memory and CPU allow. The default is far
+// below this; the ceiling exists so a typo or a hostile script is refused
+// before any key is generated.
+inline constexpr std::size_t kMaxOtpkCount = 1000;
 // How long the terminal interface waits before closing the vault on its own.
 inline constexpr int kDefaultIdleLockSeconds = 180;
 inline constexpr int kMaxIdleLockSeconds = 24 * 60 * 60;
@@ -42,11 +49,31 @@ struct Options {
   // remove --yes: skip the interactive confirmation. The GUI asks with its own
   // dialog first and has no terminal to type the confirmation into.
   bool assume_yes = false;
+  // trust --confirmed: the caller already showed the fingerprint and the user
+  // confirmed. It stands in for the terminal confirmation only; the fingerprint
+  // is printed either way, and the vault save is the same. Only the desktop GUI
+  // sets it, after `trust --show-fingerprint` and its own dialog.
+  bool confirmed = false;
+  // trust --expect-fingerprint <fp>: the value the front end actually showed.
+  // cmd_trust recomputes the contact's fingerprint and refuses to mark it
+  // verified when the two differ, so a card replaced (or upgraded from legacy
+  // to hybrid) while the dialog was open cannot inherit a confirmation the
+  // user gave for a different key.
+  //
+  // Optional rather than an empty string, so "not supplied" and "supplied
+  // empty" stay distinguishable: the second is a caller error and must not
+  // silently skip the comparison.
+  std::optional<std::string> expect_fingerprint;
+  // trust --show-fingerprint: print the fingerprint and what trusting would
+  // mean, print nothing else, and leave the vault exactly as it was. The GUI
+  // runs this first so the string its dialog shows comes from the CLI, then
+  // runs `trust --confirmed` if the user agrees.
+  bool show_fingerprint = false;
   // recv --stage-file: stage a received file in the private temporary folder and
   // print its path, instead of asking on a terminal whether to open it. For a
   // front end with no terminal (the GUI) to hand the file to the user.
   bool stage_received = false;
-  // Words in the generated vault passphrase (init and passphrase). Six by
+  // Words in the generated vault passphrase (init and passphrase). Twelve by
   // default; see ratchet/passphrase.hpp for the entropy this buys.
   std::size_t passphrase_words = passphrase::kDefaultWords;
   std::string name;

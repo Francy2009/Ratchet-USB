@@ -225,6 +225,19 @@ TEST("a frame escapes a newline in the text it is given") {
   CHECK(frame.lines()[0].find("\\x0a") != std::string::npos);
 }
 
+TEST("a frame escapes a right-to-left override in an alias") {
+  // The row is what the user reads and decides to trust. An override that
+  // reverses it would turn the alias into something else on screen, so the
+  // frame escapes it exactly as it escapes ESC.
+  screen::Frame frame(40, 3);
+  frame.line(std::string("bob ") + "\u202E" + "gnp.exe", screen::Style::Normal);
+  const std::string row = frame.lines()[0];
+  CHECK(row.find("\u202E") == std::string::npos);
+  CHECK(row.find("\xe2\x80\xae") == std::string::npos);
+  CHECK(row.find("\\u202e") != std::string::npos);
+  CHECK(frame.render().find("\u202E") == std::string::npos);
+}
+
 // --- colour ------------------------------------------------------------------
 
 TEST("a frame emits no colour unless it was asked for") {

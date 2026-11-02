@@ -38,11 +38,16 @@ const std::vector<CommandSpec>& specs() {
        0},
       {"add", {"--usb-path", "--card"}, 1},
       {"contacts", {"--usb-path"}, 0},
-      {"trust", {"--usb-path"}, 1},
+      {"trust",
+       {"--usb-path", "--confirmed", "--show-fingerprint",
+        "--expect-fingerprint"},
+       1},
       {"reset-session", {"--usb-path"}, 1},
       {"remove", {"--usb-path", "--yes"}, 1},
       {"send", {"--usb-path", "--file", "--stdin-payload"}, 2},
-      {"recv", {"--usb-path", "--stage-file", "--stdin-payload"}, 1},
+      {"recv",
+       {"--usb-path", "--stage-file", "--stdin-payload", "--structured-output"},
+       1},
       {"ui", {"--usb-path", "--lang", "--idle-lock"}, 0},
   };
   return table;
@@ -158,7 +163,8 @@ void print_usage(std::ostream& os) {
      << "            input, or a prompt, when omitted. With --file, encrypt any\n"
      << "            file (image, document, ...) through the same ratchet\n"
      << "            instead; the file itself is never modified or copied\n"
-     << "            elsewhere.\n"
+     << "            elsewhere. A message given as an argument is visible in\n"
+     << "            the shell history; omit it or use --stdin-payload.\n"
      << "  recv      Decrypt a pasted message block (establishing the\n"
      << "            session automatically if it is the first one). [message]\n"
      << "            falls back to standard input, or a prompt, when omitted.\n"
@@ -177,7 +183,7 @@ void print_usage(std::ostream& os) {
      << "                       to an interactive prompt if the terminal allows.\n"
      << "  --force              Replace an existing vault (init only).\n"
      << "  --otpk-count <n>     One-time prekeys to generate at init (default "
-     << kDefaultOtpkCount << ").\n"
+     << kDefaultOtpkCount << ", at most " << kMaxOtpkCount << ").\n"
      << "  --argon2-time <n>    Argon2id passes (default "
      << vault::kDefaultTimeCost << ").\n"
      << "  --argon2-mem-kb <n>  Argon2id memory in KiB (default "
@@ -190,10 +196,13 @@ void print_usage(std::ostream& os) {
      << "; init and\n"
      << "                       passphrase only). More words means more entropy\n"
      << "                       to write down and type.\n"
-     << "  --structured-output  Emit the machine-readable result block on stdout\n"
-     << "                       instead of the human word grids. For a GUI that\n"
-     << "                       already owns the terminal. It never puts a phrase\n"
-     << "                       in argv or a file; init and passphrase only.\n"
+     << "  --structured-output  Emit a machine-readable result block on stdout\n"
+     << "                       for a GUI that already owns the terminal: init and\n"
+     << "                       passphrase replace the human word grids with it\n"
+     << "                       (it never puts a phrase in argv or a file), and\n"
+     << "                       recv appends it after the body to say whether the\n"
+     << "                       message was a file and, if staged, where. It never\n"
+     << "                       carries the sender's alias.\n"
      << "  --fingerprint        Print only the identity fingerprint (card only).\n"
      << "  --card <file>        Read a contact card from a file (add only).\n"
      << "  --file <file>        Encrypt a file instead of text (send only).\n"
@@ -206,6 +215,18 @@ void print_usage(std::ostream& os) {
      << "                       plaintext in the child's argv; requires --usb-path\n"
      << "                       or RATCHET_USB_PATH.\n"
      << "  --yes                Skip the interactive confirmation (remove only).\n"
+     << "  --confirmed          The fingerprint was shown and the user confirmed\n"
+     << "                       intentional trust, not a comparison against\n"
+     << "                       another channel. For a front end that showed its\n"
+     << "                       own dialog (trust only).\n"
+     << "  --show-fingerprint   Print the contact's fingerprint and what marking\n"
+     << "                       it verified means, and change nothing in the\n"
+     << "                       vault (trust only).\n"
+     << "  --expect-fingerprint <fp>\n"
+     << "                       With --confirmed: refuse to mark the contact\n"
+     << "                       verified unless its fingerprint is still this\n"
+     << "                       one, which is the value the front end showed\n"
+     << "                       (trust only).\n"
      << "  --lang en|it         Language of the interface (ui only). Without\n"
      << "                       it, an Italian locale gets Italian and\n"
      << "                       anything else gets English.\n"
@@ -279,7 +300,12 @@ Options parse_args(const std::vector<std::string_view>& args) {
       opts.force = true;
       note("--force");
     } else if (arg == "--otpk-count") {
-      opts.otpk_count = parse_u32(next("--otpk-count"), "--otpk-count");
+      const uint32_t count = parse_u32(next("--otpk-count"), "--otpk-count");
+      if (count > kMaxOtpkCount) {
+        throw Error("--otpk-count is at most " +
+                    std::to_string(kMaxOtpkCount));
+      }
+      opts.otpk_count = count;
       note("--otpk-count");
     } else if (arg == "--argon2-time") {
       opts.params.time_cost = parse_u32(next("--argon2-time"), "--argon2-time");
@@ -292,8 +318,13 @@ Options parse_args(const std::vector<std::string_view>& args) {
       opts.rotate_spk = true;
       note("--rotate-spk");
     } else if (arg == "--replenish-otpk") {
-      opts.replenish_otpk =
+      const uint32_t count =
           parse_u32(next("--replenish-otpk"), "--replenish-otpk");
+      if (count > kMaxOtpkCount) {
+        throw Error("--replenish-otpk is at most " +
+                    std::to_string(kMaxOtpkCount));
+      }
+      opts.replenish_otpk = count;
       note("--replenish-otpk");
     } else if (arg == "--fingerprint") {
       opts.fingerprint_only = true;
@@ -320,6 +351,15 @@ Options parse_args(const std::vector<std::string_view>& args) {
     } else if (arg == "--yes") {
       opts.assume_yes = true;
       note("--yes");
+    } else if (arg == "--confirmed") {
+      opts.confirmed = true;
+      note("--confirmed");
+    } else if (arg == "--show-fingerprint") {
+      opts.show_fingerprint = true;
+      note("--show-fingerprint");
+    } else if (arg == "--expect-fingerprint") {
+      opts.expect_fingerprint = std::string(next("--expect-fingerprint"));
+      note("--expect-fingerprint");
     } else if (arg == "--stage-file") {
       opts.stage_received = true;
       note("--stage-file");

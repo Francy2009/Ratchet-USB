@@ -22,6 +22,7 @@
 #include "ratchet/file.hpp"
 #include "ratchet/passphrase.hpp"
 #include "ratchet/screen.hpp"
+#include "ratchet/secure.hpp"
 #include "ratchet/session.hpp"
 #include "ratchet/terminal.hpp"
 #include "ratchet/ui.hpp"
@@ -472,9 +473,12 @@ void Driver::show_card() {
 void Driver::import_card() {
   std::string text = model_.text();
   const std::string alias = model_.alias();
-  if (alias.size() > store::kMaxAliasBytes) {
+  // Same rule as `add` in src/commands.cpp: an alias carrying a bidi control or
+  // another format character would be drawn as a different name than the one
+  // the user is confirming, so it is refused instead of accepted and escaped.
+  if (const char* problem = contact_alias_problem(alias)) {
     model_.clear_text();
-    report(Error("contact alias exceeds the 128-byte limit"));
+    report(Error(problem));
     return;
   }
   model_.clear_text();

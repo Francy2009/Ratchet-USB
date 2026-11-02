@@ -1,20 +1,70 @@
 (* Symbolic model of the session rules in src/session.cpp.
-   One opening and one follow-up. The ratchet chain, SPQR state, and the
-   X3DH transcript are not expanded: the message key is the symbolic
-   combination of a classical key and a post-quantum key, then bound to
-   the ordered identity encodings.
+   One opening, one follow-up, and one post-compromise ratchet step. The
+   ratchet chain, SPQR state, and the X3DH transcript are not expanded: the
+   message key is the symbolic combination of a classical key and a
+   post-quantum key, then bound to the ordered identity encodings.
 
    The honest sender is a triple session. "xwing" here is only another
    suite name. It is not a model of the suite-4 handshake. The responder
    accepts it when the contact minimum allows it and the ciphertext
    decrypts under the bound key, which is the same rule as the C++ code.
    The attacker does not have that key, so the xwing queries are true.
-   This file is not a proof of the C++ or Rust program. *)
+   This file is not a proof of the C++ or Rust program.
+
+   ---------------------------------------------------------------------------
+   What this version models
+   ---------------------------------------------------------------------------
+     * the opening is keyed by `mk`;
+     * the follow-up is keyed by `ratchet(mk)`, one one-way step on;
+     * after the protocol, `phase 1` reveals `ratchet(ratchet(mk))` -- the
+       state *after* the follow-up, standing for a compromise of the current
+       chain;
+     * after the compromise, both peers run a fresh Diffie-Hellman step,
+       exchange the public values, and derive the healed key from the
+       revealed chain plus the new shared secret. The public values travel
+       under a long-term key shared by the two verified contacts, so an
+       active attacker cannot substitute its own ratchet key. One side
+       encrypts `healedPlain` under the result and the other decrypts it, so
+       both the secrecy of the healed message and the fact that an honest
+       receiver can derive the same key are tested.
+
+   `ratchet` has no inverse, so the revealed state does not walk back to
+   either earlier message key and both plaintexts stay secret. That is
+   forward secrecy: the compromise exposes future messages, not past ones.
+   The healed exchange is a real two-party DH step, not a fresh secret
+   assumed out of band, so `attacker(healedPlain)` tests post-compromise
+   security.
+
+   Run
+   ───
+       proverif model/session.pv
+
+   Expected result: every `attacker(...)` query is proved, the two
+   reachability witnesses (`HonestDone`, `AcceptedHealed`) are falsified
+   because ProVerif finds their honest trace, and the rest are proved. *)
 
 free net: channel.
-
 type key.
 type suite.
+
+(* A small Diffie-Hellman group, used only for the post-compromise step. *)
+type exponent.
+type group.
+const g: group.
+fun exp(group, exponent): group.
+equation forall a: exponent, b: exponent;
+  exp(exp(g, a), b) = exp(exp(g, b), a).
+(* A shared group element is one-way compressed into a chain key. *)
+fun group_key(group): key.
+
+(* The peers know each other's identity keys, so the healed DH public values
+   are delivered under a key the attacker does not have. Only the *old chain*
+   is revealed; the fresh exchange is not. This is what stops a third party
+   from substituting its own ratchet key. *)
+free authKey: key [private].
+fun asenc(group, key): bitstring.
+reduc forall p: group, k: key; asdec(asenc(p, k), k) = p.
+
 
 const hybrid: suite [data].
 const triple: suite [data].
@@ -28,14 +78,23 @@ reduc forall s: suite, n: bitstring, p: bitstring, m: bitstring, k: key;
 fun combine(key, key): key.
 fun bind(key, bitstring, bitstring): key.
 
+(* One ratchet step. A plain function with no inverse equation, which is what
+   the attacker is assumed unable to invert -- the whole of forward secrecy. *)
+fun ratchet(key): key.
+
 free secretPlain: bitstring [private].
 free followupPlain: bitstring [private].
+(* Sent after the phase-1 compromise, under a key derived from the revealed
+   chain and a fresh DH secret. It staying secret is post-compromise
+   security. *)
+free healedPlain: bitstring [private].
 const openingCounter: bitstring [data].
 const followupCounter: bitstring [data].
 const publishedPrekey: bitstring [data].
 const noPrekey: bitstring [data].
 const initiatorId: bitstring [data].
 const responderId: bitstring [data].
+(* Tags keep the healed DH exchange separate from the session messages. *)
 
 event Sent(bitstring).
 event Committed(bitstring).
@@ -46,8 +105,10 @@ event PrekeyOffered(bitstring).
 event PrekeyConsumed(bitstring).
 event SecondOpeningCommitted(bitstring).
 event AcceptedUnderSwappedIdentity(bitstring).
-(* Reachability witness for the honest path. The query below is expected
-   to be false: ProVerif finds a trace. It is not a security claim. *)
+event AcceptedHealed(bitstring).
+(* Reachability witnesses for the honest paths. The queries below are
+   expected to be false: ProVerif finds a trace. They are not security
+   claims. *)
 event HonestDone().
 
 query m: bitstring; inj-event(Committed(m)) ==> inj-event(Sent(m)).
@@ -61,7 +122,9 @@ query event(AcceptedFollowup(xwing)) ==> false.
 query m: bitstring; event(AcceptedUnderSwappedIdentity(m)) ==> false.
 query attacker(secretPlain).
 query attacker(followupPlain).
+query attacker(healedPlain).
 query event(HonestDone()) ==> false.
+query event(AcceptedHealed(healedPlain)) ==> false.
 
 letfun suite_at_least(offered: suite, minimum: suite) =
   if offered = xwing then
@@ -81,11 +144,11 @@ let initiator(mk: key) =
   event Sent(secretPlain);
   out(net, (triple, senc(triple, openingCounter, publishedPrekey, secretPlain, mk), publishedPrekey));
   event Sent(followupPlain);
-  out(net, (triple, senc(triple, followupCounter, noPrekey, followupPlain, mk))).
+  out(net, (triple, senc(triple, followupCounter, noPrekey, followupPlain, ratchet(mk)))).
 
 (* One device. verified is local state, not a network field. The prekey is
-   consumed only after AEAD success. A later opening that names it again is
-   refused before a second commit. *)
+   consumed only after AEAD success. The process ends after the follow-up, so
+   it does not keep `mk` around to decrypt anything after `HonestDone`. *)
 let responder(mk: key, verified: bool) =
   in(net, (offered: suite, blob: bitstring, prekey: bitstring));
   if verified = false then
@@ -99,21 +162,28 @@ let responder(mk: key, verified: bool) =
       event Committed(m);
       in(net, (next: suite, nextblob: bitstring));
       if next = offered && suite_at_least(next, triple) then
-        let m2 = sdec(nextblob, next, followupCounter, noPrekey, mk) in
+        let m2 = sdec(nextblob, next, followupCounter, noPrekey, ratchet(mk)) in
         event AcceptedFollowup(next);
         event Committed(m2);
         event HonestDone();
-        in(net, (again: suite, againblob: bitstring, againprekey: bitstring));
-        if againprekey = publishedPrekey then
-          0
-        else
-          let m3 = sdec(againblob, again, openingCounter, againprekey, mk) in
-          event SecondOpeningCommitted(m3);
-          0
+        0
       else
         0
     else
       0.
+
+(* A second opening that names a different prekey must not commit. This is an
+   independent attempt, not the responder still holding `mk` after the
+   session: it lives in its own process and is discarded at the phase
+   change. *)
+let replayer(mk: key) =
+  in(net, (again: suite, againblob: bitstring, againprekey: bitstring));
+  if againprekey = publishedPrekey then
+    0
+  else
+    let m3 = sdec(againblob, again, openingCounter, againprekey, mk) in
+    event SecondOpeningCommitted(m3);
+    0.
 
 let swapped(mk: key) =
   in(net, (offered: suite, blob: bitstring, prekey: bitstring));
@@ -124,6 +194,31 @@ let swapped(mk: key) =
   else
     0.
 
+(* The healed exchange: both sides know the revealed chain `old`, each
+   contributes a fresh exponent, and the shared key is the old chain
+   combined with the new DH secret. The public values are on the network;
+   the exponents are not. *)
+let heal_send(old: key) =
+  new e: exponent;
+  out(net, asenc(exp(g, e), authKey));
+  in(net, sealed: bitstring);
+  let peer_pub = asdec(sealed, authKey) in
+  let healed = bind(combine(old, group_key(exp(peer_pub, e))),
+                    responderId, initiatorId) in
+  out(net, senc(triple, followupCounter, noPrekey, healedPlain, healed)).
+
+let heal_recv(old: key) =
+  new e: exponent;
+  out(net, asenc(exp(g, e), authKey));
+  in(net, sealed: bitstring);
+  let peer_pub = asdec(sealed, authKey) in
+  let healed = bind(combine(old, group_key(exp(peer_pub, e))),
+                    responderId, initiatorId) in
+  in(net, blob: bitstring);
+  let m = sdec(blob, triple, followupCounter, noPrekey, healed) in
+  event AcceptedHealed(m);
+  0.
+
 process
   new ec: key;
   new pq: key;
@@ -131,8 +226,24 @@ process
   let mkSwap = bind(combine(ec, pq), responderId, initiatorId) in
   out(net, ec);
   (
-    initiator(mk) |
-    responder(mk, true) |
-    responder(mk, false) |
-    swapped(mkSwap)
+    (
+      initiator(mk) |
+      responder(mk, true) |
+      responder(mk, false) |
+      swapped(mkSwap) |
+      replayer(mk)
+    )
+    |
+    (
+      (* After the protocol, the attacker learns the current chain key -- the
+         state after the follow-up -- but not the two keys the messages were
+         made with. *)
+      phase 1;
+      out(net, ratchet(ratchet(mk)));
+      let old = ratchet(ratchet(mk)) in
+      (* Post-compromise security: a fresh DH step after the compromise. The
+         attacker holds only `old`, so it cannot derive the new shared
+         secret, while the honest receiver can. *)
+      ( heal_send(old) | heal_recv(old) )
+    )
   )

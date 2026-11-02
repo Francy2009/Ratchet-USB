@@ -52,6 +52,7 @@
 #include "gui_output.hpp"
 #include "host_env.hpp"
 #include "payload_input.hpp"
+#include "ratchet/gui_format.hpp"
 
 namespace {
 
@@ -297,9 +298,24 @@ QWidget* MainWindow::buildAccessPanel() {
   buttons->addWidget(init_button);
   layout->addLayout(buttons, 3, 0, 1, 3);
 
+  // What the CLI said about the vault state it just opened: rollback
+  // protection it could not check, key material it could not lock into RAM, an
+  // Argon2id cost below the recommendation. The CLI writes these on stderr so
+  // a script sees them too; without this line they would reach only the dialog
+  // shown for a failed command, which never appears for a command that
+  // succeeded -- and an unlock that succeeded is exactly when they matter.
+  vaultWarningLabel_ = new QLabel;
+  vaultWarningLabel_->setObjectName(QStringLiteral("vaultWarningLabel"));
+  vaultWarningLabel_->setTextFormat(Qt::PlainText);
+  vaultWarningLabel_->setWordWrap(true);
+  vaultWarningLabel_->setStyleSheet(
+      QStringLiteral("QLabel { color: #a04000; }"));
+  vaultWarningLabel_->hide();
+  layout->addWidget(vaultWarningLabel_, 4, 0, 1, 3);
+
   statusLabel_ = new QLabel;
   statusLabel_->setTextFormat(Qt::PlainText);
-  layout->addWidget(statusLabel_, 4, 0, 1, 3);
+  layout->addWidget(statusLabel_, 5, 0, 1, 3);
 
   updateVaultPathLabel();
   return makeGroup(tr("Accesso al vault"), layout);
@@ -400,7 +416,9 @@ QWidget* MainWindow::buildContactsTab() {
 
   auto* manage_layout = new QGridLayout;
   trustAliasCombo_ = makeAliasCombo(tr("alias (dalla lista)"));
+  trustAliasCombo_->setObjectName(QStringLiteral("trustAliasCombo"));
   auto* trust_button = new QPushButton(tr("Segna verificato (trust)"));
+  trust_button->setObjectName(QStringLiteral("trustButton"));
   resetAliasCombo_ = makeAliasCombo(tr("alias (dalla lista)"));
   auto* reset_button = new QPushButton(tr("Azzera sessione (reset-session)"));
   actionButtons_ << trust_button << reset_button;
@@ -410,7 +428,15 @@ QWidget* MainWindow::buildContactsTab() {
       warn(tr("Serve un alias."));
       return;
     }
-    launchWithPassphrase(QStringLiteral("trust"), {}, {alias});
+    // Marking a contact verified is what lets the vault accept their
+    // messages, so it is never one click. Step one asks the CLI for the
+    // fingerprint (it is the CLI that reads the vault), step two shows that
+    // value next to the one to compare and waits for an explicit yes. Only
+    // then does trust run, with --confirmed in place of the terminal
+    // confirmation.
+    confirmTrustedContact_ = alias;
+    launchWithPassphrase(QStringLiteral("trust"),
+                         {QStringLiteral("--show-fingerprint")}, {alias});
   });
   connect(reset_button, &QPushButton::clicked, this, [this] {
     const QString alias = resetAliasCombo_->currentText().trimmed();
@@ -519,6 +545,7 @@ QWidget* MainWindow::buildMessagesTab() {
   recvBlockEdit_->setPlaceholderText(tr("incolla il blocco ricevuto da decifrare"));
   recvBlockEdit_->setMaximumHeight(130);
   auto* recv_button = new QPushButton(tr("Decifra blocco (recv)"));
+  recv_button->setObjectName(QStringLiteral("recvButton"));
   actionButtons_.append(recv_button);
   connect(recv_button, &QPushButton::clicked, this, [this] {
     const QString block = recvBlockEdit_->toPlainText();
@@ -531,7 +558,11 @@ QWidget* MainWindow::buildMessagesTab() {
     // passphrase and the block on separate, length-delimited parts of the
     // stream.
     QByteArray payload = block.toUtf8();
-    launchWithPayload(QStringLiteral("recv"), {"--stage-file"}, {}, payload);
+    // --structured-output is what makes the CLI append the block that says
+    // whether what arrived was a file and where it was staged; without it
+    // parseRecvResult has nothing to read and a received file is never offered.
+    launchWithPayload(QStringLiteral("recv"),
+                      {"--stage-file", "--structured-output"}, {}, payload);
     ratchet::gui::wipeByteArray(payload);
   });
   recv_layout->addWidget(recvBlockEdit_);
@@ -624,6 +655,9 @@ void MainWindow::doLock() {
   // ciphertext block are kept: they are the user's input, not vault output, and
   // dropping them would make a retry after unlocking start from nothing.
   clearSensitiveState(/*include_unsent_input=*/false);
+  // The warning described the vault that was open. Leaving it on screen next to
+  // "Non connesso" would report a state that no longer exists.
+  setVaultWarnings(QString());
   statusLabel_->setText(tr("Non connesso"));
 }
 
@@ -664,7 +698,7 @@ void MainWindow::showInitDialog() {
   otpk->setValue(10);
   auto* words = new QSpinBox;
   words->setRange(6, 12);
-  words->setValue(6);
+  words->setValue(12);
   form->addWidget(force, 0, 0, 1, 2);
   form->addWidget(from_mnemonic, 1, 0, 1, 2);
   form->addWidget(mnemonic, 2, 0, 1, 2);
@@ -810,6 +844,18 @@ bool MainWindow::launch(const QString& command, const QStringList& flags,
     warn(tr("Imposta la cartella del vault prima di eseguire un comando."));
     return false;
   }
+  // Read by handleFinished(). `trust --confirmed` is only ever launched from
+  // showTrustDialog, after the fingerprint has been shown and accepted; setting
+  // the alias here keeps the later refresh, which looks it up by name, pointed
+  // at the same contact.
+  trustFingerprintPending_ =
+      command == QLatin1String("trust") &&
+      flags.contains(QStringLiteral("--show-fingerprint"));
+  if (command == QLatin1String("trust") &&
+      flags.contains(QStringLiteral("--confirmed")) &&
+      !positionals.isEmpty()) {
+    confirmTrustedContact_ = positionals.first();
+  }
 
   lastCommand_ = command;
   silentCommand_ = silent;
@@ -904,7 +950,8 @@ QString MainWindow::commandTitle(const QString& command) const {
 
 void MainWindow::showResultDialog(bool ok, const QString& title,
                                   const QString& message,
-                                  const QString& detail) {
+                                  const QString& detail,
+                                  const QString& command) {
   QDialog dialog(this);
   dialog.setWindowTitle(title);
   auto* layout = new QVBoxLayout(&dialog);
@@ -965,6 +1012,14 @@ void MainWindow::showResultDialog(bool ok, const QString& title,
   connect(close, &QPushButton::clicked, &dialog, &QDialog::accept);
   buttons->addWidget(close);
   layout->addLayout(buttons);
+
+  // A card is a wire format, not a secret, and it exists to be pasted
+  // somewhere: a button that copies two dozen lines split across screens is a
+  // worse way to lose a character than selecting all of it. Starting from the
+  // selection costs nothing -- the user can still type over it.
+  if (view != nullptr && command == QLatin1String("card")) {
+    view->selectAll();
+  }
 
   dialog.resize(620, view != nullptr ? 440 : 190);
   dialog.exec();
@@ -1113,6 +1168,19 @@ void MainWindow::handleFinished(int exit_code, bool normal_exit) {
   }
 
   if (!ok) {
+    // A command that failed after printing something on stdout is the one case
+    // where its result is a warning rather than an error: `recv` saves the
+    // vault and then finds the message it decrypted is a file it will not
+    // open, and exits non-zero so a script sees that. The body is already on
+    // screen in that case, so it must not be replaced by a generic failure.
+    if (command == QLatin1String("recv") && normal_exit) {
+      const ratchet::gui::ParsedRecvResult parsed =
+          ratchet::gui::parseRecvResult(commandStdout_);
+      if (parsed.ok && parsed.is_file) {
+        showRecvFile(parsed, commandStderr_);
+        return;
+      }
+    }
     QString detail = extractError(commandStderr_);
     // The new GUI asks for --structured-output. An older CLI rejects the flag
     // at parse time, before it touches a vault. Say that explicitly; do not
@@ -1127,7 +1195,12 @@ void MainWindow::handleFinished(int exit_code, bool normal_exit) {
     }
     showResultDialog(false, tr("Operazione non riuscita"),
                      tr("Il comando '%1' e' fallito.").arg(command), detail);
-    if (command == QLatin1String("unlock")) setUnlocked(false);
+    if (command == QLatin1String("unlock")) {
+      setUnlocked(false);
+      // The unlock failed, so whatever the previous vault said about its own
+      // protection no longer describes anything on screen.
+      setVaultWarnings(QString());
+    }
     return;
   }
 
@@ -1184,8 +1257,26 @@ void MainWindow::handleFinished(int exit_code, bool normal_exit) {
     return;
   }
 
+  if (command == QLatin1String("trust") && trustFingerprintPending_) {
+    trustFingerprintPending_ = false;
+    QString alias = confirmTrustedContact_;
+    if (alias.isEmpty()) {
+      // Fall back to the contacts list when the combo box was edited: the
+      // dialog still checks this against what the CLI printed.
+      const QString shown = aliasLine(commandStdout_, QStringLiteral("alias"));
+      if (!shown.isEmpty()) alias = shown;
+    }
+    showTrustDialog(alias, aliasLine(commandStdout_, QStringLiteral("alias")),
+                    aliasLine(commandStdout_, QStringLiteral("fingerprint")),
+                    !commandStdout_.isEmpty());
+    return;
+  }
+
   if (command == QLatin1String("unlock")) {
     setUnlocked(true);
+    // The warning survives the dialog: it is about the state of the vault that
+    // is now open, not about this command having run.
+    setVaultWarnings(vaultWarningsFromLog(commandStderr_));
     showResultDialog(true, tr("Vault sbloccato"),
                      tr("Ora puoi usare le schede Contatti e Messaggi."),
                      commandStdout_);
@@ -1201,6 +1292,16 @@ void MainWindow::handleFinished(int exit_code, bool normal_exit) {
     return;
   }
 
+  if (command == QLatin1String("trust")) {
+    // The --confirmed step, or a trust that failed. Either way the list has
+    // to be re-read: the badge differs even when nothing else does.
+    showResultDialog(true, tr("Contatto verificato"),
+                     tr("Il contatto e' segnato come verificato."),
+                     commandStdout_);
+    refreshContacts();
+    return;
+  }
+
   if (command == QLatin1String("remove")) {
     showResultDialog(true, tr("Contatto rimosso"),
                      tr("Il contatto e la sua sessione sono stati eliminati."),
@@ -1210,14 +1311,25 @@ void MainWindow::handleFinished(int exit_code, bool normal_exit) {
   }
 
   if (command == QLatin1String("recv")) {
-    static const QRegularExpression file_re(
-        QStringLiteral("\\[encrypted file received: \\.([A-Za-z0-9]+)\\]"));
-    const QRegularExpressionMatch match = file_re.match(commandStderr_);
-    if (match.hasMatch()) {
-      showFileDialog(match.captured(1), commandStdout_.trimmed(),
-                     commandStderr_);
+    // What arrived is read from the structured block the CLI appends, never
+    // from its human stderr: that text starts with the sender's alias, and an
+    // alias is something the sender chooses.
+    const ratchet::gui::ParsedRecvResult parsed =
+        ratchet::gui::parseRecvResult(commandStdout_);
+    if (!parsed.ok) {
+      showResultDialog(false, commandTitle(command),
+                       tr("La CLI non ha prodotto un risultato strutturato "
+                          "valido per recv."),
+                       parsed.error);
       return;
     }
+    if (parsed.is_file) {
+      showRecvFile(parsed, commandStderr_);
+      return;
+    }
+    showResultDialog(true, commandTitle(command),
+                     tr("Operazione completata."), parsed.body);
+    return;
   }
 
   if (command == QLatin1String("send") &&
@@ -1237,6 +1349,183 @@ void MainWindow::handleFinished(int exit_code, bool normal_exit) {
     showResultDialog(true, commandTitle(command), tr("Operazione completata."),
                      commandStderr_);
   }
+}
+
+void MainWindow::showRecvFile(const ratchet::gui::ParsedRecvResult& parsed,
+                              const QString& stderr_text) {
+  // A file is always announced, even when it was not staged: the one thing the
+  // receiver must never do is mistake a file for a message and carry on. When
+  // it was staged, the dialog offers to open the folder -- not the file.
+  QString detail;
+  if (parsed.staged) {
+    detail = stderr_text;
+  } else {
+    detail = stderr_text;
+    const QString& body = parsed.body;
+    if (!body.isEmpty()) {
+      if (!detail.isEmpty() && !detail.endsWith(QLatin1Char('\n'))) {
+        detail += QLatin1Char('\n');
+      }
+      detail += tr("Contenuto del messaggio:\n%1").arg(body);
+    }
+  }
+  showFileDialog(parsed.ext, parsed.staged ? parsed.path : QString(), detail);
+}
+
+QString MainWindow::aliasLine(const QString& text, const QString& key) {
+  // A one-line "key: value" field of the CLI's output. The alias and the
+  // fingerprint are ASCII (the fingerprint is hex, grouped by spaces), so
+  // splitting on the first ':' is enough; anything else is ignored.
+  const QString prefix = key + QStringLiteral(": ");
+  for (const QString& line : text.split(QLatin1Char('\n'))) {
+    if (line.startsWith(prefix)) {
+      return line.mid(prefix.size());
+    }
+  }
+  return {};
+}
+
+void MainWindow::showTrustDialog(const QString& alias, const QString& shown_alias,
+                                 const QString& fingerprint, bool have_result) {
+  if (!have_result) {
+    // The first step failed. That is a normal command failure and already has
+    // its own dialog; the user is simply not asked to confirm anything.
+    return;
+  }
+  if (shown_alias.isEmpty()) {
+    // stdout carried something, but not the alias line the first step is
+    // supposed to print. Fail closed -- and say so, because the dialog simply
+    // not opening is otherwise indistinguishable from a bug.
+    if (!alias.isEmpty()) {
+      warn(tr("La CLI non ha stampato l'alias di '%1': nessun contatto e' "
+              "stato segnato come verificato.")
+               .arg(alias));
+    }
+    return;
+  }
+  if (shown_alias != alias && !alias.isEmpty()) {
+    // The value the CLI printed belongs to a different contact. Confirming it
+    // would mark the wrong one verified.
+    warn(tr("La CLI ha stampato l'impronta di '%1', non di '%2': "
+            "nessun contatto e' stato segnato come verificato.")
+             .arg(shown_alias, alias));
+    return;
+  }
+  if (fingerprint.isEmpty()) {
+    warn(tr("La CLI non ha stampato l'impronta di '%1': nessun contatto e' "
+            "stato segnato come verificato.")
+             .arg(alias));
+    return;
+  }
+
+  QDialog dialog(this);
+  dialog.setWindowTitle(tr("Segnare '%1' come verificato?").arg(alias));
+  auto* layout = new QVBoxLayout(&dialog);
+  layout->setContentsMargins(16, 16, 16, 12);
+  layout->setSpacing(10);
+
+  auto* question = new QLabel;
+  question->setTextFormat(Qt::PlainText);
+  question->setWordWrap(true);
+  question->setText(
+      tr("Impronta di '%1'. Confrontala con quella che la persona legge su "
+         "un altro canale (di persona, al telefono): se non coincide, "
+         "interrompi e chiedi una card nuova.")
+          .arg(alias));
+  layout->addWidget(question);
+
+  auto* fingerprint_view = new QPlainTextEdit(fingerprint);
+  fingerprint_view->setObjectName(QStringLiteral("trustFingerprint"));
+  fingerprint_view->setReadOnly(true);
+  fingerprint_view->setUndoRedoEnabled(false);
+  fingerprint_view->setLineWrapMode(QPlainTextEdit::NoWrap);
+  fingerprint_view->setFixedHeight(72);
+  layout->addWidget(fingerprint_view);
+
+  auto* confirm = new QCheckBox(
+      tr("Ho confrontato l'impronta e corrisponde."));
+  confirm->setObjectName(QStringLiteral("trustConsent"));
+  layout->addWidget(confirm);
+
+  auto* note = new QLabel(tr(
+      "Da questo momento il vault accetta i messaggi di '%1'. E' "
+      "un'autorizzazione, non una nota: non c'e' un comando che la revochi.")
+                             .arg(alias));
+  note->setTextFormat(Qt::PlainText);
+  note->setWordWrap(true);
+  layout->addWidget(note);
+
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok |
+                                       QDialogButtonBox::Cancel);
+  QPushButton* ok = buttons->button(QDialogButtonBox::Ok);
+  ok->setObjectName(QStringLiteral("trustConfirmButton"));
+  ok->setText(tr("Segna come verificato"));
+  ok->setEnabled(false);
+  connect(confirm, &QCheckBox::toggled, ok, &QPushButton::setEnabled);
+  connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+  layout->addWidget(buttons);
+
+  dialog.resize(520, 300);
+  const int answer = dialog.exec();
+  // The dialog holds the fingerprint, which is not a secret, but a stale copy
+  // serves no purpose once it is closed.
+  fingerprint_view->clear();
+  if (answer != QDialog::Accepted || !confirm->isChecked()) {
+    statusBar()->showMessage(tr("Nessun contatto segnato come verificato."),
+                             4000);
+    return;
+  }
+
+  confirmTrustedContact_ = alias;
+  // The fingerprint the dialog showed goes back to the CLI. It recomputes the
+  // contact's own fingerprint and refuses when they differ, so a card that
+  // changed while the dialog was open cannot inherit this confirmation.
+  launchWithPassphrase(QStringLiteral("trust"),
+                       {QStringLiteral("--confirmed"),
+                        QStringLiteral("--expect-fingerprint"), fingerprint},
+                       {alias});
+}
+
+QString MainWindow::vaultWarningsFromLog(const QString& text) {
+  // The CLI states these itself and does not prefix them with "error:": an
+  // unlock that succeeds while one of them holds is exactly the case they exist
+  // for. Matching the CLI's own wording is deliberate -- the GUI has no other
+  // way to learn it from a version of ratchet-usb that still prints all three.
+  static const QStringList kMarkers{
+      QStringLiteral("SECURITY WARNING"),
+      QStringLiteral("warning: could not lock key material into RAM"),
+      QStringLiteral("WARNING: the vault was created with a lower Argon2id"),
+  };
+  QStringList found;
+  for (const QString& line : text.split(QLatin1Char('\n'))) {
+    const QString trimmed = line.trimmed();
+    for (const QString& marker : kMarkers) {
+      if (trimmed.startsWith(marker)) {
+        found << trimmed;
+        break;
+      }
+    }
+  }
+  QString out;
+  for (const QString& line : found) {
+    if (!out.isEmpty()) out += QLatin1Char('\n');
+    out += line;
+  }
+  return out;
+}
+
+void MainWindow::setVaultWarnings(const QString& warnings) {
+  if (warnings.isEmpty()) {
+    vaultWarningLabel_->setText(QString());
+    vaultWarningLabel_->hide();
+    return;
+  }
+  vaultWarningLabel_->setText(warnings);
+  vaultWarningLabel_->show();
+  // A dialog as well, because a line in a corner is easy to miss and the
+  // unlock dialog is on screen at that point.
+  QMessageBox::warning(this, tr("Avvisi sul vault"), warnings);
 }
 
 void MainWindow::clearCommandBuffers() {

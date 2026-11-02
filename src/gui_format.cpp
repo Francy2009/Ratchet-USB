@@ -1,5 +1,8 @@
 #include "ratchet/gui_format.hpp"
 
+#include <algorithm>
+#include <cstdint>
+
 #include "ratchet/passphrase.hpp"
 
 namespace ratchet::gui_format {
@@ -77,6 +80,133 @@ bool write_result(std::ostream& os, const Result& result) {
   }
   os << kEnd << '\n';
   return os.good();
+}
+
+// --- recv --------------------------------------------------------------------
+
+bool valid_extension(std::string_view ext) noexcept {
+  constexpr std::size_t kMaxExt = 16;  // file::kMaxExtensionLength
+  if (ext.empty() || ext.size() > kMaxExt) {
+    return false;
+  }
+  for (const char c : ext) {
+    if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool valid_staged_path(std::string_view path) noexcept {
+  if (path.empty() || path.front() != '/') {
+    return false;
+  }
+  if (path.size() > 4096) {
+    return false;
+  }
+  // A staged name has no space in it (mkdtemp's template and this program's
+  // prefix after it carry none), so refusing one rejects a hand-crafted value
+  // without coming near a real path.
+  if (path.find(' ') != std::string_view::npos) {
+    return false;
+  }
+  if (!valid_extension(path.substr(path.rfind('.') == std::string_view::npos
+                                       ? path.size()
+                                       : path.rfind('.') + 1))) {
+    return false;
+  }
+  for (const char c : path) {
+    const auto byte = static_cast<unsigned char>(c);
+    if (byte < 0x20 || byte == 0x7F) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool write_recv_result(std::ostream& os, const RecvResult& result) {
+  const bool text = result.kind == kRecvText;
+  const bool file = result.kind == kRecvFile;
+  if (!os.good() || (!text && !file)) {
+    return false;
+  }
+  if (text) {
+    if (!result.ext.empty() || result.staged || !result.path.empty()) {
+      return false;
+    }
+  } else {
+    if (!valid_extension(result.ext)) {
+      return false;
+    }
+    if (result.staged != !result.path.empty()) {
+      return false;
+    }
+    if (result.staged && !valid_staged_path(result.path)) {
+      return false;
+    }
+  }
+
+  // A body that happens to contain the begin marker would be easy to mistake
+  // for the block by a reader that took the first occurrence. The block is
+  // written last, so the reader can simply take the last occurrence -- but an
+  // unambiguous stream is cheaper to reason about than that contract, so the
+  // body is escaped (see write_body_escaped) and the block names the mode so
+  // the reader can put the text back.
+  os << kBegin << '\n'
+     << "version=" << kVersion << '\n'
+     << "command=recv\n"
+     << "kind=" << result.kind << '\n'
+     << "marker=percent-hex" << '\n';
+  if (file) {
+    os << "ext=" << result.ext << '\n'
+       << "staged=" << (result.staged ? "yes" : "no") << '\n';
+    if (result.staged) {
+      os << "path=" << result.path << '\n';
+    }
+  }
+  os << kEnd << '\n';
+  return os.good();
+}
+
+void write_body_escaped(std::ostream& os, std::string_view body) {
+  static constexpr char kHex[] = "0123456789abcdef";
+  std::size_t i = 0;
+  while (i < body.size()) {
+    const bool is_begin =
+        body.compare(i, kBegin.size(), kBegin) == 0;
+    const bool is_end = body.compare(i, kEnd.size(), kEnd) == 0;
+    if (is_begin || is_end) {
+      // The escape character, then the marker's colon-hex spelling. The '%' is
+      // what makes this reversible: without it, a message that already
+      // contained the spelling would be indistinguishable from a marker.
+      os.put('%');
+      const std::size_t length = is_begin ? kBegin.size() : kEnd.size();
+      for (std::size_t k = 0; k < length; ++k) {
+        const auto byte = static_cast<unsigned char>(body[i + k]);
+        if (k > 0) os.put(':');
+        os.put(kHex[byte >> 4]);
+        os.put(kHex[byte & 0x0F]);
+      }
+      i += length;
+      continue;
+    }
+    if (body[i] == '%') {
+      // The escape character itself, doubled so the reader does not take it
+      // for the start of one.
+      os << "%%";
+      ++i;
+      continue;
+    }
+    // Not a marker and not the escape here. Skip ahead in one pass to the next
+    // byte that could start either -- '%' for the escape, '-' for the marker
+    // framing. Two independent find() calls would rescan the whole remaining
+    // body for the pattern that is absent, which is quadratic on a body of
+    // millions of '%' or '-'.
+    std::size_t next = body.find_first_of("%-", i + 1);
+    if (next == std::string_view::npos) next = body.size();
+    os.write(body.data() + i, static_cast<std::streamsize>(next - i));
+    i = next;
+  }
 }
 
 }  // namespace ratchet::gui_format

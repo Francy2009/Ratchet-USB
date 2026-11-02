@@ -97,24 +97,43 @@ bool stdin_is_tty() { return isatty(STDIN_FILENO) != 0; }
 
 bool stdout_is_tty() { return isatty(STDOUT_FILENO) != 0; }
 
-std::string escape_control_chars(std::string_view text) {
+namespace {
+
+std::string escape_control_chars_impl(std::string_view text,
+                                     bool keep_newline_and_tab) {
   static constexpr char kHex[] = "0123456789abcdef";
-  std::string out;
-  out.reserve(text.size());
+  // The C0 pass is per byte and leaves multi-byte characters intact; the
+  // Unicode pass then handles the characters that are invisible but reorder
+  // what is drawn around them (bidi overrides, isolates, marks, the BOM and
+  // the C1 controls that travel as two bytes). Escaping is idempotent: the
+  // first pass emits only ASCII, and that ASCII contains no format character.
+  std::string c0;
+  c0.reserve(text.size());
   for (const char ch : text) {
     const auto c = static_cast<unsigned char>(ch);
     // Newline and tab are the two controls a message legitimately contains.
-    const bool is_control =
-        (c < 0x20 || c == 0x7F) && c != '\n' && c != '\t';
+    const bool printable_control =
+        keep_newline_and_tab && (c == '\n' || c == '\t');
+    const bool is_control = (c < 0x20 || c == 0x7F) && !printable_control;
     if (is_control) {
-      out += "\\x";
-      out.push_back(kHex[c >> 4]);
-      out.push_back(kHex[c & 0x0F]);
+      c0 += "\\x";
+      c0.push_back(kHex[c >> 4]);
+      c0.push_back(kHex[c & 0x0F]);
     } else {
-      out.push_back(ch);
+      c0.push_back(ch);
     }
   }
-  return out;
+  return escape_unicode_format_chars(c0);
+}
+
+}  // namespace
+
+std::string escape_control_chars(std::string_view text) {
+  return escape_control_chars_impl(text, true);
+}
+
+std::string escape_line_control_chars(std::string_view text) {
+  return escape_control_chars_impl(text, false);
 }
 
 std::string escape_if_tty(std::string_view text) {

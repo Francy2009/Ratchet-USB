@@ -98,7 +98,7 @@ ratchet-usb recv
 After `init`, the program shows two different things, once each. The first is a
 12-word recovery phrase; keep it separate from the drive. The phrase can
 reconstruct your identity, but not your contacts, prekeys, or conversations.
-The second is the vault passphrase, a random six-word phrase (66 bits of
+The second is the vault passphrase, a random twelve-word phrase (132 bits of
 entropy) that keys Argon2id. Write it down and type it back one word per line
 when the vault asks; it is not the recovery phrase and cannot restore anything.
 `passphrase` generates a new one and re-encrypts the same vault, keeping the

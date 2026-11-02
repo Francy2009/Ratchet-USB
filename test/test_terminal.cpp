@@ -32,6 +32,24 @@ TEST("escape_control_chars leaves newline and tab alone") {
   CHECK_EQ(terminal::escape_control_chars(payload), payload);
 }
 
+TEST("escape_line_control_chars escapes newline and tab too") {
+  // A value printed inside one line (an alias, a label) must not be able to
+  // start a second line, even though a message is allowed to contain one.
+  const std::string payload = "alice\nfingerprint: forged\tx";
+  const std::string escaped = terminal::escape_line_control_chars(payload);
+  CHECK(escaped.find('\n') == std::string::npos);
+  CHECK(escaped.find('\t') == std::string::npos);
+  CHECK(escaped.find("\\x0a") != std::string::npos);
+  CHECK(escaped.find("\\x09") != std::string::npos);
+  CHECK(escaped.find("alice") != std::string::npos);
+  CHECK(escaped.find("fingerprint: forged") != std::string::npos);
+}
+
+TEST("escape_line_control_chars leaves ordinary text alone") {
+  const std::string payload = "ciao, però — 世界 🔐";
+  CHECK_EQ(terminal::escape_line_control_chars(payload), payload);
+}
+
 TEST("escape_control_chars catches DEL and NUL") {
   const std::string payload = std::string("a\x7f") + std::string(1, '\0') + "b";
   const std::string escaped = terminal::escape_control_chars(payload);
@@ -52,6 +70,46 @@ TEST("escape_control_chars leaves ordinary printable ASCII alone") {
   const std::string payload =
       "The quick brown fox: 0123456789 !\"#$%&'()*+,-./;<=>?@[]^_`{|}~";
   CHECK_EQ(terminal::escape_control_chars(payload), payload);
+}
+
+TEST("escape_control_chars neutralises a right-to-left override") {
+  // U+202E reads as nothing but reverses the run that follows it: "photo\u202Egnp.exe"
+  // is drawn as "photoexe.png". A contact chooses the alias, and the alias is
+  // printed beside the message, so the override must not reach the terminal.
+  const std::string payload = std::string("photo") + "\u202E" + "gnp.exe";
+  const std::string escaped = terminal::escape_control_chars(payload);
+  CHECK(escaped.find("\u202E") == std::string::npos);
+  CHECK(escaped.find("\xe2\x80\xae") == std::string::npos);  // the raw bytes
+  CHECK(escaped.find("\\u202e") != std::string::npos);
+  CHECK(escaped.find("photo") != std::string::npos);
+  CHECK(escaped.find("gnp.exe") != std::string::npos);
+}
+
+TEST("escape_control_chars neutralises every bidi character it lists") {
+  // U+200E/U+200F, the U+202A..U+202E embeddings, U+2066..U+2069 isolates and
+  // U+FEFF, plus the C1 controls spelled as UTF-8 (U+0080 and U+009F), the
+  // Arabic letter mark, the zero-width space, the word joiner, the line
+  // separator and a deprecated format character.
+  const std::string payload =
+      "a\u200Eb\u200Fc\u202Ad\u202Be\u202Cf\u202Dg\u202Eh"
+      "\u2066i\u2067j\u2068k\u2069l\uFEFFm\u0080n\u009Fo"
+      "\u061Cp\u200Bq\u2060r\u2028s\u206At";
+  const std::string escaped = terminal::escape_control_chars(payload);
+  CHECK(!has_unicode_format_chars(escaped));
+  CHECK(escaped.find("\\u200e") != std::string::npos);
+  CHECK(escaped.find("\\u202e") != std::string::npos);
+  CHECK(escaped.find("\\u2066") != std::string::npos);
+  CHECK(escaped.find("\\ufeff") != std::string::npos);
+  CHECK(escaped.find("\\u0080") != std::string::npos);
+  CHECK(escaped.find("\\u009f") != std::string::npos);
+  CHECK(escaped.find("\\u061c") != std::string::npos);
+  CHECK(escaped.find("\\u200b") != std::string::npos);
+  CHECK(escaped.find("\\u2060") != std::string::npos);
+  CHECK(escaped.find("\\u2028") != std::string::npos);
+  CHECK(escaped.find("\\u206a") != std::string::npos);
+  // The readable letters are still there, in order.
+  CHECK(escaped.find('a') != std::string::npos);
+  CHECK(escaped.find('o') != std::string::npos);
 }
 
 TEST("an OSC 52 clipboard-write sequence does not survive escaping") {

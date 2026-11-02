@@ -461,9 +461,6 @@ int cmd_add_contact(const Options& opts) {
   const fs::path usb = require_usb_path(opts);
   const std::string name =
       require_value(opts.name, "Contact alias: ", "an alias is required");
-  if (name.size() > store::kMaxAliasBytes) {
-    throw Error("contact alias exceeds the 128-byte limit");
-  }
   const fs::path path = vault::vault_path(usb);
 
   const std::string card_text =
@@ -501,7 +498,10 @@ int cmd_add_contact(const Options& opts) {
                        }),
         store.sessions.end());
     app::save_vault(path, store, opened.params, opened.passphrase);
-    std::cout << "Updated '" << name
+    // A legacy alias may contain a control character this build refuses for
+    // new imports. It still has to be printable here, because the upgrade is
+    // the only way to repair that contact, so it goes out line-safe.
+    std::cout << "Updated '" << terminal::escape_line_control_chars(name)
               << "' to a hybrid identity and closed its legacy session.\n"
               << "The previous verified flag was intentionally cleared. Verify "
                  "this new safety number out of band:\n\n"
@@ -511,6 +511,19 @@ int cmd_add_contact(const Options& opts) {
     return 0;
   }
 
+  // An alias is borrowed text: it is chosen by whoever sent the card, and it
+  // is printed again later in `contacts`, `recv` and the GUI. A format or
+  // control character in it draws as nothing but can reorder or forge the line
+  // around it, so it is refused here -- where it enters the vault -- rather
+  // than escaped at one of the places it is shown.
+  //
+  // Checked only for a new contact: a vault written by an older build can hold
+  // an alias this build would refuse, and `add` with that alias is how its
+  // owner upgrades the card. The upgrade branch above runs before this and
+  // prints the legacy alias line-safe.
+  if (const char* problem = contact_alias_problem(name)) {
+    throw Error(problem);
+  }
   store::Contact contact;
   contact.alias = name;
   contact.identity_pub = imported.identity_pub;
@@ -550,7 +563,7 @@ int cmd_contacts(const Options& opts) {
     const int session_idx = store.find_session(i);
     // Read back out of the vault and printed long after it was typed, so it
     // goes through the same escaping as anything else headed for a terminal.
-    std::cout << terminal::escape_control_chars(c.alias)
+    std::cout << terminal::escape_line_control_chars(c.alias)
               << (c.verified ? " [verified]" : " [unverified]")
               << (session_idx >= 0 ? " [session established]" : " [no session yet]")
               << "\n"
@@ -567,6 +580,11 @@ int cmd_trust(const Options& opts) {
   const fs::path usb = require_usb_path(opts);
   const std::string name =
       require_value(opts.name, "Contact alias: ", "an alias is required");
+  // Not validated here on purpose: a vault written by an older build can hold
+  // an alias this build would refuse to import, and the owner still has to be
+  // able to mark that contact verified. The alias is matched as it is stored
+  // and only ever *printed* through escape_line_control_chars, because the
+  // fingerprint lines it is printed beside are parsed line by line.
   const fs::path path = vault::vault_path(usb);
 
   OpenedVault opened = unlock_vault(path);
@@ -574,12 +592,95 @@ int cmd_trust(const Options& opts) {
 
   const int idx = store.find_contact(name);
   if (idx < 0) {
-    throw Error("no contact named '" + name + "'");
+    throw Error("no contact named '" +
+                terminal::escape_line_control_chars(name) + "'");
   }
-  store.contacts[static_cast<std::size_t>(idx)].verified = true;
+  const store::Contact& contact = store.contacts[static_cast<std::size_t>(idx)];
+  // What is printed, never what is compared or stored: the vault keeps the
+  // alias exactly as it was entered, which cmd_add_contact has already checked
+  // for control and format characters. This is only so an alias imported by an
+  // older build cannot rewrite the line the fingerprint is on: for that, a
+  // newline is as dangerous as an escape, so the line-safe escaping is used.
+  const std::string shown_name = terminal::escape_line_control_chars(name);
+
+  // The fingerprint is what the user compares with the contact over a channel
+  // nobody else controls, so "verified" means nothing unless it has just been
+  // shown. Printing it here means the string being confirmed is the one this
+  // command is about. It goes to stderr, where every other prompt goes, so
+  // stdout stays free for a caller that captures the result.
+  std::string shown_fingerprint =
+      contact.card && contact.card->pq_bundle
+          ? hybrid_fingerprint(contact.identity_pub, contact.card->pq_identity_pub)
+          : fingerprint(contact.identity_pub);
+  // A legacy (non-hybrid) fingerprint is grouped on two lines for reading
+  // aloud. The trust output is line-oriented -- the GUI takes the value after
+  // "fingerprint: " up to the newline -- so flatten it here and compare the
+  // flattened form. Otherwise --show-fingerprint and --expect-fingerprint
+  // disagree about which string was shown, and a hybrid card would be the only
+  // one that could be trusted from a front end.
+  std::replace(shown_fingerprint.begin(), shown_fingerprint.end(), '\n', ' ');
+  // A front end that showed a fingerprint passes it back here. Between the two
+  // commands the vault can change: a card replaced under the same alias, or a
+  // legacy card upgraded to a hybrid one, would make this command mark a key
+  // the user never looked at. The confirmation belongs to the string that was
+  // shown, so a different one is refused instead of inherited.
+  if (opts.expect_fingerprint.has_value() &&
+      *opts.expect_fingerprint != shown_fingerprint) {
+    throw Error("the fingerprint of '" + shown_name +
+                "' is not the one that was shown, so nothing was marked as "
+                "verified; run trust again and compare the new value");
+  }
+  std::cerr << "\nFingerprint for '" << shown_name << "':\n\n"
+            << shown_fingerprint
+            << "\n\nCompare this with the value the person behind '"
+            << shown_name << "'\nreads out over a separate channel (in person, "
+               "a phone call) before\nmarking them verified.\n\n";
+
+  if (opts.show_fingerprint) {
+    // The GUI's first step. stdout carries the fingerprint and nothing else,
+    // so the window can show exactly the value this command read from the
+    // vault; nothing has been changed at this point, whatever the caller does
+    // next.
+    std::cout << "alias: " << shown_name << "\n"
+              << "fingerprint: " << shown_fingerprint << "\n"
+              << "verified: " << (contact.verified ? "yes" : "no") << "\n";
+    std::cout.flush();
+    if (!std::cout) {
+      throw Error("could not write the fingerprint");
+    }
+    return 0;
+  }
+
+  // Being verified is an authorization, not a note: it is what lets `send`
+  // and `recv` accept this contact's traffic. So it is confirmed instead of
+  // just printed -- unless `--confirmed` says a front end has already asked,
+  // and in this build only the GUI's dialog, which follows the step above.
+  if (!opts.confirmed) {
+    if (!terminal::stdin_is_tty()) {
+      throw Error(
+          "trust requires an interactive confirmation; run it on a terminal, "
+          "or pass --confirmed once the fingerprint has been shown and the "
+          "user has confirmed");
+    }
+    if (!terminal::confirm_enter_or_escape(
+            "Press ENTER once you have compared the fingerprint, or Esc to "
+            "cancel: ")) {
+      throw Error("cancelled; '" + shown_name +
+                  "' was not marked as verified");
+    }
+  }
+
+  store::Contact& verified = store.contacts[static_cast<std::size_t>(idx)];
+  if (verified.verified) {
+    // Already trusted. Still after the fingerprint has been shown, so a
+    // repeated run re-confirms rather than quietly succeeding.
+    std::cout << "'" << shown_name << "' was already marked as verified.\n";
+    return 0;
+  }
+  verified.verified = true;
 
   app::save_vault(path, store, opened.params, opened.passphrase);
-  std::cout << "'" << name << "' marked as verified.\n";
+  std::cout << "'" << shown_name << "' marked as verified.\n";
   return 0;
 }
 
@@ -676,6 +777,18 @@ int cmd_send(const Options& opts) {
 
   if (!opts.file_path.empty() && opts.message.has_value()) {
     throw Error("--file and a message cannot be combined");
+  }
+
+  // A positional message is plaintext in argv, which every process of the same
+  // user can read from /proc/<pid>/cmdline and which the shell has already
+  // written to its history file. It is still accepted for compatibility, but
+  // the user is told what it costs and pointed at the two safe ways in.
+  if (opts.message.has_value()) {
+    std::cerr
+        << "warning: the message was passed on the command line; it is visible "
+           "in the shell history and in /proc/<pid>/cmdline.\n"
+           "warning: omit it (read from standard input) or use --stdin-payload "
+           "to keep the plaintext out of argv.\n";
   }
 
   // Read a front-end payload before the passphrase: the two share stdin, and
@@ -795,7 +908,7 @@ int cmd_recv(const Options& opts) {
 
   app::save_vault(path, store, opened.params, opened.passphrase);
 
-  const std::string alias = terminal::escape_control_chars(result.alias);
+  const std::string alias = terminal::escape_line_control_chars(result.alias);
   if (result.session_established) {
     std::cerr << "(new session established with '" << alias << "')\n";
   }
@@ -822,9 +935,24 @@ int cmd_recv(const Options& opts) {
       }
     }
   } received_wipe{received};
+  // `--structured-output`: what the desktop GUI reads. The kind comes from the
+  // framing byte that decode_file_payload just checked, never from the alias
+  // or any other text a sender chose, and it is written after the body so a
+  // reader that only wants the human output sees what it always saw.
+  const bool structured = opts.structured_output;
+  // stdout has a structured block only in the front-end mode. Everything that
+  // writes the message body has to know, so the block stays the last thing in
+  // the stream and a sender's text cannot be mistaken for it.
+  gui_format::RecvResult structured_result;
+  // `RecvResult::path` is a string_view. The string that backs it has to
+  // outlive the try block below, because write_recv_result runs at the very
+  // end of this function.
+  std::string staged_path;
   if (received.has_value()) {
     std::cerr << alias << ": [encrypted file received: ." << received->ext
               << "]\n";
+    structured_result.kind = gui_format::kRecvFile;
+    structured_result.ext = received->ext;
     if (file::is_dangerous_extension(received->ext)) {
       std::cerr << "not opening it: a '." << received->ext
                 << "' file can run code; save it and inspect it yourself if "
@@ -832,9 +960,16 @@ int cmd_recv(const Options& opts) {
     } else if (opts.stage_received) {
       // No terminal to ask on (the GUI drives this as a child process): stage
       // the file and print its path so the front end can show it and open the
-      // folder itself.
+      // folder itself. In the structured mode the path goes in the block
+      // instead, so stdout holds one machine-readable value rather than a bare
+      // line next to one.
       try {
-        std::cout << file::stage_file(*received) << "\n";
+        staged_path = file::stage_file(*received);
+        structured_result.staged = true;
+        structured_result.path = staged_path;
+        if (!structured) {
+          std::cout << staged_path << "\n";
+        }
       } catch (const std::exception& e) {
         std::cerr << "could not stage the received file: " << e.what() << "\n";
       }
@@ -849,11 +984,28 @@ int cmd_recv(const Options& opts) {
     } else {
       std::cerr << "not opening it: standard input is not a terminal\n";
     }
+  } else if (structured) {
+    // The front-end mode: the body first, then the block, and the block begins
+    // on a line of its own. The body goes out exactly as it arrived except for
+    // two rewrites -- control characters escaped (so a window is not handed a
+    // terminal sequence) and the escape used to keep a literal marker out of
+    // the stream (so the only marker is the real one). The text is the
+    // sender's; the block, not this, is what a reader parses.
+    std::cout << alias << ": ";
+    gui_format::write_body_escaped(
+        std::cout, terminal::escape_control_chars(result.plaintext));
+    std::cout << "\n";
+    structured_result.kind = gui_format::kRecvText;
   } else {
-    // The message body is whatever the sender chose to put in it. Escaped when
-    // it is going to a terminal, verbatim when it is going to a file or a pipe.
     std::cout << alias << ": " << terminal::escape_if_tty(result.plaintext)
               << "\n";
+  }
+  if (structured) {
+    // Too late to help a caller that has already shown the text, so a failure
+    // here is loud but does not undo the message that decrypted fine.
+    if (!gui_format::write_recv_result(std::cout, structured_result)) {
+      std::cerr << "warning: could not write the structured result\n";
+    }
   }
   // Both guards run here: result.plaintext is wiped even when file decoding or
   // output threw, and the framed file bytes are zeroed and released.
