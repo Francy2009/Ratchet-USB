@@ -94,7 +94,9 @@ const publishedPrekey: bitstring [data].
 const noPrekey: bitstring [data].
 const initiatorId: bitstring [data].
 const responderId: bitstring [data].
-(* Tags keep the healed DH exchange separate from the session messages. *)
+(* The healed DH values use the `asenc` constructor. The healed message reuses
+   the `triple` suite and counters, so its distinct key separates it from the
+   session messages. *)
 
 event Sent(bitstring).
 event Committed(bitstring).
