@@ -270,6 +270,24 @@ TEST("contact_alias_problem refuses each listed format character") {
   }
 }
 
+TEST("contact_alias_problem refuses control characters that would forge lines") {
+  // The alias is printed beside the fingerprint and, for the GUI, inside a
+  // line-oriented block. A newline would let a sender add a second
+  // "fingerprint:" line of their own; ESC would let them move the cursor. Tab
+  // is refused too: no alias needs it.
+  const char* const refused[] = {
+      "\n", "\r", "\t", "\x1b", "\x07", "\x7f",
+  };
+  for (const char* character : refused) {
+    const std::string alias = std::string("alice") + character + "bob";
+    CHECK(contact_alias_problem(alias) ==
+          kContactAliasControlCharsError.data());
+  }
+  const std::string forged = "alice\nfingerprint: forged";
+  CHECK(contact_alias_problem(forged) ==
+        kContactAliasControlCharsError.data());
+}
+
 TEST("contact_alias_problem enforces the length limit and rejects emptiness") {
   CHECK(contact_alias_problem("") == kContactAliasEmptyError.data());
   CHECK(contact_alias_problem(std::string(kMaxContactAliasBytes, 'a')) ==

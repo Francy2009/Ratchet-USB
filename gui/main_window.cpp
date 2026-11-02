@@ -1494,7 +1494,7 @@ QString MainWindow::vaultWarningsFromLog(const QString& text) {
   // way to learn it from a version of ratchet-usb that still prints all three.
   static const QStringList kMarkers{
       QStringLiteral("SECURITY WARNING"),
-      QStringLiteral("could not lock key material into RAM"),
+      QStringLiteral("warning: could not lock key material into RAM"),
       QStringLiteral("WARNING: the vault was created with a lower Argon2id"),
   };
   QStringList found;

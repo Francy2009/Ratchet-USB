@@ -183,6 +183,17 @@ printf '%s\n' "$ALICE_PASS" |
   grep -q "bob \[unverified\]" ||
   fail "trust --show-fingerprint changed the vault"
 
+# The value --show-fingerprint printed is the value the confirmation step must
+# accept. It is flattened to one line even for a legacy fingerprint, so a front
+# end that reads a line at a time passes back exactly what it was shown.
+SHOWN_FP="$(sed -n 's/^fingerprint: //p' "$WORK/trust-shown.txt")"
+[ -n "$SHOWN_FP" ] ||
+  fail "could not read the fingerprint from trust --show-fingerprint"
+printf '%s\n' "$ALICE_PASS" |
+  "$BIN" trust --usb-path "$ALICE" bob --confirmed \
+    --expect-fingerprint "$SHOWN_FP" >/dev/null 2>&1 ||
+  fail "trust rejected the fingerprint it had just shown"
+
 printf '%s\n' "$ALICE_PASS" |
   "$BIN" trust --usb-path "$ALICE" bob --confirmed >/dev/null 2>&1 ||
   fail "alice failed to verify bob"

@@ -417,6 +417,17 @@ const char* contact_alias_problem(std::string_view alias) noexcept {
   if (alias.size() > kMaxContactAliasBytes) {
     return kContactAliasLimitError.data();
   }
+  // C0 controls and DEL are refused as well as the Unicode format characters.
+  // An alias is printed on a line of its own (or after "alias: "), so a
+  // newline or an escape in it can forge the next line or drive the terminal:
+  // "alice\nfingerprint: forged" shows a second fingerprint the user did not
+  // ask for. Tab is included; an alias needs no control character.
+  for (const char ch : alias) {
+    const auto c = static_cast<unsigned char>(ch);
+    if (c < 0x20 || c == 0x7F) {
+      return kContactAliasControlCharsError.data();
+    }
+  }
   if (has_unicode_format_chars(alias)) {
     return kContactAliasFormatCharsError.data();
   }

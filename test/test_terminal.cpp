@@ -32,6 +32,24 @@ TEST("escape_control_chars leaves newline and tab alone") {
   CHECK_EQ(terminal::escape_control_chars(payload), payload);
 }
 
+TEST("escape_line_control_chars escapes newline and tab too") {
+  // A value printed inside one line (an alias, a label) must not be able to
+  // start a second line, even though a message is allowed to contain one.
+  const std::string payload = "alice\nfingerprint: forged\tx";
+  const std::string escaped = terminal::escape_line_control_chars(payload);
+  CHECK(escaped.find('\n') == std::string::npos);
+  CHECK(escaped.find('\t') == std::string::npos);
+  CHECK(escaped.find("\\x0a") != std::string::npos);
+  CHECK(escaped.find("\\x09") != std::string::npos);
+  CHECK(escaped.find("alice") != std::string::npos);
+  CHECK(escaped.find("fingerprint: forged") != std::string::npos);
+}
+
+TEST("escape_line_control_chars leaves ordinary text alone") {
+  const std::string payload = "ciao, però — 世界 🔐";
+  CHECK_EQ(terminal::escape_line_control_chars(payload), payload);
+}
+
 TEST("escape_control_chars catches DEL and NUL") {
   const std::string payload = std::string("a\x7f") + std::string(1, '\0') + "b";
   const std::string escaped = terminal::escape_control_chars(payload);

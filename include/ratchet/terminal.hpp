@@ -70,6 +70,13 @@ bool stdout_is_tty();
 // secure.hpp).
 std::string escape_control_chars(std::string_view text);
 
+// Like escape_control_chars, but also escapes newline and tab. Use this for a
+// value that is printed inside one line -- an alias, a warning label -- where a
+// newline would let the value forge further lines (a second `fingerprint:`
+// line, say). Messages keep escape_control_chars: their newlines and tabs are
+// meant to reach the terminal.
+std::string escape_line_control_chars(std::string_view text);
+
 // escape_control_chars, but only when stdout is a terminal. A redirect to a
 // file or a pipe gets the bytes exactly as the sender wrote them, because
 // there is no terminal to drive and mangling the text would be the bug.

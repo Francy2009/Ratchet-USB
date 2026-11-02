@@ -97,7 +97,10 @@ bool stdin_is_tty() { return isatty(STDIN_FILENO) != 0; }
 
 bool stdout_is_tty() { return isatty(STDOUT_FILENO) != 0; }
 
-std::string escape_control_chars(std::string_view text) {
+namespace {
+
+std::string escape_control_chars_impl(std::string_view text,
+                                     bool keep_newline_and_tab) {
   static constexpr char kHex[] = "0123456789abcdef";
   // The C0 pass is per byte and leaves multi-byte characters intact; the
   // Unicode pass then handles the characters that are invisible but reorder
@@ -109,8 +112,9 @@ std::string escape_control_chars(std::string_view text) {
   for (const char ch : text) {
     const auto c = static_cast<unsigned char>(ch);
     // Newline and tab are the two controls a message legitimately contains.
-    const bool is_control =
-        (c < 0x20 || c == 0x7F) && c != '\n' && c != '\t';
+    const bool printable_control =
+        keep_newline_and_tab && (c == '\n' || c == '\t');
+    const bool is_control = (c < 0x20 || c == 0x7F) && !printable_control;
     if (is_control) {
       c0 += "\\x";
       c0.push_back(kHex[c >> 4]);
@@ -120,6 +124,16 @@ std::string escape_control_chars(std::string_view text) {
     }
   }
   return escape_unicode_format_chars(c0);
+}
+
+}  // namespace
+
+std::string escape_control_chars(std::string_view text) {
+  return escape_control_chars_impl(text, true);
+}
+
+std::string escape_line_control_chars(std::string_view text) {
+  return escape_control_chars_impl(text, false);
 }
 
 std::string escape_if_tty(std::string_view text) {

@@ -161,6 +161,10 @@ inline constexpr std::string_view kContactAliasFormatCharsError =
     "contact alias contains an invisible formatting character (bidi or "
     "zero-width), which could make it display as something else; remove it "
     "and try again";
+inline constexpr std::string_view kContactAliasControlCharsError =
+    "contact alias contains a control character (such as a newline or an "
+    "escape), which could make it display as something else; remove it and "
+    "try again";
 
 // Why `alias` cannot be used, as a message to show, or nullptr when it can.
 //

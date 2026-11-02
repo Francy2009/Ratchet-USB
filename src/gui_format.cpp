@@ -170,8 +170,6 @@ bool write_recv_result(std::ostream& os, const RecvResult& result) {
 
 void write_body_escaped(std::ostream& os, std::string_view body) {
   static constexpr char kHex[] = "0123456789abcdef";
-  // Both markers share the "-----" framing, so one scan finds either.
-  constexpr std::string_view kMarkerStart = "-----";
   std::size_t i = 0;
   while (i < body.size()) {
     const bool is_begin =
@@ -199,11 +197,12 @@ void write_body_escaped(std::ostream& os, std::string_view body) {
       ++i;
       continue;
     }
-    // Not a marker and not the escape here. Skip ahead to the next place one
-    // could start rather than scanning character by character, which keeps a
-    // multi-megabyte body from being walked twice.
-    std::size_t next = std::min(body.find('%', i + 1),
-                                body.find(kMarkerStart, i + 1));
+    // Not a marker and not the escape here. Skip ahead in one pass to the next
+    // byte that could start either -- '%' for the escape, '-' for the marker
+    // framing. Two independent find() calls would rescan the whole remaining
+    // body for the pattern that is absent, which is quadratic on a body of
+    // millions of '%' or '-'.
+    std::size_t next = body.find_first_of("%-", i + 1);
     if (next == std::string_view::npos) next = body.size();
     os.write(body.data() + i, static_cast<std::streamsize>(next - i));
     i = next;

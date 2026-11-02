@@ -555,7 +555,7 @@ int cmd_contacts(const Options& opts) {
     const int session_idx = store.find_session(i);
     // Read back out of the vault and printed long after it was typed, so it
     // goes through the same escaping as anything else headed for a terminal.
-    std::cout << terminal::escape_control_chars(c.alias)
+    std::cout << terminal::escape_line_control_chars(c.alias)
               << (c.verified ? " [verified]" : " [unverified]")
               << (session_idx >= 0 ? " [session established]" : " [no session yet]")
               << "\n"
@@ -575,7 +575,8 @@ int cmd_trust(const Options& opts) {
   // Not validated here on purpose: a vault written by an older build can hold
   // an alias this build would refuse to import, and the owner still has to be
   // able to mark that contact verified. The alias is matched as it is stored
-  // and only ever *printed* through escape_control_chars.
+  // and only ever *printed* through escape_line_control_chars, because the
+  // fingerprint lines it is printed beside are parsed line by line.
   const fs::path path = vault::vault_path(usb);
 
   OpenedVault opened = unlock_vault(path);
@@ -583,25 +584,33 @@ int cmd_trust(const Options& opts) {
 
   const int idx = store.find_contact(name);
   if (idx < 0) {
-    throw Error("no contact named '" + terminal::escape_control_chars(name) +
-                "'");
+    throw Error("no contact named '" +
+                terminal::escape_line_control_chars(name) + "'");
   }
   const store::Contact& contact = store.contacts[static_cast<std::size_t>(idx)];
   // What is printed, never what is compared or stored: the vault keeps the
   // alias exactly as it was entered, which cmd_add_contact has already checked
-  // for format characters. This is only so an alias imported by an older build
-  // cannot rewrite the line the fingerprint is on.
-  const std::string shown_name = terminal::escape_control_chars(name);
+  // for control and format characters. This is only so an alias imported by an
+  // older build cannot rewrite the line the fingerprint is on: for that, a
+  // newline is as dangerous as an escape, so the line-safe escaping is used.
+  const std::string shown_name = terminal::escape_line_control_chars(name);
 
   // The fingerprint is what the user compares with the contact over a channel
   // nobody else controls, so "verified" means nothing unless it has just been
   // shown. Printing it here means the string being confirmed is the one this
   // command is about. It goes to stderr, where every other prompt goes, so
   // stdout stays free for a caller that captures the result.
-  const std::string shown_fingerprint =
+  std::string shown_fingerprint =
       contact.card && contact.card->pq_bundle
           ? hybrid_fingerprint(contact.identity_pub, contact.card->pq_identity_pub)
           : fingerprint(contact.identity_pub);
+  // A legacy (non-hybrid) fingerprint is grouped on two lines for reading
+  // aloud. The trust output is line-oriented -- the GUI takes the value after
+  // "fingerprint: " up to the newline -- so flatten it here and compare the
+  // flattened form. Otherwise --show-fingerprint and --expect-fingerprint
+  // disagree about which string was shown, and a hybrid card would be the only
+  // one that could be trusted from a front end.
+  std::replace(shown_fingerprint.begin(), shown_fingerprint.end(), '\n', ' ');
   // A front end that showed a fingerprint passes it back here. Between the two
   // commands the vault can change: a card replaced under the same alias, or a
   // legacy card upgraded to a hybrid one, would make this command mark a key
@@ -891,7 +900,7 @@ int cmd_recv(const Options& opts) {
 
   app::save_vault(path, store, opened.params, opened.passphrase);
 
-  const std::string alias = terminal::escape_control_chars(result.alias);
+  const std::string alias = terminal::escape_line_control_chars(result.alias);
   if (result.session_established) {
     std::cerr << "(new session established with '" << alias << "')\n";
   }
@@ -927,6 +936,10 @@ int cmd_recv(const Options& opts) {
   // writes the message body has to know, so the block stays the last thing in
   // the stream and a sender's text cannot be mistaken for it.
   gui_format::RecvResult structured_result;
+  // `RecvResult::path` is a string_view. The string that backs it has to
+  // outlive the try block below, because write_recv_result runs at the very
+  // end of this function.
+  std::string staged_path;
   if (received.has_value()) {
     std::cerr << alias << ": [encrypted file received: ." << received->ext
               << "]\n";
@@ -943,11 +956,11 @@ int cmd_recv(const Options& opts) {
       // instead, so stdout holds one machine-readable value rather than a bare
       // line next to one.
       try {
-        const std::string staged = file::stage_file(*received);
+        staged_path = file::stage_file(*received);
         structured_result.staged = true;
-        structured_result.path = staged;
+        structured_result.path = staged_path;
         if (!structured) {
-          std::cout << staged << "\n";
+          std::cout << staged_path << "\n";
         }
       } catch (const std::exception& e) {
         std::cerr << "could not stage the received file: " << e.what() << "\n";
