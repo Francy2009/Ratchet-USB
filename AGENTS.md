@@ -62,7 +62,10 @@ and libFuzzer. The single required check is the `ci` gate job.
 - `rust/spqr_bridge/` — C ABI bridge to SPQR. `third_party/spqr/` — vendored
   Signal SPQR 1.6.0 at a pinned commit. **Do not update the vendored crate**
   without a license/protocol/interop review (see `third_party/spqr/UPSTREAM.md`).
-- `model/*.pv` — ProVerif formal models; not part of the build.
+- `model/*.pv` — ProVerif formal models; not part of the build. A Tamarin
+  model of the opening and DH ratchet (`model/ratchet.spthy`) is still TODO:
+  an earlier version was removed because its automatic proofs did not finish.
+  Add one only with a `tamarin-prover --prove` run that completes.
 - `test/vectors/` — generated `vectors.hpp`, checked in and diffed by CI.
 - `build/`, `rust/spqr_bridge/target/`, `third_party/spqr/target/` — artifacts;
   never commit. `vault.bin`, `*.seed` are gitignored: never let real secrets in.
