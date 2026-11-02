@@ -461,14 +461,6 @@ int cmd_add_contact(const Options& opts) {
   const fs::path usb = require_usb_path(opts);
   const std::string name =
       require_value(opts.name, "Contact alias: ", "an alias is required");
-  // An alias is borrowed text: it is chosen by whoever sent the card, and it is
-  // printed again later in `contacts`, `recv` and the GUI. A format character
-  // in it draws as nothing but can reorder the line around it, so it is refused
-  // here -- where it enters the vault -- rather than escaped at one of the
-  // places it is shown.
-  if (const char* problem = contact_alias_problem(name)) {
-    throw Error(problem);
-  }
   const fs::path path = vault::vault_path(usb);
 
   const std::string card_text =
@@ -506,7 +498,10 @@ int cmd_add_contact(const Options& opts) {
                        }),
         store.sessions.end());
     app::save_vault(path, store, opened.params, opened.passphrase);
-    std::cout << "Updated '" << name
+    // A legacy alias may contain a control character this build refuses for
+    // new imports. It still has to be printable here, because the upgrade is
+    // the only way to repair that contact, so it goes out line-safe.
+    std::cout << "Updated '" << terminal::escape_line_control_chars(name)
               << "' to a hybrid identity and closed its legacy session.\n"
               << "The previous verified flag was intentionally cleared. Verify "
                  "this new safety number out of band:\n\n"
@@ -516,6 +511,19 @@ int cmd_add_contact(const Options& opts) {
     return 0;
   }
 
+  // An alias is borrowed text: it is chosen by whoever sent the card, and it
+  // is printed again later in `contacts`, `recv` and the GUI. A format or
+  // control character in it draws as nothing but can reorder or forge the line
+  // around it, so it is refused here -- where it enters the vault -- rather
+  // than escaped at one of the places it is shown.
+  //
+  // Checked only for a new contact: a vault written by an older build can hold
+  // an alias this build would refuse, and `add` with that alias is how its
+  // owner upgrades the card. The upgrade branch above runs before this and
+  // prints the legacy alias line-safe.
+  if (const char* problem = contact_alias_problem(name)) {
+    throw Error(problem);
+  }
   store::Contact contact;
   contact.alias = name;
   contact.identity_pub = imported.identity_pub;
