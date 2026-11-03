@@ -220,11 +220,13 @@ to defend against it:
   implemented in this version.
 - **Group chat as a ratcheted group.** `group-send` encrypts the content once
   and wraps the content key once per member through that member's existing 1:1
-  session. It is not a group ratchet and keeps no group state: the block
-  reveals how many recipients there are (not who they are), the sender chooses
-  the member list, and a member who leaves still holds the content keys of
-  messages already delivered. Membership changes therefore do not rekey the
-  group; start a fresh message after a removal.
+  session. The block is signed with the sender's Ed25519 identity key, so a
+  member who learns the shared content key still cannot re-encrypt the body and
+  attribute it to the sender. It is not a group ratchet and keeps no group
+  state: the block reveals how many recipients there are (not who they are),
+  the sender chooses the member list, and a member who leaves still holds the
+  content keys of messages already delivered. Membership changes therefore do
+  not rekey the group; start a fresh message after a removal.
 
 ## No warranty, and using it lawfully
 

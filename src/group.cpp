@@ -7,6 +7,7 @@
 #include <cstring>
 #include <unordered_set>
 
+#include "ratchet/identity.hpp"
 #include "ratchet/message.hpp"
 #include "ratchet/ratchet.hpp"
 #include "ratchet/serial.hpp"
@@ -24,6 +25,7 @@ constexpr std::size_t kKeyBytes = 32;
 constexpr std::size_t kGroupIdBytes = 16;
 constexpr std::size_t kKeyPayloadBytes =
     kKeyMagic.size() + kGroupIdBytes + kKeyBytes;
+constexpr std::string_view kSignDomain = "Ratchet-USB/v1/group-sender";
 
 std::string make_key_payload(const std::array<uint8_t, kGroupIdBytes>& group_id,
                              const SecureBytes<kKeyBytes>& content_key) {
@@ -84,6 +86,21 @@ std::vector<uint8_t> content_aad(
   sodium_memzero(digest.data(), digest.size());
   sodium_memzero(wrapper_bytes.data(), wrapper_bytes.size());
   return aad;
+}
+
+std::array<uint8_t, crypto_hash_sha256_BYTES> transcript_digest(
+    const std::vector<uint8_t>& aad, const std::vector<uint8_t>& ciphertext) {
+  init_sodium();
+  crypto_hash_sha256_state state;
+  crypto_hash_sha256_init(&state);
+  crypto_hash_sha256_update(
+      &state, reinterpret_cast<const uint8_t*>(kSignDomain.data()),
+      kSignDomain.size());
+  crypto_hash_sha256_update(&state, aad.data(), aad.size());
+  crypto_hash_sha256_update(&state, ciphertext.data(), ciphertext.size());
+  std::array<uint8_t, crypto_hash_sha256_BYTES> digest{};
+  crypto_hash_sha256_final(&state, digest.data());
+  return digest;
 }
 
 std::vector<uint8_t> encrypt_content(
@@ -223,6 +240,18 @@ std::string send(store::VaultStore& vault,
   const std::vector<uint8_t> ciphertext =
       encrypt_content(content_key, plaintext, nonce, aad);
 
+  // The content key is shared with every member, so the AEAD alone proves only
+  // that *a member* produced the ciphertext. The sender's Ed25519 identity key
+  // signs the transcript, binding the content, the wrappers and the header to
+  // the one identity the recipient already verified. Without this, any member
+  // could re-encrypt the body under the shared key and attribute it to the
+  // sender before the original reached the others.
+  std::array<uint8_t, crypto_hash_sha256_BYTES> digest =
+      transcript_digest(aad, ciphertext);
+  Signature signature{};
+  sign(my_identity_sk, digest.data(), digest.size(), signature);
+  sodium_memzero(digest.data(), digest.size());
+
   std::vector<uint8_t> body;
   serial::Writer<std::vector<uint8_t>> w(body);
   w.bytes(kGroupMagic.data(), kGroupMagic.size());
@@ -235,6 +264,7 @@ std::string send(store::VaultStore& vault,
     w.str(wrapper);
   }
   w.blob(ciphertext.data(), ciphertext.size());
+  w.bytes(signature.data(), signature.size());
   if (body.size() > kMaxGroupBlockBytes) {
     throw Error("group block exceeds the size limit");
   }
@@ -280,6 +310,8 @@ ReceiveResult receive(store::VaultStore& vault,
     wrappers.push_back(std::move(wrapper));
   }
   const std::vector<uint8_t> ciphertext = r.blob();
+  Signature signature{};
+  r.bytes(signature.data(), signature.size());
   if (!r.at_end()) {
     throw Error("group message has trailing data");
   }
@@ -297,6 +329,17 @@ ReceiveResult receive(store::VaultStore& vault,
   }
 
   const std::vector<uint8_t> aad = content_aad(group_id, sender, wrappers);
+  std::array<uint8_t, crypto_hash_sha256_BYTES> digest =
+      transcript_digest(aad, ciphertext);
+  const bool sender_ok =
+      verify(sender, digest.data(), digest.size(), signature);
+  sodium_memzero(digest.data(), digest.size());
+  if (!sender_ok) {
+    throw Error(
+        "group message sender signature is invalid; the content was not "
+        "produced by the identity it names");
+  }
+
   SecureBytes<kKeyBytes> content_key;
   bool found = false;
   ReceiveResult result;

@@ -21,6 +21,12 @@
 // key and the content but not the other wrappers' keys. The member list is not
 // in the block: the wrappers are opaque, and a recipient only has to find the
 // one its own session can open.
+//
+// Because every member learns the content key, the AEAD alone would only prove
+// that *some member* produced the ciphertext. The block is therefore signed
+// with the sender's Ed25519 identity key over the header, the wrapper digest
+// and the content, so a member cannot re-encrypt the body and attribute it to
+// the sender.
 namespace ratchet::group {
 
 // A bundle that has to be handed to every member. It carries one wrapper per

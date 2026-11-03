@@ -147,9 +147,11 @@ messaggio una sola volta con una chiave di contenuto casuale e incapsula quella
 chiave per ogni membro attraverso la sessione 1:1 già esistente. Ogni membro
 riceve lo stesso blocco; `recv` trova l'involucro indirizzato al vault locale e
 decifra il contenuto condiviso. Servono almeno due alias `--to` e ogni contatto
-deve essere già verificato. Il blocco mostra quanti membri ci sono, non le loro
-identità. I messaggi di gruppo per ora esistono solo nella CLI: l'interfaccia a
-terminale e quella desktop mostrano ancora la conversazione 1:1.
+deve essere già verificato. Il blocco è firmato con la chiave d'identità del
+mittente, quindi un membro non può ricifrare il corpo condiviso e attribuirlo al
+mittente. Il blocco mostra quanti membri ci sono, non le loro identità. I
+messaggi di gruppo per ora esistono solo nella CLI: l'interfaccia a terminale e
+quella desktop mostrano ancora la conversazione 1:1.
 
 Il programma prova a individuare un'unità rimovibile. Se la rilevazione non è
 adatta al tuo caso, passa `--usb-path <cartella>` ai comandi o imposta

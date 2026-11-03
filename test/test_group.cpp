@@ -123,7 +123,7 @@ TEST("group-receive refuses a message with no wrapper for this vault") {
   CHECK_THROWS(group::receive(dave.vault, dave.sk, dave.pk, block));
 }
 
-TEST("group-receive rejects a tampered content ciphertext") {
+TEST("group-receive rejects a tampered sender signature") {
   Party alice = make_party(3);
   Party bob = make_party(3);
   Party carol = make_party(3);
@@ -136,7 +136,29 @@ TEST("group-receive rejects a tampered content ciphertext") {
       group::send(alice.vault, alice.sk, alice.pk, {0, 1}, "tamper me");
   std::vector<uint8_t> body = wire::decode_block("GROUP", block);
   CHECK(!body.empty());
-  body.back() ^= 0x01;
+  body.back() ^= 0x01;  // last byte of the 64-byte Ed25519 signature
+  const std::string forged = wire::encode_block("GROUP", body.data(), body.size());
+  CHECK_THROWS(group::receive(bob.vault, bob.sk, bob.pk, forged));
+}
+
+TEST("group-receive rejects re-encrypted content under the shared key") {
+  // The threat this pins down: every member learns the content key, so a
+  // member could re-encrypt the body. The sender signature is what stops that
+  // from being attributed to the sender; changing the ciphertext while leaving
+  // the signature alone must fail before any wrapper is consumed.
+  Party alice = make_party(3);
+  Party bob = make_party(3);
+  Party carol = make_party(3);
+  introduce(bob, alice, "bob");
+  introduce(carol, alice, "carol");
+  introduce(alice, bob, "alice");
+  introduce(alice, carol, "alice");
+
+  const std::string block =
+      group::send(alice.vault, alice.sk, alice.pk, {0, 1}, "original");
+  std::vector<uint8_t> body = wire::decode_block("GROUP", block);
+  CHECK(body.size() > 64);
+  body[body.size() - 65] ^= 0x01;  // last ciphertext byte, signature untouched
   const std::string forged = wire::encode_block("GROUP", body.data(), body.size());
   CHECK_THROWS(group::receive(bob.vault, bob.sk, bob.pk, forged));
 }
