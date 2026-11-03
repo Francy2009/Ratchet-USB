@@ -27,6 +27,11 @@
 // with the sender's Ed25519 identity key over the header, the wrapper digest
 // and the content, so a member cannot re-encrypt the body and attribute it to
 // the sender.
+//
+// Each wrapper is a normal 1:1 MESSAGE block sealed to the recipient's identity
+// key under a fresh ephemeral. The inner ratchet header therefore never reaches
+// the wire, so an established session's dh_pub cannot be matched to an earlier
+// 1:1 envelope to link that contact to the group.
 namespace ratchet::group {
 
 // A bundle that has to be handed to every member. It carries one wrapper per

@@ -139,9 +139,12 @@ encrypts the message once under a random content key and wraps that key for each
 member through the 1:1 session you already have with them. Every member receives
 the same block; `recv` finds the wrapper addressed to the local vault and
 decrypts the shared content. At least two `--to` aliases are required, and each
-contact must be verified first. The block is signed with the sender's identity
-key, so a member cannot re-encrypt the shared body and pass it off as the
-sender's. The block shows how many members there are, but not their identities.
+contact must be verified first. Each wrapper is sealed to its member's identity
+key under a fresh ephemeral, so the inner 1:1 ratchet header is not on the wire
+and cannot link a member to earlier traffic. The block is signed with the
+sender's identity key, so a member cannot re-encrypt the shared body and pass it
+off as the sender's. The block shows how many members there are, but not their
+identities.
 Group messages are currently CLI-only: the terminal and desktop interfaces still
 show the 1:1 conversation.
 

@@ -8,6 +8,7 @@
 #include <unordered_set>
 
 #include "ratchet/identity.hpp"
+#include "ratchet/kdf.hpp"
 #include "ratchet/message.hpp"
 #include "ratchet/ratchet.hpp"
 #include "ratchet/serial.hpp"
@@ -90,6 +91,95 @@ std::vector<uint8_t> content_aad(
   sodium_memzero(digest.data(), digest.size());
   sodium_memzero(wrapper_bytes.data(), wrapper_bytes.size());
   return aad;
+}
+
+void derive_wrapper_key(const SecureBytes<32>& shared, SecureBytes<32>& key) {
+  constexpr std::string_view kSalt = "Ratchet-USB/v1/group-wrapper";
+  constexpr std::string_view kInfo = "Ratchet-USB/v1/group-wrapper-key";
+  kdf::Prk prk;
+  kdf::extract(prk, reinterpret_cast<const uint8_t*>(kSalt.data()),
+               kSalt.size(), shared.data(), shared.size());
+  kdf::expand(key.data(), key.size(), kInfo, prk);
+}
+
+// The inner wrapper is an ordinary 1:1 MESSAGE block, whose header carries a
+// ratchet public key. Put it inside a sealed box to the recipient's identity
+// key so that header never reaches the wire: a fresh ephemeral key per wrapper
+// is unlinkable to any earlier 1:1 envelope, while the key itself is still
+// wrapped by the existing Double Ratchet session inside.
+std::string seal_wrapper(const IdentitySigningPublicKey& recipient_identity,
+                         const std::string& inner_block) {
+  init_sodium();
+  IdentityDHPublicKey recipient_dh;
+  identity_dh_public(recipient_identity, recipient_dh);
+
+  x25519::SecretKey ephemeral_sk;
+  x25519::PublicKey ephemeral_pub;
+  x25519::generate_keypair(ephemeral_sk, ephemeral_pub);
+
+  SecureBytes<32> shared;
+  x25519::dh(ephemeral_sk, recipient_dh, shared);
+  SecureBytes<32> key;
+  derive_wrapper_key(shared, key);
+
+  std::array<uint8_t, kNonceBytes> nonce{};
+  randombytes_buf(nonce.data(), nonce.size());
+  std::vector<uint8_t> ciphertext(
+      inner_block.size() + crypto_aead_chacha20poly1305_ietf_ABYTES);
+  unsigned long long ciphertext_len = 0;
+  if (crypto_aead_chacha20poly1305_ietf_encrypt(
+          ciphertext.data(), &ciphertext_len,
+          reinterpret_cast<const uint8_t*>(inner_block.data()),
+          inner_block.size(), nullptr, 0, nullptr, nonce.data(),
+          key.data()) != 0) {
+    throw Error("group wrapper encryption failed");
+  }
+  ciphertext.resize(ciphertext_len);
+
+  std::vector<uint8_t> out;
+  serial::Writer<std::vector<uint8_t>> w(out);
+  w.bytes(ephemeral_pub.data(), ephemeral_pub.size());
+  w.bytes(nonce.data(), nonce.size());
+  w.blob(ciphertext.data(), ciphertext.size());
+  return std::string(reinterpret_cast<const char*>(out.data()), out.size());
+}
+
+std::string unseal_wrapper(const IdentitySigningSecretKey& my_identity_sk,
+                           const IdentitySigningPublicKey& my_identity_pk,
+                           std::string_view wrapper) {
+  init_sodium();
+  serial::Reader r(reinterpret_cast<const uint8_t*>(wrapper.data()),
+                   wrapper.size());
+  x25519::PublicKey ephemeral_pub{};
+  r.bytes(ephemeral_pub.data(), ephemeral_pub.size());
+  std::array<uint8_t, kNonceBytes> nonce{};
+  r.bytes(nonce.data(), nonce.size());
+  const std::vector<uint8_t> ciphertext = r.blob();
+  if (!r.at_end()) {
+    throw Error("group wrapper has trailing data");
+  }
+  if (ciphertext.size() < crypto_aead_chacha20poly1305_ietf_ABYTES) {
+    throw Error("group wrapper ciphertext is too short");
+  }
+
+  IdentityDHSecretKey my_dh_sk;
+  IdentityDHPublicKey my_dh_pk;
+  identity_dh_keypair(my_identity_sk, my_identity_pk, my_dh_sk, my_dh_pk);
+  SecureBytes<32> shared;
+  x25519::dh(my_dh_sk, ephemeral_pub, shared);
+  SecureBytes<32> key;
+  derive_wrapper_key(shared, key);
+
+  SecureBuffer plaintext;
+  plaintext.resize(ciphertext.size());
+  unsigned long long plaintext_len = 0;
+  if (crypto_aead_chacha20poly1305_ietf_decrypt(
+          plaintext.data(), &plaintext_len, nullptr, ciphertext.data(),
+          ciphertext.size(), nullptr, 0, nonce.data(), key.data()) != 0) {
+    throw Error("group wrapper authentication failed");
+  }
+  return std::string(reinterpret_cast<const char*>(plaintext.data()),
+                     plaintext_len);
 }
 
 std::array<uint8_t, crypto_hash_sha256_BYTES> transcript_digest(
@@ -234,9 +324,10 @@ std::string send(store::VaultStore& vault,
   std::vector<std::string> wrappers;
   wrappers.reserve(contact_indices.size());
   for (const std::size_t index : contact_indices) {
+    const std::string inner = session::send(
+        working, my_identity_sk, my_identity_pk, index, key_payload);
     wrappers.push_back(
-        session::send(working, my_identity_sk, my_identity_pk, index,
-                      key_payload));
+        seal_wrapper(working.contacts[index].identity_pub, inner));
   }
 
   const std::vector<uint8_t> aad =
@@ -356,9 +447,25 @@ ReceiveResult receive(store::VaultStore& vault,
   bool found = false;
   ReceiveResult result;
   for (const std::string& wrapper : wrappers) {
+    // Try each wrapper on its own copy. A valid 1:1 envelope that is not a
+    // group-key payload must not advance the session that a later, genuine
+    // wrapper will commit: otherwise the direct message would be consumed
+    // without ever being returned to the user.
+    std::string inner;
+    try {
+      inner = unseal_wrapper(my_identity_sk, my_identity_pk, wrapper);
+    } catch (const Error&) {
+      // Not sealed to this vault (or tampered), so it is not ours.
+      continue;
+    }
+
+    const SecureBuffer attempt_snapshot = store::serialize(working);
+    store::VaultStore attempt =
+        store::parse(attempt_snapshot.data(), attempt_snapshot.size());
     session::ReceiveResult wrapped;
     try {
-      wrapped = session::receive(working, my_identity_sk, my_identity_pk, wrapper);
+      wrapped = session::receive(attempt, my_identity_sk, my_identity_pk,
+                                 inner);
     } catch (const Error&) {
       // A wrapper addressed to another member normally fails here: it names a
       // prekey this vault does not have, or its ratchet tag does not verify.
@@ -376,6 +483,7 @@ ReceiveResult receive(store::VaultStore& vault,
     if (wrapped.contact_index != static_cast<std::size_t>(sender_index)) {
       throw Error("group wrapper sender does not match the message header");
     }
+    working = std::move(attempt);
     result.contact_index = wrapped.contact_index;
     result.alias = wrapped.alias;
     found = true;
