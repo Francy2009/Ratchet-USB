@@ -160,7 +160,18 @@ TEST("group-receive rejects re-encrypted content under the shared key") {
   CHECK(body.size() > 64);
   body[body.size() - 65] ^= 0x01;  // last ciphertext byte, signature untouched
   const std::string forged = wire::encode_block("GROUP", body.data(), body.size());
-  CHECK_THROWS(group::receive(bob.vault, bob.sk, bob.pk, forged));
+  bool signature_error = false;
+  try {
+    group::receive(bob.vault, bob.sk, bob.pk, forged);
+  } catch (const Error& e) {
+    signature_error =
+        std::string(e.what()).find("sender signature is invalid") !=
+        std::string::npos;
+  }
+  // The AEAD would also reject this block, but the signature must be checked
+  // first; otherwise a member could still make Carol consume her wrapper
+  // before the forged content fails.
+  CHECK(signature_error);
 
   // The rejected block must not have consumed Bob's wrapper: the genuine block
   // still has to decrypt afterwards.
