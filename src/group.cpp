@@ -340,13 +340,21 @@ ReceiveResult receive(store::VaultStore& vault,
         "produced by the identity it names");
   }
 
+  // The wrapper is authenticated by the 1:1 session, but the shared content is
+  // not authenticated until the end. Run the whole receive on a serialized
+  // copy and commit only after the content has also authenticated, so a block
+  // that fails later cannot consume a wrapper, a message key or a prekey in
+  // the caller's vault.
+  const SecureBuffer snapshot = store::serialize(vault);
+  store::VaultStore working = store::parse(snapshot.data(), snapshot.size());
+
   SecureBytes<kKeyBytes> content_key;
   bool found = false;
   ReceiveResult result;
   for (const std::string& wrapper : wrappers) {
     session::ReceiveResult wrapped;
     try {
-      wrapped = session::receive(vault, my_identity_sk, my_identity_pk, wrapper);
+      wrapped = session::receive(working, my_identity_sk, my_identity_pk, wrapper);
     } catch (const Error&) {
       // A wrapper addressed to another member normally fails here: it names a
       // prekey this vault does not have, or its ratchet tag does not verify.
@@ -377,6 +385,7 @@ ReceiveResult receive(store::VaultStore& vault,
 
   result.group_id = group_id;
   result.plaintext = decrypt_content(content_key, ciphertext, nonce, aad);
+  vault = std::move(working);
   return result;
 }
 

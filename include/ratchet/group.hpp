@@ -71,6 +71,10 @@ struct ReceiveResult {
 // Finds the wrapper this vault can open, unwraps the content key, and decrypts
 // the shared content. Throws Error when the block is malformed, when no wrapper
 // belongs to this vault, or when the content does not authenticate.
+//
+// Runs on a serialized copy of the vault and commits it only after the sender
+// signature, the wrapper and the content all verify. A rejected block therefore
+// cannot consume a wrapper, a message key or a one-time prekey.
 ReceiveResult receive(store::VaultStore& vault,
                       const IdentitySigningSecretKey& my_identity_sk,
                       const IdentitySigningPublicKey& my_identity_pk,

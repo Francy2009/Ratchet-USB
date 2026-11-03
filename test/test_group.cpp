@@ -161,4 +161,9 @@ TEST("group-receive rejects re-encrypted content under the shared key") {
   body[body.size() - 65] ^= 0x01;  // last ciphertext byte, signature untouched
   const std::string forged = wire::encode_block("GROUP", body.data(), body.size());
   CHECK_THROWS(group::receive(bob.vault, bob.sk, bob.pk, forged));
+
+  // The rejected block must not have consumed Bob's wrapper: the genuine block
+  // still has to decrypt afterwards.
+  CHECK_EQ(group::receive(bob.vault, bob.sk, bob.pk, block).plaintext,
+           std::string("original"));
 }
