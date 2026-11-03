@@ -75,6 +75,10 @@ std::vector<uint8_t> content_aad(
   crypto_hash_sha256(digest.data(), wrapper_bytes.data(), wrapper_bytes.size());
 
   std::vector<uint8_t> aad;
+  // Reserve the exact size: GCC 13's vector-growth analysis is unhappy about
+  // the small first append into an empty vector, and the size is known here.
+  aad.reserve(kGroupMagic.size() + 1 + group_id.size() + sender.size() + 4 +
+              digest.size());
   serial::Writer<std::vector<uint8_t>> w(aad);
   w.bytes(kGroupMagic.data(), kGroupMagic.size());
   w.u8(kGroupVersion);

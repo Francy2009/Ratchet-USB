@@ -106,6 +106,40 @@ TEST("group-send refuses an unverified recipient") {
       group::send(alice.vault, alice.sk, alice.pk, {0, 1}, "not yet"));
 }
 
+TEST("group-receive rolls back when only the nonce is changed") {
+  // The nonce is not part of the signed transcript, so this block still passes
+  // the sender signature and Bob's wrapper opens. It must fail at content
+  // authentication, and that failure must not consume Bob's wrapper: the
+  // genuine block has to decrypt afterwards.
+  Party alice = make_party(3);
+  Party bob = make_party(3);
+  Party carol = make_party(3);
+  introduce(bob, alice, "bob");
+  introduce(carol, alice, "carol");
+  introduce(alice, bob, "alice");
+  introduce(alice, carol, "alice");
+
+  const std::string block =
+      group::send(alice.vault, alice.sk, alice.pk, {0, 1}, "original");
+  std::vector<uint8_t> body = wire::decode_block("GROUP", block);
+  // magic(4) + version(1) + group id(16) + sender(32) = 53, then the nonce.
+  CHECK(body.size() > 53 + 12);
+  body[53] ^= 0x01;
+  const std::string forged = wire::encode_block("GROUP", body.data(), body.size());
+
+  bool authentication_error = false;
+  try {
+    group::receive(bob.vault, bob.sk, bob.pk, forged);
+  } catch (const Error& e) {
+    authentication_error =
+        std::string(e.what()).find("authentication failed") != std::string::npos;
+  }
+  CHECK(authentication_error);
+
+  CHECK_EQ(group::receive(bob.vault, bob.sk, bob.pk, block).plaintext,
+           std::string("original"));
+}
+
 TEST("group-receive refuses a message with no wrapper for this vault") {
   Party alice = make_party(3);
   Party bob = make_party(3);
