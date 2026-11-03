@@ -660,5 +660,19 @@ printf '%s\n' "$CAROL_PASS" |
 grep -q "hello group" "$WORK/group-carol.txt" ||
   fail "carol did not decrypt the group message"
 
+# A block that never reaches the caller must not commit the ratchet state that
+# produced it. /dev/full fails on the first write, so group-send has to report
+# the error and leave vault.bin byte-for-byte unchanged.
+step "a failed block write does not commit group state"
+BEFORE_HASH="$(sha256sum "$ALICE/vault.bin" | awk '{print $1}')"
+if printf '%s\n' "$NEW_PASS" |
+     "$BIN" group-send --usb-path "$ALICE" --to bob --to carol "lost block" \
+     >/dev/full 2>/dev/null; then
+  fail "group-send succeeded with a failing stdout"
+fi
+AFTER_HASH="$(sha256sum "$ALICE/vault.bin" | awk '{print $1}')"
+[ "$BEFORE_HASH" = "$AFTER_HASH" ] ||
+  fail "group-send changed the vault after its block could not be written"
+
 echo
 echo "smoke: all end-to-end checks passed"

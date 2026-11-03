@@ -71,6 +71,17 @@ void write_structured_or_throw(const gui_format::Result& result) {
   }
 }
 
+// Writes the pasteable block and makes sure it left the process before the
+// caller commits the ratchet state that produced it. A closed pipe or a full
+// disk must not consume an opening message the recipient never received.
+void write_block_or_throw(const std::string& block) {
+  std::cout << block;
+  std::cout.flush();
+  if (!std::cout) {
+    throw Error("could not write the message block; the vault was not changed");
+  }
+}
+
 int cmd_init(const Options& opts) {
   const fs::path usb = require_usb_path(opts, /*for_init=*/true);
   warn_if_host_disk(usb);
@@ -827,10 +838,10 @@ int cmd_group_send(const Options& opts) {
   wipe_string(plaintext);
   wipe_plaintext.dismiss();
 
-  app::save_vault(path, store, opened.params, opened.passphrase);
-
   std::cerr << "\n";
-  std::cout << block;
+  write_block_or_throw(block);
+
+  app::save_vault(path, store, opened.params, opened.passphrase);
   return 0;
 }
 
@@ -930,12 +941,14 @@ int cmd_send(const Options& opts) {
   wipe_string(plaintext);
   wipe_plaintext.dismiss();
 
-  app::save_vault(path, store, opened.params, opened.passphrase);
-
   // stdout is only the block, so `send alice "hi" > msg.txt` yields a file that
   // can be pasted as-is; the blank separator is part of the terminal display.
+  // Deliver it before saving: a failed write must not commit a session whose
+  // opening block never reached the caller.
   std::cerr << "\n";
-  std::cout << block;
+  write_block_or_throw(block);
+
+  app::save_vault(path, store, opened.params, opened.passphrase);
   return 0;
 }
 
