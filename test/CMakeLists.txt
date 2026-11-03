@@ -12,6 +12,7 @@ add_executable(ratchet_tests
                test_triple_ratchet.cpp
                test_spqr.cpp
                test_session.cpp
+               test_group.cpp
                test_message.cpp
                test_cli.cpp
                test_media.cpp

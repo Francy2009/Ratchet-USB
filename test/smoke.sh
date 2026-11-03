@@ -602,5 +602,63 @@ printf '%s\n' "$BOB_PASS" |
 grep -q "after remove" "$WORK/rerecv.txt" ||
   fail "the message after re-add did not decrypt"
 
+# ---------------------------------------------------------------------------
+# Multi-user: one content key wrapped once per member through the 1:1 session
+# each member already has with the sender. Bob and Carol get the same block;
+# each finds the wrapper addressed to their own vault.
+
+step "a group message reaches both members"
+CAROL="$WORK/carol"
+mkdir -p "$CAROL"
+"$BIN" init --usb-path "$CAROL" --otpk-count 3 "${CHEAP[@]}" </dev/null \
+  >"$WORK/carol-init.txt" 2>&1 ||
+  fail "carol init exited non-zero"
+CAROL_PASS="$(extract_phrase "$WORK/carol-init.txt")"
+
+printf '%s\n' "$NEW_PASS" |
+  "$BIN" card --usb-path "$ALICE" >"$WORK/alice-for-carol.card" 2>/dev/null ||
+  fail "alice could not export a card for carol"
+printf '%s\n' "$CAROL_PASS" |
+  "$BIN" add --usb-path "$CAROL" alice --card "$WORK/alice-for-carol.card" \
+  >/dev/null 2>&1 ||
+  fail "carol could not import alice"
+printf '%s\n' "$CAROL_PASS" |
+  "$BIN" trust --usb-path "$CAROL" alice --confirmed >/dev/null 2>&1 ||
+  fail "carol could not trust alice"
+
+printf '%s\n' "$CAROL_PASS" |
+  "$BIN" card --usb-path "$CAROL" >"$WORK/carol-for-alice.card" 2>/dev/null ||
+  fail "carol could not export a card"
+printf '%s\n' "$NEW_PASS" |
+  "$BIN" add --usb-path "$ALICE" carol --card "$WORK/carol-for-alice.card" \
+  >/dev/null 2>&1 ||
+  fail "alice could not import carol"
+printf '%s\n' "$NEW_PASS" |
+  "$BIN" trust --usb-path "$ALICE" carol --confirmed >/dev/null 2>&1 ||
+  fail "alice could not trust carol"
+
+printf '%s\n' "$NEW_PASS" |
+  "$BIN" group-send --usb-path "$ALICE" --to bob --to carol "hello group" \
+  >"$WORK/group.txt" 2>"$WORK/group.err" ||
+  fail "group-send exited non-zero"
+grep -q "BEGIN RATCHET GROUP" "$WORK/group.txt" ||
+  fail "group-send did not print a GROUP block"
+
+printf '%s\n' "$BOB_PASS" |
+  "$BIN" recv --usb-path "$BOB" "$(cat "$WORK/group.txt")" \
+  >"$WORK/group-bob.txt" 2>"$WORK/group-bob.err" ||
+  fail "bob could not receive the group message"
+grep -q "hello group" "$WORK/group-bob.txt" ||
+  fail "bob did not decrypt the group message"
+grep -q "^(group " "$WORK/group-bob.err" ||
+  fail "bob's recv did not label the message as a group"
+
+printf '%s\n' "$CAROL_PASS" |
+  "$BIN" recv --usb-path "$CAROL" "$(cat "$WORK/group.txt")" \
+  >"$WORK/group-carol.txt" 2>"$WORK/group-carol.err" ||
+  fail "carol could not receive the group message"
+grep -q "hello group" "$WORK/group-carol.txt" ||
+  fail "carol did not decrypt the group message"
+
 echo
 echo "smoke: all end-to-end checks passed"

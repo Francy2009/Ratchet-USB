@@ -216,8 +216,15 @@ to defend against it:
   generated vault passphrase cannot be reprinted or reset, and the 12-word
   BIP-39 phrase restores the identity, not the vault's contacts or history.
 - **Physical coercion.** There is no duress passphrase and no deniable volume.
-- **Multiple devices sharing one identity**, group chats, and a key directory.
-  These are not implemented in this version.
+- **Multiple devices sharing one identity** and a key directory. These are not
+  implemented in this version.
+- **Group chat as a ratcheted group.** `group-send` encrypts the content once
+  and wraps the content key once per member through that member's existing 1:1
+  session. It is not a group ratchet and keeps no group state: the block
+  reveals how many recipients there are (not who they are), the sender chooses
+  the member list, and a member who leaves still holds the content keys of
+  messages already delivered. Membership changes therefore do not rekey the
+  group; start a fresh message after a removal.
 
 ## No warranty, and using it lawfully
 

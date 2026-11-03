@@ -45,6 +45,7 @@ const std::vector<CommandSpec>& specs() {
       {"reset-session", {"--usb-path"}, 1},
       {"remove", {"--usb-path", "--yes"}, 1},
       {"send", {"--usb-path", "--file", "--stdin-payload"}, 2},
+      {"group-send", {"--usb-path", "--to", "--stdin-payload"}, 1},
       {"recv",
        {"--usb-path", "--stage-file", "--stdin-payload", "--structured-output"},
        1},
@@ -85,6 +86,10 @@ void assign_positional(Options& opts, const std::vector<std::string>& positional
     if (const std::string* v = take()) {
       opts.name = *v;
     }
+  } else if (opts.command == "group-send") {
+    if (const std::string* v = take()) {
+      opts.message = *v;
+    }
   } else if (opts.command == "send") {
     if (const std::string* v = take()) {
       opts.to = *v;
@@ -124,6 +129,8 @@ void print_usage(std::ostream& os) {
      << "  " << kProgram << " remove   --usb-path <dir> [--yes] <alias>\n"
      << "  " << kProgram
      << " send     --usb-path <dir> <alias> [message|--file <file>]\n"
+     << "  " << kProgram
+     << " group-send --usb-path <dir> --to <alias> --to <alias> [message]\n"
      << "  " << kProgram << " recv     --usb-path <dir> [message] [--stage-file]\n"
      << "  " << kProgram
      << " ui       [--usb-path <dir>] [--lang en|it] [--idle-lock <s>]\n"
@@ -165,6 +172,12 @@ void print_usage(std::ostream& os) {
      << "            instead; the file itself is never modified or copied\n"
      << "            elsewhere. A message given as an argument is visible in\n"
      << "            the shell history; omit it or use --stdin-payload.\n"
+     << "  group-send  Encrypt a message once and wrap its content key for\n"
+     << "            each --to contact through the existing 1:1 session. The\n"
+     << "            same block is handed to every member; recv finds the\n"
+     << "            wrapper addressed to this vault. At least two --to flags\n"
+     << "            are required. Plaintext on the command line is visible in\n"
+     << "            argv; omit it or use --stdin-payload.\n"
      << "  recv      Decrypt a pasted message block (establishing the\n"
      << "            session automatically if it is the first one). [message]\n"
      << "            falls back to standard input, or a prompt, when omitted.\n"
@@ -206,11 +219,14 @@ void print_usage(std::ostream& os) {
      << "  --fingerprint        Print only the identity fingerprint (card only).\n"
      << "  --card <file>        Read a contact card from a file (add only).\n"
      << "  --file <file>        Encrypt a file instead of text (send only).\n"
+     << "  --to <alias>         Add a group recipient; repeat for each member\n"
+     << "                       (group-send only, at least two).\n"
      << "  --stage-file         Stage a received file in the private temporary\n"
      << "                       folder and print its path, without asking on a\n"
      << "                       terminal whether to open it (recv only).\n"
      << "  --stdin-payload <n>  Read exactly <n> bytes from standard input as the\n"
-     << "                       message (send) or block (recv), before the\n"
+     << "                       message (send, group-send) or block (recv),\n"
+     << "                       before the\n"
      << "                       passphrase. For front ends that must not put the\n"
      << "                       plaintext in the child's argv; requires --usb-path\n"
      << "                       or RATCHET_USB_PATH.\n"
@@ -385,6 +401,9 @@ Options parse_args(const std::vector<std::string_view>& args) {
       }
       opts.idle_lock_seconds = static_cast<int>(seconds);
       note("--idle-lock");
+    } else if (arg == "--to") {
+      opts.group_members.emplace_back(next("--to"));
+      note("--to");
     } else if (arg == "--card") {
       opts.card_file = std::string(next("--card"));
       note("--card");

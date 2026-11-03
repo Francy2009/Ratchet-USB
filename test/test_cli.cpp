@@ -356,3 +356,25 @@ TEST("cli: trust takes --confirmed and --show-fingerprint, and nothing else") {
   CHECK_THROWS(parse({"send", "alice", "hi", "--show-fingerprint"}));
   CHECK_THROWS(parse({"remove", "alice", "--confirmed"}));
 }
+
+// --- group messaging ---------------------------------------------------------
+
+TEST("cli: group-send takes repeated --to flags and one optional message") {
+  const Options two = parse(
+      {"group-send", "--to", "bob", "--to", "carol", "hello group"});
+  CHECK_EQ(two.group_members.size(), static_cast<std::size_t>(2));
+  CHECK_EQ(two.group_members[0], std::string("bob"));
+  CHECK_EQ(two.group_members[1], std::string("carol"));
+  CHECK(two.message.has_value());
+  CHECK_EQ(*two.message, std::string("hello group"));
+
+  // The count is checked by the command, not the parser: `--to` is grammatical
+  // with any number, and the command has the vault to resolve the names.
+  const Options none = parse({"group-send", "hello"});
+  CHECK(none.group_members.empty());
+  CHECK(none.message.has_value());
+
+  // --to belongs to group-send alone.
+  CHECK_THROWS(parse({"send", "alice", "hi", "--to", "bob"}));
+  CHECK_THROWS(parse({"group-send", "--to"}));
+}

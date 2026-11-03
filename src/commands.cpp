@@ -15,6 +15,7 @@
 #include "ratchet/command_io.hpp"
 #include "ratchet/file.hpp"
 #include "ratchet/gui_format.hpp"
+#include "ratchet/group.hpp"
 #include "ratchet/i18n.hpp"
 #include "ratchet/identity.hpp"
 #include "ratchet/media.hpp"
@@ -757,6 +758,82 @@ int cmd_remove(const Options& opts) {
   return 0;
 }
 
+int cmd_group_send(const Options& opts) {
+  if (opts.group_members.size() < 2) {
+    throw Error("group-send needs at least two --to recipients");
+  }
+  if (opts.group_members.size() > group::kMaxMembers) {
+    throw Error("group-send accepts at most " +
+                std::to_string(group::kMaxMembers) + " recipients");
+  }
+  if (opts.stdin_payload_bytes && opts.message.has_value()) {
+    throw Error("--stdin-payload and a message cannot be combined");
+  }
+  require_known_usb_for_payload(opts);
+  const fs::path usb = require_usb_path(opts);
+  const fs::path path = vault::vault_path(usb);
+
+  if (opts.message.has_value()) {
+    std::cerr
+        << "warning: the message was passed on the command line; it is visible "
+           "in the shell history and in /proc/<pid>/cmdline.\n"
+           "warning: omit it (read from standard input) or use --stdin-payload "
+           "to keep the plaintext out of argv.\n";
+  }
+
+  std::string plaintext;
+  StringWipe wipe_plaintext(plaintext);
+  if (opts.stdin_payload_bytes) {
+    if (*opts.stdin_payload_bytes > message::kMaxPlaintextBytes) {
+      throw Error("--stdin-payload exceeds the 4 MiB plaintext limit");
+    }
+    plaintext = read_exact(std::cin, *opts.stdin_payload_bytes, "message");
+    if (plaintext.empty()) {
+      throw Error("message must not be empty");
+    }
+  }
+
+  OpenedVault opened = unlock_vault(path);
+  store::VaultStore& store = opened.store;
+
+  std::vector<std::size_t> indices;
+  indices.reserve(opts.group_members.size());
+  for (const std::string& member : opts.group_members) {
+    const int idx = store.find_contact(member);
+    if (idx < 0) {
+      throw Error("no contact named '" +
+                  terminal::escape_line_control_chars(member) +
+                  "' (see `contacts`)");
+    }
+    indices.push_back(static_cast<std::size_t>(idx));
+  }
+
+  if (!opts.stdin_payload_bytes) {
+    plaintext = read_text_arg_or_stdin(
+        opts.message, "Message (end with Ctrl-D): ",
+        message::kMaxPlaintextBytes);
+    if (plaintext.empty()) {
+      throw Error("message must not be empty");
+    }
+  }
+
+  IdentitySigningSecretKey identity_sk;
+  IdentitySigningPublicKey identity_pk;
+  derive_identity(store.seed, identity_sk, identity_pk);
+
+  const std::string block = group::send(store, identity_sk, identity_pk,
+                                        indices, plaintext);
+  identity_sk.wipe();
+  wipe_string(plaintext);
+  wipe_plaintext.dismiss();
+
+  app::save_vault(path, store, opened.params, opened.passphrase);
+
+  std::cerr << "\n";
+  std::cout << block;
+  return 0;
+}
+
 int cmd_send(const Options& opts) {
   if (opts.stdin_payload_bytes && opts.message.has_value()) {
     throw Error("--stdin-payload and a message cannot be combined");
@@ -890,6 +967,10 @@ int cmd_recv(const Options& opts) {
         std::size_t{12} * 1024u * 1024u);
   }
 
+  if (group::looks_like_group(block) && opts.structured_output) {
+    throw Error("--structured-output does not support group messages yet");
+  }
+
   OpenedVault opened = unlock_vault(path);
   store::VaultStore& store = opened.store;
 
@@ -897,8 +978,20 @@ int cmd_recv(const Options& opts) {
   IdentitySigningPublicKey identity_pk;
   derive_identity(store.seed, identity_sk, identity_pk);
 
-  session::ReceiveResult result =
-      session::receive(store, identity_sk, identity_pk, block);
+  const bool group_block = group::looks_like_group(block);
+  std::array<uint8_t, 16> group_id{};
+  session::ReceiveResult result;
+  if (group_block) {
+    group::ReceiveResult received =
+        group::receive(store, identity_sk, identity_pk, block);
+    result.contact_index = received.contact_index;
+    result.alias = std::move(received.alias);
+    result.plaintext = std::move(received.plaintext);
+    result.session_established = false;
+    group_id = received.group_id;
+  } else {
+    result = session::receive(store, identity_sk, identity_pk, block);
+  }
   identity_sk.wipe();
 
   // The decrypted body is an ordinary std::string because it has to leave the
@@ -909,6 +1002,9 @@ int cmd_recv(const Options& opts) {
   app::save_vault(path, store, opened.params, opened.passphrase);
 
   const std::string alias = terminal::escape_line_control_chars(result.alias);
+  if (group_block) {
+    std::cerr << "(group " << group::group_id_hex(group_id) << ")\n";
+  }
   if (result.session_established) {
     std::cerr << "(new session established with '" << alias << "')\n";
   }
@@ -1085,6 +1181,9 @@ int run(const Options& opts) {
   }
   if (opts.command == "send") {
     return cmd_send(opts);
+  }
+  if (opts.command == "group-send") {
+    return cmd_group_send(opts);
   }
   if (opts.command == "recv") {
     return cmd_recv(opts);
