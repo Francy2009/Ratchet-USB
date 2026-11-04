@@ -237,8 +237,11 @@ to defend against it:
   `group-send` persist the exact block as `vault.bin.outbox` (mode 0600, beside
   the vault) before saving the advanced ratchet state, then remove it after a
   successful write. If stdout fails, the block remains and `outbox` prints it
-  again; a new send is refused until it is exported or deleted. The file holds
-  the same ciphertext that would have gone to stdout, not the plaintext.
+  again; a new send is refused until it is exported or deleted. The outbox
+  records the vault id and the generation the save must commit, and `outbox`
+  asks for the passphrase and refuses a block that does not match the saved
+  vault, so a crash between the two writes cannot export stale state. The file
+  holds the same ciphertext that would have gone to stdout, not the plaintext.
 
 ## No warranty, and using it lawfully
 

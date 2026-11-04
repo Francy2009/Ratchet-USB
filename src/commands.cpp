@@ -22,6 +22,7 @@
 #include "ratchet/passphrase.hpp"
 #include "ratchet/ratchet.hpp"
 #include "ratchet/screen.hpp"
+#include "ratchet/serial.hpp"
 #include "ratchet/secure.hpp"
 #include "ratchet/session.hpp"
 #include "ratchet/store.hpp"
@@ -95,9 +96,39 @@ void ensure_no_pending_outbox(const fs::path& usb) {
   }
 }
 
-void write_pending_outbox(const fs::path& usb, const std::string& block) {
-  const std::vector<uint8_t> bytes(block.begin(), block.end());
+constexpr std::array<uint8_t, 4> kOutboxMagic = {'R', 'B', 'O', 'X'};
+constexpr uint8_t kOutboxVersion = 1;
+
+void write_pending_outbox(const fs::path& usb, const store::VaultStore& store,
+                          uint64_t committed_generation,
+                          const std::string& block) {
+  std::vector<uint8_t> bytes;
+  serial::Writer<std::vector<uint8_t>> w(bytes);
+  w.bytes(kOutboxMagic.data(), kOutboxMagic.size());
+  w.u8(kOutboxVersion);
+  w.bytes(store.vault_id.data(), store.vault_id.size());
+  w.u64(committed_generation);
+  w.blob(reinterpret_cast<const uint8_t*>(block.data()), block.size());
   vault::write_file(vault::outbox_path(usb), bytes, /*overwrite=*/false);
+}
+
+// True when the vault on disk carries `generation`, false when it does not, and
+// nullopt when that cannot be established. The caller keeps the outbox in the
+// last case: an unreadable or ambiguous vault is not proof that the commit did
+// not happen.
+std::optional<bool> vault_generation_is(const fs::path& path,
+                                        const SecureString& passphrase,
+                                        uint64_t generation) {
+  try {
+    const std::vector<uint8_t> bytes = vault::read_file(path);
+    SecureBuffer plaintext;
+    vault::unseal(bytes.data(), bytes.size(), passphrase, plaintext);
+    const store::VaultStore parsed =
+        store::parse(plaintext.data(), plaintext.size());
+    return parsed.generation == generation;
+  } catch (...) {
+    return std::nullopt;
+  }
 }
 
 void discard_pending_outbox(const fs::path& usb) {
@@ -882,11 +913,22 @@ int cmd_group_send(const Options& opts) {
   // the block is still in the outbox and can be exported with `outbox`; if the
   // vault save fails, remove the outbox because the state it belongs to was
   // not committed.
-  write_pending_outbox(usb, block);
+  if (store.generation == UINT64_MAX) {
+    throw Error("vault generation counter exhausted");
+  }
+  const uint64_t outbox_generation = store.generation + 1;
+  write_pending_outbox(usb, store, outbox_generation, block);
   try {
     app::save_vault(path, store, opened.params, opened.passphrase);
   } catch (...) {
-    discard_pending_outbox(usb);
+    // save_vault can throw after the vault rename (a rollback-anchor or
+    // directory-sync failure), so delete the outbox only when the on-disk
+    // generation proves the commit did not happen.
+    const std::optional<bool> committed =
+        vault_generation_is(path, opened.passphrase, outbox_generation);
+    if (committed.has_value() && !*committed) {
+      discard_pending_outbox(usb);
+    }
     throw;
   }
 
@@ -996,11 +1038,22 @@ int cmd_send(const Options& opts) {
 
   // stdout is only the block, so `send alice "hi" > msg.txt` yields a file that
   // can be pasted as-is; the blank separator is part of the terminal display.
-  write_pending_outbox(usb, block);
+  if (store.generation == UINT64_MAX) {
+    throw Error("vault generation counter exhausted");
+  }
+  const uint64_t outbox_generation = store.generation + 1;
+  write_pending_outbox(usb, store, outbox_generation, block);
   try {
     app::save_vault(path, store, opened.params, opened.passphrase);
   } catch (...) {
-    discard_pending_outbox(usb);
+    // save_vault can throw after the vault rename (a rollback-anchor or
+    // directory-sync failure), so delete the outbox only when the on-disk
+    // generation proves the commit did not happen.
+    const std::optional<bool> committed =
+        vault_generation_is(path, opened.passphrase, outbox_generation);
+    if (committed.has_value() && !*committed) {
+      discard_pending_outbox(usb);
+    }
     throw;
   }
 
@@ -1181,16 +1234,37 @@ int cmd_recv(const Options& opts) {
 
 int cmd_outbox(const Options& opts) {
   const fs::path usb = require_usb_path(opts);
-  // Serialise with send/group-send, which hold the same lock while they create
-  // or remove the outbox.
-  vault::FileLock lock(vault::vault_path(usb));
   const fs::path path = vault::outbox_path(usb);
   if (!fs::exists(path)) {
     throw Error("no pending block at " + path.string());
   }
   const std::vector<uint8_t> bytes = vault::read_file(path);
-  const std::string block(bytes.begin(), bytes.end());
+  serial::Reader r(bytes.data(), bytes.size());
+  std::array<uint8_t, 4> magic{};
+  r.bytes(magic.data(), magic.size());
+  if (magic != kOutboxMagic || r.u8() != kOutboxVersion) {
+    throw Error("the pending block file has an unsupported format");
+  }
+  store::VaultId vault_id{};
+  r.bytes(vault_id.data(), vault_id.size());
+  const uint64_t generation = r.u64();
+  const std::vector<uint8_t> block_bytes = r.blob();
+  if (!r.at_end()) {
+    throw Error("the pending block file has trailing data");
+  }
 
+  // The outbox is written before the vault save. Unlock the vault and require
+  // the generation that the save was supposed to commit: a crash between the
+  // two leaves a stale outbox that must not be exported.
+  OpenedVault opened =
+      unlock_vault(vault::vault_path(usb), "Vault passphrase");
+  if (opened.store.vault_id != vault_id ||
+      opened.store.generation != generation) {
+    throw Error("the pending block does not match the saved vault state; "
+                "delete " + path.string() + " and send again");
+  }
+
+  const std::string block(block_bytes.begin(), block_bytes.end());
   std::cerr << "\n";
   write_block_or_throw(block, path);
   remove_pending_outbox(usb);

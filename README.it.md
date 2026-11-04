@@ -159,9 +159,10 @@ esistono solo nella CLI: l'interfaccia a terminale e quella desktop mostrano
 ancora la conversazione 1:1.
 
 Se lo standard output non riesce a ricevere un blocco generato, il blocco viene
-scritto accanto al vault come `vault.bin.outbox`; `ratchet-usb outbox` lo stampa
-di nuovo e rimuove il file. Un nuovo invio viene rifiutato finché il blocco
-pendente non è stato esportato o eliminato.
+scritto accanto al vault come `vault.bin.outbox`; `ratchet-usb outbox` chiede la
+passphrase del vault, verifica che il blocco appartenga allo stato salvato, lo
+stampa di nuovo e rimuove il file. Un nuovo invio viene rifiutato finché il
+blocco pendente non è stato esportato o eliminato.
 
 Il programma prova a individuare un'unità rimovibile. Se la rilevazione non è
 adatta al tuo caso, passa `--usb-path <cartella>` ai comandi o imposta
