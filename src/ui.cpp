@@ -124,6 +124,10 @@ class Driver {
   void use_path(const fs::path& path);
   void unlock();
   void after_unlock();
+  // Best-effort path to Home for after_unlock()'s failure branch. Never
+  // throws: reaching Home keeps a maintenance/save failure a status line
+  // instead of a dead terminal.
+  bool try_go_home() noexcept;
   void lock(Str reason);
 
   void create_identity(bool from_mnemonic);
@@ -139,6 +143,13 @@ class Driver {
   void paste_from_clipboard();
 
   void save();
+  // True when the command line left a generated-but-unexported block
+  // beside the vault. Every operation that would persist vault state checks
+  // this before mutating anything in memory, so a blocked save never burns
+  // a ratchet step for a block nobody received; save() re-checks as defence
+  // in depth.
+  bool has_pending_outbox() const;
+  void require_no_pending_outbox() const;
   void go_home();
   // Every operation below runs only with a vault open. value() rather than
   // operator-> so that a bug which got here with the vault closed throws
@@ -216,11 +227,20 @@ std::vector<ContactRow> Driver::contact_rows() const {
 }
 
 void Driver::save() {
-  if (fs::exists(vault::outbox_path(vault_path_.parent_path()))) {
-    throw Error("a pending outbox must be exported or deleted before saving the vault");
-  }
+  require_no_pending_outbox();
   app::save_vault(vault_path_, vault().store, vault().params,
                   vault().passphrase);
+}
+
+bool Driver::has_pending_outbox() const {
+  std::error_code ec;
+  return fs::exists(vault::outbox_path(vault_path_.parent_path()), ec);
+}
+
+void Driver::require_no_pending_outbox() const {
+  if (has_pending_outbox()) {
+    throw Error("a pending outbox must be exported or deleted before saving the vault");
+  }
 }
 
 std::vector<std::size_t> Driver::resolve_group_recipients() const {
@@ -344,24 +364,69 @@ void Driver::unlock() {
   after_unlock();
 }
 
-void Driver::after_unlock() {
-  IdentitySigningSecretKey identity_sk;
-  IdentitySigningPublicKey identity_pk;
-  derive_identity(vault().store.seed, identity_sk, identity_pk);
-
-  // The same maintenance `unlock` has always run: rotate a signed prekey past
-  // its age, top the one-time pool back up, drop skipped keys nobody claimed.
-  const app::MaintenanceReport report =
-      app::maintain_prekeys(vault().store, identity_pk, identity_sk);
-  identity_sk.wipe();
-  const bool swept = app::expire_skipped_keys(vault().store) > 0;
-  if (report.changed() || swept) {
-    save();
+bool Driver::try_go_home() noexcept {
+  try {
+    if (!vault_.has_value()) {
+      return false;
+    }
+    if (fingerprint_.empty()) {
+      IdentitySigningSecretKey identity_sk;
+      IdentitySigningPublicKey identity_pk;
+      derive_identity(vault().store.seed, identity_sk, identity_pk);
+      fingerprint_ = hybrid_fingerprint(
+          identity_pk, derive_pq_identity(vault().store.seed).public_key);
+      identity_sk.wipe();
+    }
+    go_home();
+    return true;
+  } catch (...) {
+    return false;
   }
+}
 
-  fingerprint_ = hybrid_fingerprint(
-      identity_pk, derive_pq_identity(vault().store.seed).public_key);
-  go_home();
+void Driver::after_unlock() {
+  // unlock() and create_identity() call this outside their try blocks, and
+  // the drive loop has no handler: anything thrown here would leave run()
+  // and kill the interface. Every failure below stays a status line.
+  try {
+    IdentitySigningSecretKey identity_sk;
+    IdentitySigningPublicKey identity_pk;
+    derive_identity(vault().store.seed, identity_sk, identity_pk);
+
+    // A pending outbox means the on-disk vault is behind a block the user
+    // has not exported yet. Skip the maintenance writes (which would widen
+    // the gap between memory and disk) and stay usable: the status line
+    // tells the user to resolve the outbox with the command line.
+    if (has_pending_outbox()) {
+      identity_sk.wipe();
+      fingerprint_ = hybrid_fingerprint(
+          identity_pk, derive_pq_identity(vault().store.seed).public_key);
+      go_home();
+      report(Error("a pending outbox must be exported or deleted before "
+                   "saving the vault"));
+      return;
+    }
+
+    // The same maintenance `unlock` has always run: rotate a signed prekey past
+    // its age, top the one-time pool back up, drop skipped keys nobody claimed.
+    const app::MaintenanceReport report =
+        app::maintain_prekeys(vault().store, identity_pk, identity_sk);
+    identity_sk.wipe();
+    const bool swept = app::expire_skipped_keys(vault().store) > 0;
+    if (report.changed() || swept) {
+      save();
+    }
+
+    fingerprint_ = hybrid_fingerprint(
+        identity_pk, derive_pq_identity(vault().store.seed).public_key);
+    go_home();
+  } catch (const std::exception& e) {
+    // A failed maintenance save (disk error, lost lock) must not exit the
+    // UI either. Best-effort Home keeps the failure a status line on
+    // screen rather than a dead terminal.
+    try_go_home();
+    report(e);
+  }
 }
 
 void Driver::go_home() {
@@ -474,6 +539,9 @@ void Driver::create_identity(bool from_mnemonic) {
 
 void Driver::show_card() {
   try {
+    // Before the ratchet moves: with an outbox pending the save below would
+    // refuse, and the advanced session would be lost along with the block.
+    require_no_pending_outbox();
     IdentitySigningSecretKey identity_sk;
     IdentitySigningPublicKey identity_pk;
     derive_identity(vault().store.seed, identity_sk, identity_pk);
@@ -521,6 +589,9 @@ void Driver::import_card() {
   model_.clear_text();
 
   try {
+    // The contact row is appended before save(): refuse here so a pending
+    // outbox cannot leave memory ahead of disk.
+    require_no_pending_outbox();
     const x3dh::ImportedCard imported = x3dh::import_card(text);
     wipe_string(text);
 
@@ -561,6 +632,9 @@ void Driver::trust_selected() {
     if (index < 0) {
       throw Error("no contact named '" + alias + "'");
     }
+    // The verified flag flips before save(): refuse here so a pending
+    // outbox cannot leave memory ahead of disk.
+    require_no_pending_outbox();
     vault().store.contacts[static_cast<std::size_t>(index)].verified = true;
     save();
     model_.show_contacts(contact_rows());
@@ -596,9 +670,7 @@ void Driver::change_passphrase() {
       }
       std::cout << "\n  " << t(Str::DerivingKey) << "\n";
       std::cout.flush();
-      if (fs::exists(vault::outbox_path(vault_path_.parent_path()))) {
-        throw Error("a pending outbox must be exported or deleted before saving the vault");
-      }
+      require_no_pending_outbox();
       app::rekey_vault(vault_path_, vault().store, vault().params, next);
     }
     vault().passphrase = std::move(next);
@@ -621,6 +693,9 @@ void Driver::send_message() {
   }
 
   try {
+    // Before the ratchet moves: with an outbox pending the save below would
+    // refuse, and the advanced session would be lost along with the block.
+    require_no_pending_outbox();
     IdentitySigningSecretKey identity_sk;
     IdentitySigningPublicKey identity_pk;
     derive_identity(vault().store.seed, identity_sk, identity_pk);
@@ -661,6 +736,10 @@ void Driver::receive_message() {
   }
 
   try {
+    // Receiving advances the session before save(): refuse here so a pending
+    // outbox cannot leave memory ahead of disk. The pasted block is not
+    // lost; the user retries after resolving the outbox.
+    require_no_pending_outbox();
     IdentitySigningSecretKey identity_sk;
     IdentitySigningPublicKey identity_pk;
     derive_identity(vault().store.seed, identity_sk, identity_pk);
@@ -748,6 +827,9 @@ void Driver::send_file() {
     StringWipe wipe_payload(payload);
     wipe_vector(raw);
 
+    // Before the ratchet moves: with an outbox pending the save below would
+    // refuse, and the advanced session would be lost along with the block.
+    require_no_pending_outbox();
     IdentitySigningSecretKey identity_sk;
     IdentitySigningPublicKey identity_pk;
     derive_identity(vault().store.seed, identity_sk, identity_pk);

@@ -107,7 +107,7 @@ void Model::show_block(std::string_view heading, std::string block) {
 }
 
 void Model::show_message(const std::string& from, std::string body, bool session_opened,
-                         bool unverified, std::string group_id) {
+                         bool unverified, const std::string& group_id) {
   // The body is a by-value copy of the decrypted plaintext. Wrapping it can
   // throw (it grows a vector of lines), and the explicit wipe at the end used
   // to be skipped on that path; the guard covers every return.

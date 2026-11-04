@@ -113,7 +113,7 @@ class Model {
   // this is a group message and names the group, so the reader knows the body
   // was addressed to more than just them.
   void show_message(const std::string& from, std::string body, bool session_opened,
-                    bool unverified, std::string group_id = {});
+                    bool unverified, const std::string& group_id = {});
   // Called when the decrypted plaintext is a file payload. Transitions to
   // Screen::File. The Driver keeps the FilePayload; the Model only knows
   // whether a file arrived, who sent it, its (already sanitised) extension and
