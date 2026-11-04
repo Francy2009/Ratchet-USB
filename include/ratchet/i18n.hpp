@@ -55,8 +55,21 @@ namespace ratchet::i18n {
   X(Unverified, "NOT verified", "NON verificato")                              \
   X(HasSession, "session open", "sessione aperta")                             \
   X(NoSession, "no session yet", "nessuna sessione")                           \
-  X(KeysHome, "up/down contacts   left/right menu   Enter choose",             \
-    "su/giu' contatti   sinistra/destra menu   Invio scegli")                    \
+  X(KeysHome,                                                                \
+    "up/down contacts   Space select   g group   left/right menu   Enter "    \
+    "choose",                                                                 \
+    "su/giu' contatti   Spazio seleziona   g gruppo   sinistra/destra menu   " \
+    "Invio scegli")                                                            \
+  X(GroupSelectHint, "Space marks a contact for a group; g writes to them.",   \
+    "Spazio segna un contatto per un gruppo; g scrive a quelli segnati.")       \
+  X(GroupSelected, "selected for group", "selezionati per il gruppo")           \
+  X(GroupNeedsTwo,                                                             \
+    "Mark at least two verified contacts with Space before writing a group "   \
+    "message.",                                                                \
+    "Segna almeno due contatti verificati con Spazio prima di scrivere un "    \
+    "messaggio di gruppo.")                                                     \
+  X(GroupNeedsVerified, "Only verified contacts can be added to a group.",     \
+    "Solo i contatti verificati possono essere aggiunti a un gruppo.")          \
   /* one contact */                                                            \
   X(Fingerprint, "Fingerprint:", "Impronta:")                                  \
   X(VerifyHint,                                                                \
@@ -68,6 +81,10 @@ namespace ratchet::i18n {
   X(WritingTo, "Writing to", "Stai scrivendo a")                               \
   X(ComposeHint, "Type your message. Enter starts a new line.",                \
     "Scrivi il messaggio. Invio va a capo.")                                    \
+  X(WritingToGroup, "Writing to group:", "Stai scrivendo al gruppo:")          \
+  X(ComposeGroupHint,                                                          \
+    "Type your message. Ctrl-D sends it to every marked contact.",             \
+    "Scrivi il messaggio. Ctrl-D lo invia a tutti i contatti segnati.")        \
   X(KeysCompose,                                                               \
     "Ctrl-D send   Ctrl-P file   Esc cancel   Ctrl-C quit",                   \
     "Ctrl-D invia   Ctrl-P file   Esc annulla   Ctrl-C esci")                  \
@@ -76,6 +93,8 @@ namespace ratchet::i18n {
     "like:", "Premi y per copiare tutto il blocco, poi incollalo dove vuoi:")  \
   X(YourCard, "Your contact card", "La tua card")                              \
   X(MessageBlock, "Your encrypted message", "Il tuo messaggio cifrato")         \
+  X(GroupMessageBlock, "Your encrypted group message",                         \
+    "Il tuo messaggio cifrato di gruppo")                                       \
   X(KeysBlock, "y copy   up/down scroll   Esc or q back",                      \
     "y copia   su/giu' scorri   Esc o q indietro")    \
   X(KeysMessage, "up/down scroll   Esc or q back",                             \
@@ -96,6 +115,7 @@ namespace ratchet::i18n {
     "Invio conferma   Esc indietro   Ctrl-C esci")     \
   /* a message that came in */                                                 \
   X(MessageFrom, "Message from", "Messaggio da")                               \
+  X(GroupMessageFrom, "Group message from", "Messaggio di gruppo da")           \
   X(SessionOpened, "This message opened a new session.",                       \
     "Questo messaggio ha aperto una nuova sessione.")                           \
   X(WarnUnverified,                                                            \
@@ -114,6 +134,8 @@ namespace ratchet::i18n {
     "aggiunto. Controlla la sua impronta prima di fidarti.")                    \
   X(MarkedVerified, "marked as verified.", "segnato come verificato.")          \
   X(MessageReady, "Message encrypted.", "Messaggio cifrato.")                   \
+  X(GroupMessageReady, "Group message encrypted.",                             \
+    "Messaggio di gruppo cifrato.")                                             \
   X(Copied, "Block copied to the clipboard.",                                  \
     "Blocco copiato negli appunti.")                                            \
   X(EmptyMessage, "An empty message is not sent.",                             \
@@ -128,6 +150,8 @@ namespace ratchet::i18n {
      the two can never mean different things: choosing an entry presses the    \
      key. The letters keep working for anyone who has learnt them. */          \
   X(MenuOpen, "Open", "Apri")                                                  \
+  X(MenuSelect, "Select", "Seleziona")                                         \
+  X(MenuGroup, "Group message", "Messaggio di gruppo")                         \
   X(MenuAdd, "Add contact", "Aggiungi")                          \
   X(MenuCard, "My card", "La mia card")                                        \
   X(MenuRead, "Read message", "Leggi")                          \

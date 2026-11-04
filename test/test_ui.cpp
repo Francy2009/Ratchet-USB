@@ -631,3 +631,84 @@ TEST("the banner steps aside on a small terminal") {
   // And the screen still works without it.
   CHECK(draw(model, 50, 24).find("/media/usb") != std::string::npos);
 }
+
+// --- group messages -----------------------------------------------------------
+
+TEST("Space marks verified contacts and g writes to the marked group") {
+  Model model = unlocked_model({contact("alice", true), contact("bob", true),
+                                contact("carol", true)});
+  CHECK(model.handle_key(ch(" ")) == ActionKind::None);
+  model.handle_key(code(screen::KeyCode::Down));
+  CHECK(model.handle_key(ch(" ")) == ActionKind::None);
+  CHECK(model.handle_key(ch("g")) == ActionKind::None);
+  CHECK(model.screen() == Screen::Compose);
+  CHECK(model.group_mode());
+  CHECK_EQ(model.group_recipients().size(), std::size_t{2});
+  CHECK_EQ(model.group_recipients()[0].alias, std::string("alice"));
+  CHECK_EQ(model.group_recipients()[1].alias, std::string("bob"));
+
+  const std::string frame = draw(model);
+  CHECK(frame.find("Writing to group") != std::string::npos);
+  CHECK(frame.find("alice") != std::string::npos);
+  CHECK(frame.find("bob") != std::string::npos);
+
+  model.handle_key(ch("h"));
+  model.handle_key(ch("i"));
+  CHECK(model.handle_key(code(screen::KeyCode::CtrlD)) == ActionKind::Send);
+}
+
+TEST("g refuses fewer than two marked contacts") {
+  Model model = unlocked_model({contact("alice", true), contact("bob", true)});
+  CHECK(model.handle_key(ch("g")) == ActionKind::None);
+  CHECK(model.screen() == Screen::Home);
+  CHECK(draw(model).find("at least two") != std::string::npos);
+}
+
+TEST("an unverified contact cannot be marked for a group") {
+  Model model = unlocked_model({contact("alice", false)});
+  CHECK(model.handle_key(ch(" ")) == ActionKind::None);
+  CHECK(draw(model).find("Only verified") != std::string::npos);
+  CHECK(model.handle_key(ch("g")) == ActionKind::None);
+  CHECK(model.screen() == Screen::Home);
+  CHECK(draw(model).find("at least two") != std::string::npos);
+}
+
+TEST("a group message names the group in its heading") {
+  Model model = unlocked_model({contact("alice", true)});
+  model.show_message("alice", "hello group", false, false,
+                     "00112233445566778899aabbccddeeff");
+  const std::string frame = draw(model);
+  CHECK(frame.find("Group message from") != std::string::npos);
+  CHECK(frame.find("00112233445566778899aabbccddeeff") != std::string::npos);
+}
+
+TEST("leaving the group compose screen drops the group mode") {
+  Model model = unlocked_model({contact("alice", true), contact("bob", true)});
+  model.handle_key(ch(" "));
+  model.handle_key(code(screen::KeyCode::Down));
+  model.handle_key(ch(" "));
+  model.handle_key(ch("g"));
+  CHECK(model.group_mode());
+  model.handle_key(code(screen::KeyCode::Escape));
+  CHECK(model.screen() == Screen::Home);
+  CHECK(!model.group_mode());
+}
+
+TEST("the file picker keeps the marked group") {
+  // Ctrl-P from a group compose screen only asks which file to attach. Losing
+  // the group there used to turn a group file into a 1:1 one without telling
+  // the user.
+  Model model = unlocked_model({contact("alice", true), contact("bob", true)});
+  model.handle_key(ch(" "));
+  model.handle_key(code(screen::KeyCode::Down));
+  model.handle_key(ch(" "));
+  model.handle_key(ch("g"));
+  CHECK(model.group_mode());
+  model.handle_key(code(screen::KeyCode::CtrlP));
+  CHECK(model.screen() == Screen::FilePick);
+  CHECK(model.group_mode());
+  CHECK_EQ(model.group_recipients().size(), std::size_t{2});
+  model.handle_key(code(screen::KeyCode::Escape));
+  CHECK(model.screen() == Screen::Compose);
+  CHECK(model.group_mode());
+}

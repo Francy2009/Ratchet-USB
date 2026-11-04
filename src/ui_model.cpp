@@ -54,17 +54,45 @@ void Model::show_home(std::string drive_path, std::string fingerprint,
                       std::vector<ContactRow> contacts) {
   drive_path_ = std::move(drive_path);
   fingerprint_ = std::move(fingerprint);
-  contacts_ = std::move(contacts);
+  replace_contacts(std::move(contacts), /*preserve_group_selection=*/false);
   selected_ = 0;
   unlocked_ = true;
   go(Screen::Home);
 }
 
 void Model::show_contacts(std::vector<ContactRow> contacts) {
-  contacts_ = std::move(contacts);
+  replace_contacts(std::move(contacts), /*preserve_group_selection=*/true);
   if (selected_ >= contacts_.size()) {
     selected_ = contacts_.empty() ? 0 : contacts_.size() - 1;
   }
+}
+
+void Model::replace_contacts(std::vector<ContactRow> contacts,
+                             bool preserve_group_selection) {
+  std::vector<bool> next(contacts.size(), false);
+  if (preserve_group_selection) {
+    const std::size_t common = std::min(contacts.size(), contacts_.size());
+    for (std::size_t i = 0; i < common; ++i) {
+      if (i < group_selected_.size() && group_selected_[i] &&
+          contacts_[i].alias == contacts[i].alias &&
+          contacts_[i].fingerprint == contacts[i].fingerprint) {
+        next[i] = true;
+      }
+    }
+  }
+  contacts_ = std::move(contacts);
+  group_selected_ = std::move(next);
+}
+
+std::string Model::group_recipient_list() const {
+  std::string out;
+  for (const GroupRecipient& recipient : group_recipients_) {
+    if (!out.empty()) {
+      out += ", ";
+    }
+    out += recipient.alias;
+  }
+  return out;
 }
 
 void Model::show_block(std::string_view heading, std::string block) {
@@ -79,12 +107,18 @@ void Model::show_block(std::string_view heading, std::string block) {
 }
 
 void Model::show_message(const std::string& from, std::string body, bool session_opened,
-                         bool unverified) {
+                         bool unverified, std::string group_id) {
   // The body is a by-value copy of the decrypted plaintext. Wrapping it can
   // throw (it grows a vector of lines), and the explicit wipe at the end used
   // to be skipped on that path; the guard covers every return.
   StringWipe wipe_body(body);
-  pager_heading_ = std::string(i18n::t(lang_, Str::MessageFrom)) + " " + from;
+  if (group_id.empty()) {
+    pager_heading_ =
+        std::string(i18n::t(lang_, Str::MessageFrom)) + " " + from;
+  } else {
+    pager_heading_ = std::string(i18n::t(lang_, Str::GroupMessageFrom)) + " " +
+                     from + " (" + group_id + ")";
+  }
   pager_notes_.clear();
   if (session_opened) {
     pager_notes_.emplace_back(i18n::t(lang_, Str::SessionOpened));
@@ -146,6 +180,9 @@ void Model::forget() {
   file_ext_.clear();
   file_dangerous_ = false;
   contacts_.clear();
+  group_selected_.clear();
+  group_recipients_.clear();
+  group_mode_ = false;
   fingerprint_.clear();
   alias_.clear();
   selected_ = 0;
@@ -192,6 +229,13 @@ const ContactRow* Model::selected_contact() const {
 
 void Model::go(Screen next) {
   screen_ = next;
+  // Leaving Compose for the file picker keeps the group: Ctrl-P from a group
+  // compose screen only asks which file to attach, and dropping the marked
+  // recipients there would silently turn a group file into a 1:1 one.
+  if (next != Screen::Compose && next != Screen::FilePick) {
+    group_mode_ = false;
+    group_recipients_.clear();
+  }
   // A new screen has a new set of actions, so the cursor starts on the list
   // rather than on whatever position the last menu happened to be at.
   focus_ = Focus::Body;
@@ -274,6 +318,52 @@ ActionKind Model::key_in_list(const screen::Key& key) {
     return ActionKind::None;
   }
   if (key.code != screen::KeyCode::Char) {
+    return ActionKind::None;
+  }
+  if (key.text == " ") {
+    if (selected_ >= contacts_.size()) {
+      return ActionKind::None;
+    }
+    if (!contacts_[selected_].verified) {
+      set_status(Str::GroupNeedsVerified, screen::Style::Warn);
+      return ActionKind::None;
+    }
+    if (group_selected_.size() != contacts_.size()) {
+      group_selected_.assign(contacts_.size(), false);
+    }
+    group_selected_[selected_] = !group_selected_[selected_];
+    const std::size_t picked_count = static_cast<std::size_t>(
+        std::count(group_selected_.begin(), group_selected_.end(), true));
+    set_status(std::to_string(picked_count) + " " +
+                   std::string(i18n::t(lang_, Str::GroupSelected)),
+               picked_count == 0 ? screen::Style::Dim : screen::Style::Good);
+    return ActionKind::None;
+  }
+  if (key.text == "g") {
+    if (group_selected_.size() != contacts_.size()) {
+      group_selected_.assign(contacts_.size(), false);
+    }
+    // Capture alias plus fingerprint, not the row index: the driver resolves
+    // these against the vault at send time, so a contact added or removed
+    // between marking and sending cannot shift an index onto the wrong person.
+    std::vector<GroupRecipient> picked;
+    for (std::size_t i = 0; i < contacts_.size(); ++i) {
+      if (group_selected_[i]) {
+        if (!contacts_[i].verified) {
+          set_status(Str::GroupNeedsVerified, screen::Style::Warn);
+          return ActionKind::None;
+        }
+        picked.push_back(
+            GroupRecipient{contacts_[i].alias, contacts_[i].fingerprint});
+      }
+    }
+    if (picked.size() < 2) {
+      set_status(Str::GroupNeedsTwo, screen::Style::Warn);
+      return ActionKind::None;
+    }
+    group_mode_ = true;
+    group_recipients_ = std::move(picked);
+    go(Screen::Compose);
     return ActionKind::None;
   }
   if (key.text == "a") {
@@ -457,6 +547,8 @@ std::vector<MenuEntry> Model::menu() const {
         items.push_back(code(Str::MenuOpen, screen::KeyCode::Enter));
       }
       items.push_back(ch(Str::MenuAdd, 'a'));
+      items.push_back(ch(Str::MenuSelect, ' '));
+      items.push_back(ch(Str::MenuGroup, 'g'));
       items.push_back(ch(Str::MenuCard, 'c'));
       items.push_back(ch(Str::MenuRead, 'r'));
       items.push_back(ch(Str::MenuPassphrase, 'p'));
@@ -799,7 +891,9 @@ void Model::render_body(screen::Frame& frame, std::size_t rows) const {
         frame.line(indent(i18n::t(lang_, Str::NoContactsHint)), screen::Style::Dim);
         break;
       }
-      const std::size_t room = rows > 5 ? rows - 5 : 1;
+      frame.line(indent(i18n::t(lang_, Str::GroupSelectHint)),
+                 screen::Style::Dim);
+      const std::size_t room = rows > 6 ? rows - 6 : 1;
       const std::size_t top = (selected_ >= room) ? selected_ - room + 1 : 0;
       for (std::size_t i = top; i < contacts_.size() && i < top + room; ++i) {
         const ContactRow& contact = contacts_[i];
@@ -816,15 +910,20 @@ void Model::render_body(screen::Frame& frame, std::size_t rows) const {
             std::string(i18n::t(lang_,
                                 contact.has_session ? Str::HasSession : Str::NoSession)) +
             "]";
+        const bool picked =
+            i < group_selected_.size() && group_selected_[i];
+        const std::string mark = picked ? "[x] " : "[ ] ";
         if (i == selected_) {
           std::string row(kIndent);
+          row += mark;
           row += trust;
           row += session;
           row += ' ';
           row += contact.alias;
           frame.highlight(row);
         } else {
-          frame.spans({{std::string(kIndent), screen::Style::Normal},
+          frame.spans({{std::string(kIndent) + mark,
+                        picked ? screen::Style::Accent : screen::Style::Dim},
                        {trust, contact.verified ? screen::Style::Good
                                                 : screen::Style::Bad},
                        {session, screen::Style::Dim},
@@ -861,10 +960,18 @@ void Model::render_body(screen::Frame& frame, std::size_t rows) const {
     }
 
     case Screen::Compose: {
-      const ContactRow* contact = selected_contact();
-      frame.line(indent(std::string(i18n::t(lang_, Str::WritingTo)) + " " +
-                        (contact != nullptr ? contact->alias : std::string())));
-      frame.line(indent(i18n::t(lang_, Str::ComposeHint)), screen::Style::Dim);
+      if (group_mode_) {
+        frame.line(indent(std::string(i18n::t(lang_, Str::WritingToGroup)) +
+                          " " + group_recipient_list()));
+        frame.line(indent(i18n::t(lang_, Str::ComposeGroupHint)),
+                   screen::Style::Dim);
+      } else {
+        const ContactRow* contact = selected_contact();
+        frame.line(indent(std::string(i18n::t(lang_, Str::WritingTo)) + " " +
+                          (contact != nullptr ? contact->alias : std::string())));
+        frame.line(indent(i18n::t(lang_, Str::ComposeHint)),
+                   screen::Style::Dim);
+      }
       frame.blank();
       const std::vector<std::string> lines = screen::wrap_text(text_, inner);
       const std::size_t room = rows > 3 ? rows - 3 : 1;

@@ -77,6 +77,8 @@ create a vault, add a contact, verify their fingerprint, and exchange messages
 using the keys shown on screen. The interface follows your system locale; use
 `--lang it` or `--lang en` to choose explicitly. It locks after three minutes
 of inactivity by default. Change that interval with `--idle-lock <seconds>`.
+On the contact list, Space marks contacts for a group message and `g` writes to
+them; the same list shows a `[x]` beside each marked contact.
 
 If you would rather have a window, run `ratchet-gui`. It puts the same
 operations behind Qt6 — choose the vault folder, unlock it, then work from the
@@ -145,8 +147,8 @@ and cannot link a member to earlier traffic. The block is signed with the
 sender's identity key, so a member cannot re-encrypt the shared body and pass it
 off as the sender's. The block shows how many members there are, but not their
 identities.
-Group messages are currently CLI-only: the terminal and desktop interfaces still
-show the 1:1 conversation.
+In the terminal interface, Space marks a contact for a group and `g` writes to
+the marked contacts. The desktop GUI still shows only the 1:1 conversation.
 
 If standard output cannot accept a generated block, the block is written beside
 the vault as `vault.bin.outbox`; `ratchet-usb outbox` asks for the vault

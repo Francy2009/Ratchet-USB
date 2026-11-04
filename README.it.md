@@ -80,7 +80,9 @@ Puoi creare il vault, aggiungere un contatto, verificare la sua impronta,
 scrivere e leggere messaggi con i tasti indicati sullo schermo. La lingua segue
 la locale del sistema; puoi scegliere esplicitamente `--lang it` o `--lang en`.
 L'interfaccia si blocca dopo tre minuti di inattività. L'intervallo si cambia
-con `--idle-lock <secondi>`.
+con `--idle-lock <secondi>`. Nella lista dei contatti, Spazio segna un contatto
+per un messaggio di gruppo e `g` scrive ai contatti segnati; accanto a ciascuno
+compare `[x]`.
 
 Se preferisci una finestra, avvia `ratchet-gui`. Mette le stesse operazioni
 dietro Qt6 — scegli la cartella del vault, la sblocchi, poi usi le schede
@@ -155,8 +157,9 @@ ricifrare il corpo condiviso e attribuirlo al mittente. La firma è trasferibile
 un membro può mostrare blocco e chiave a terzi come prova che il mittente ha
 scritto quel contenuto, quindi i blocchi di gruppo non sono negabili. Il blocco
 mostra quanti membri ci sono, non le loro identità. I messaggi di gruppo per ora
-esistono solo nella CLI: l'interfaccia a terminale e quella desktop mostrano
-ancora la conversazione 1:1.
+esistono anche nell'interfaccia a terminale: Spazio segna un contatto per un
+gruppo e `g` scrive ai contatti segnati. L'interfaccia desktop mostra ancora solo
+la conversazione 1:1.
 
 Se lo standard output non riesce a ricevere un blocco generato, il blocco viene
 scritto accanto al vault come `vault.bin.outbox`; `ratchet-usb outbox` chiede la

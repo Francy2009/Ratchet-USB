@@ -87,6 +87,16 @@ struct ContactRow {
   bool has_session = false;
 };
 
+// A group recipient as the user marked them on Home: alias plus the
+// fingerprint shown next to it. The driver re-resolves these against the vault
+// at send time instead of trusting a positional index captured earlier, so a
+// contact list that changed between marking and sending cannot redirect the
+// message to the wrong contact.
+struct GroupRecipient {
+  std::string alias;
+  std::string fingerprint;
+};
+
 class Model {
  public:
   explicit Model(i18n::Lang lang) : lang_(lang) {}
@@ -99,8 +109,11 @@ class Model {
                  std::vector<ContactRow> contacts);
   void show_contacts(std::vector<ContactRow> contacts);
   void show_block(std::string_view heading, std::string block);
+  // `group_id` is empty for a 1:1 message. When it is set, the heading says
+  // this is a group message and names the group, so the reader knows the body
+  // was addressed to more than just them.
   void show_message(const std::string& from, std::string body, bool session_opened,
-                    bool unverified);
+                    bool unverified, std::string group_id = {});
   // Called when the decrypted plaintext is a file payload. Transitions to
   // Screen::File. The Driver keeps the FilePayload; the Model only knows
   // whether a file arrived, who sent it, its (already sanitised) extension and
@@ -133,6 +146,11 @@ class Model {
   const ContactRow* selected_contact() const;
   bool unlocked() const { return unlocked_; }
   Focus focus() const { return focus_; }
+  // True while Compose is writing to the contacts marked on Home.
+  bool group_mode() const { return group_mode_; }
+  const std::vector<GroupRecipient>& group_recipients() const {
+    return group_recipients_;
+  }
 
   // The actions on offer on the current screen, in the order they are drawn.
   // Empty on the screens where every key is text and a menu would be in the
@@ -151,6 +169,9 @@ class Model {
 
  private:
   void go(Screen next);
+  void replace_contacts(std::vector<ContactRow> contacts,
+                        bool preserve_group_selection);
+  std::string group_recipient_list() const;
   void move_selection(int delta, std::size_t count);
   void insert(std::string_view utf8);
   void backspace();
@@ -181,6 +202,12 @@ class Model {
 
   std::size_t selected_ = 0;       // index into drives_ or contacts_
   std::size_t contact_index_ = 0;  // the contact Contact/Compose are about
+  // Contacts marked on Home for a group message. Kept by index and preserved
+  // across a refresh only when the alias and fingerprint still match, so a
+  // removed or replaced contact cannot inherit the mark.
+  std::vector<bool> group_selected_;
+  bool group_mode_ = false;
+  std::vector<GroupRecipient> group_recipients_;
 
   Focus focus_ = Focus::Body;
   std::size_t menu_index_ = 0;
