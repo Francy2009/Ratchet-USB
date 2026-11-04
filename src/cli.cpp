@@ -46,6 +46,7 @@ const std::vector<CommandSpec>& specs() {
       {"remove", {"--usb-path", "--yes"}, 1},
       {"send", {"--usb-path", "--file", "--stdin-payload"}, 2},
       {"group-send", {"--usb-path", "--to", "--stdin-payload"}, 1},
+      {"outbox", {"--usb-path"}, 0},
       {"recv",
        {"--usb-path", "--stage-file", "--stdin-payload", "--structured-output"},
        1},
@@ -131,6 +132,7 @@ void print_usage(std::ostream& os) {
      << " send     --usb-path <dir> <alias> [message|--file <file>]\n"
      << "  " << kProgram
      << " group-send --usb-path <dir> --to <alias> --to <alias> [message]\n"
+     << "  " << kProgram << " outbox   --usb-path <dir>\n"
      << "  " << kProgram << " recv     --usb-path <dir> [message] [--stage-file]\n"
      << "  " << kProgram
      << " ui       [--usb-path <dir>] [--lang en|it] [--idle-lock <s>]\n"
@@ -178,6 +180,9 @@ void print_usage(std::ostream& os) {
      << "            wrapper addressed to this vault. At least two --to flags\n"
      << "            are required. Plaintext on the command line is visible in\n"
      << "            argv; omit it or use --stdin-payload.\n"
+     << "  outbox    Print a block left in vault.bin.outbox after stdout\n"
+     << "            failed, then remove the file. A new send is refused\n"
+     << "            while a pending block exists.\n"
      << "  recv      Decrypt a pasted message block (establishing the\n"
      << "            session automatically if it is the first one). [message]\n"
      << "            falls back to standard input, or a prompt, when omitted.\n"

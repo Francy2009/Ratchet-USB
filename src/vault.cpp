@@ -243,6 +243,10 @@ std::filesystem::path vault_path(const std::filesystem::path& usb_path) {
   return usb_path / kVaultFilename;
 }
 
+std::filesystem::path outbox_path(const std::filesystem::path& usb_path) {
+  return usb_path / kOutboxFilename;
+}
+
 void write_file(const std::filesystem::path& path,
                 const std::vector<uint8_t>& bytes, bool overwrite) {
   if (bytes.size() > kMaxVaultBytes) {

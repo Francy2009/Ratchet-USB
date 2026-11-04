@@ -71,14 +71,47 @@ void write_structured_or_throw(const gui_format::Result& result) {
   }
 }
 
-// Writes the pasteable block and makes sure it left the process before the
-// caller commits the ratchet state that produced it. A closed pipe or a full
-// disk must not consume an opening message the recipient never received.
-void write_block_or_throw(const std::string& block) {
+// Writes the pasteable block and makes sure it left the process. The caller
+// has already persisted the block in the outbox beside the vault, so a failed
+// write leaves a recoverable copy and the advanced ratchet state is committed.
+void write_block_or_throw(const std::string& block, const fs::path& outbox) {
   std::cout << block;
   std::cout.flush();
   if (!std::cout) {
-    throw Error("could not write the message block; the vault was not changed");
+    throw Error("could not write the message block; it is saved at " +
+                outbox.string() + " (run `" + std::string(kProgram) +
+                " outbox --usb-path <dir>` to print it again)");
+  }
+}
+
+// Refuse to start a new send while a block from an earlier interrupted write
+// is still pending: overwriting the outbox would lose that block.
+void ensure_no_pending_outbox(const fs::path& usb) {
+  const fs::path outbox = vault::outbox_path(usb);
+  if (fs::exists(outbox)) {
+    throw Error("a previously generated block is pending at " +
+                outbox.string() + "; run `" + std::string(kProgram) +
+                " outbox --usb-path <dir>` to print it, then delete it");
+  }
+}
+
+void write_pending_outbox(const fs::path& usb, const std::string& block) {
+  const std::vector<uint8_t> bytes(block.begin(), block.end());
+  vault::write_file(vault::outbox_path(usb), bytes, /*overwrite=*/false);
+}
+
+void discard_pending_outbox(const fs::path& usb) {
+  std::error_code ec;
+  fs::remove(vault::outbox_path(usb), ec);
+}
+
+void remove_pending_outbox(const fs::path& usb) {
+  std::error_code ec;
+  fs::remove(vault::outbox_path(usb), ec);
+  if (ec) {
+    throw Error("the block was written, but the pending copy at " +
+                vault::outbox_path(usb).string() +
+                " could not be removed: " + ec.message());
   }
 }
 
@@ -173,6 +206,9 @@ int cmd_init(const Options& opts) {
   }
 
   vault::write_file(path, file, opts.force);
+  // A block generated from the old vault cannot be delivered against the new
+  // one, so do not leave a stale outbox behind to block the first send.
+  discard_pending_outbox(usb);
 
   std::cout << "\nVault written to " << path.string() << "\n"
             << "Hybrid identity fingerprint:\n"
@@ -783,6 +819,7 @@ int cmd_group_send(const Options& opts) {
   require_known_usb_for_payload(opts);
   const fs::path usb = require_usb_path(opts);
   const fs::path path = vault::vault_path(usb);
+  ensure_no_pending_outbox(usb);
 
   if (opts.message.has_value()) {
     std::cerr
@@ -806,6 +843,9 @@ int cmd_group_send(const Options& opts) {
 
   OpenedVault opened = unlock_vault(path);
   store::VaultStore& store = opened.store;
+  // The early check avoids a passphrase prompt, but this one runs under the
+  // vault lock and is what makes two concurrent sends unable to race past it.
+  ensure_no_pending_outbox(usb);
 
   std::vector<std::size_t> indices;
   indices.reserve(opts.group_members.size());
@@ -838,10 +878,21 @@ int cmd_group_send(const Options& opts) {
   wipe_string(plaintext);
   wipe_plaintext.dismiss();
 
-  std::cerr << "\n";
-  write_block_or_throw(block);
+  // Persist the exact block and the advanced state together. If stdout fails,
+  // the block is still in the outbox and can be exported with `outbox`; if the
+  // vault save fails, remove the outbox because the state it belongs to was
+  // not committed.
+  write_pending_outbox(usb, block);
+  try {
+    app::save_vault(path, store, opened.params, opened.passphrase);
+  } catch (...) {
+    discard_pending_outbox(usb);
+    throw;
+  }
 
-  app::save_vault(path, store, opened.params, opened.passphrase);
+  std::cerr << "\n";
+  write_block_or_throw(block, vault::outbox_path(usb));
+  remove_pending_outbox(usb);
   return 0;
 }
 
@@ -862,6 +913,7 @@ int cmd_send(const Options& opts) {
   const std::string to =
       require_value(opts.to, "Send to (contact alias): ", "a recipient alias is required");
   const fs::path path = vault::vault_path(usb);
+  ensure_no_pending_outbox(usb);
 
   if (!opts.file_path.empty() && opts.message.has_value()) {
     throw Error("--file and a message cannot be combined");
@@ -904,6 +956,7 @@ int cmd_send(const Options& opts) {
 
   OpenedVault opened = unlock_vault(path);
   store::VaultStore& store = opened.store;
+  ensure_no_pending_outbox(usb);
 
   const int idx = store.find_contact(to);
   if (idx < 0) {
@@ -943,12 +996,17 @@ int cmd_send(const Options& opts) {
 
   // stdout is only the block, so `send alice "hi" > msg.txt` yields a file that
   // can be pasted as-is; the blank separator is part of the terminal display.
-  // Deliver it before saving: a failed write must not commit a session whose
-  // opening block never reached the caller.
-  std::cerr << "\n";
-  write_block_or_throw(block);
+  write_pending_outbox(usb, block);
+  try {
+    app::save_vault(path, store, opened.params, opened.passphrase);
+  } catch (...) {
+    discard_pending_outbox(usb);
+    throw;
+  }
 
-  app::save_vault(path, store, opened.params, opened.passphrase);
+  std::cerr << "\n";
+  write_block_or_throw(block, vault::outbox_path(usb));
+  remove_pending_outbox(usb);
   return 0;
 }
 
@@ -1121,6 +1179,24 @@ int cmd_recv(const Options& opts) {
   return 0;
 }
 
+int cmd_outbox(const Options& opts) {
+  const fs::path usb = require_usb_path(opts);
+  // Serialise with send/group-send, which hold the same lock while they create
+  // or remove the outbox.
+  vault::FileLock lock(vault::vault_path(usb));
+  const fs::path path = vault::outbox_path(usb);
+  if (!fs::exists(path)) {
+    throw Error("no pending block at " + path.string());
+  }
+  const std::vector<uint8_t> bytes = vault::read_file(path);
+  const std::string block(bytes.begin(), bytes.end());
+
+  std::cerr << "\n";
+  write_block_or_throw(block, path);
+  remove_pending_outbox(usb);
+  return 0;
+}
+
 // The terminal interface, and the one gate in front of it.
 //
 // It runs only when stdin and stdout are both a terminal. That is what keeps
@@ -1197,6 +1273,9 @@ int run(const Options& opts) {
   }
   if (opts.command == "group-send") {
     return cmd_group_send(opts);
+  }
+  if (opts.command == "outbox") {
+    return cmd_outbox(opts);
   }
   if (opts.command == "recv") {
     return cmd_recv(opts);

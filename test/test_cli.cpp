@@ -378,3 +378,13 @@ TEST("cli: group-send takes repeated --to flags and one optional message") {
   CHECK_THROWS(parse({"send", "alice", "hi", "--to", "bob"}));
   CHECK_THROWS(parse({"group-send", "--to"}));
 }
+
+// --- pending outbox ----------------------------------------------------------
+
+TEST("cli: outbox takes only --usb-path and no positionals") {
+  const Options opts = parse({"outbox", "--usb-path", "/tmp/vault"});
+  CHECK_EQ(opts.command, std::string("outbox"));
+  CHECK_EQ(opts.usb_path, std::filesystem::path("/tmp/vault"));
+  CHECK_THROWS(parse({"outbox", "--to", "bob"}));
+  CHECK_THROWS(parse({"outbox", "extra"}));
+}

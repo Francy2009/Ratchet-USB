@@ -224,12 +224,21 @@ to defend against it:
   fresh ephemeral, so the inner ratchet header is not on the wire and cannot be
   matched to earlier 1:1 traffic. The block is signed with the sender's Ed25519
   identity key, so a member who learns the shared content key still cannot
-  re-encrypt the body and attribute it to the sender. It is not a group ratchet
-  and keeps no group
+  re-encrypt the body and attribute it to the sender. That signature is
+  transferable: a member can show the block and the content key to a third
+  party as proof that the sender wrote that content, so group blocks are not
+  deniable. It is not a group ratchet and keeps no group
   state: the block reveals how many recipients there are (not who they are),
   the sender chooses the member list, and a member who leaves still holds the
   content keys of messages already delivered. Membership changes therefore do
   not rekey the group; start a fresh message after a removal.
+
+- **A failed stdout write leaves a pending ciphertext block.** `send` and
+  `group-send` persist the exact block as `vault.bin.outbox` (mode 0600, beside
+  the vault) before saving the advanced ratchet state, then remove it after a
+  successful write. If stdout fails, the block remains and `outbox` prints it
+  again; a new send is refused until it is exported or deleted. The file holds
+  the same ciphertext that would have gone to stdout, not the plaintext.
 
 ## No warranty, and using it lawfully
 

@@ -660,19 +660,42 @@ printf '%s\n' "$CAROL_PASS" |
 grep -q "hello group" "$WORK/group-carol.txt" ||
   fail "carol did not decrypt the group message"
 
-# A block that never reaches the caller must not commit the ratchet state that
-# produced it. /dev/full fails on the first write, so group-send has to report
-# the error and leave vault.bin byte-for-byte unchanged.
-step "a failed block write does not commit group state"
+# A block that never reaches the caller is kept beside the vault together with
+# the advanced ratchet state. /dev/full fails on the first write, so group-send
+# has to report the error, leave the outbox behind, and let `outbox` print the
+# exact block later.
+step "a failed block write is recoverable from the outbox"
 BEFORE_HASH="$(sha256sum "$ALICE/vault.bin" | awk '{print $1}')"
 if printf '%s\n' "$NEW_PASS" |
      "$BIN" group-send --usb-path "$ALICE" --to bob --to carol "lost block" \
-     >/dev/full 2>/dev/null; then
+     >/dev/full 2>"$WORK/outbox.err"; then
   fail "group-send succeeded with a failing stdout"
 fi
+grep -q "vault.bin.outbox" "$WORK/outbox.err" ||
+  fail "group-send did not point at the outbox: $(cat "$WORK/outbox.err")"
+[ -f "$ALICE/vault.bin.outbox" ] ||
+  fail "group-send left no outbox after a failed write"
 AFTER_HASH="$(sha256sum "$ALICE/vault.bin" | awk '{print $1}')"
-[ "$BEFORE_HASH" = "$AFTER_HASH" ] ||
-  fail "group-send changed the vault after its block could not be written"
+[ "$BEFORE_HASH" != "$AFTER_HASH" ] ||
+  fail "group-send did not commit the state that the outbox belongs to"
+if printf '%s\n' "$NEW_PASS" |
+     "$BIN" group-send --usb-path "$ALICE" --to bob --to carol "too soon" \
+     >/dev/null 2>&1; then
+  fail "group-send overwrote a pending outbox"
+fi
+printf '%s\n' "$NEW_PASS" |
+  "$BIN" outbox --usb-path "$ALICE" >"$WORK/outbox-block.txt" 2>/dev/null ||
+  fail "outbox could not re-export the pending block"
+grep -q "BEGIN RATCHET GROUP" "$WORK/outbox-block.txt" ||
+  fail "outbox did not print a GROUP block"
+[ ! -e "$ALICE/vault.bin.outbox" ] ||
+  fail "outbox left the pending file behind"
+printf '%s\n' "$BOB_PASS" |
+  "$BIN" recv --usb-path "$BOB" "$(cat "$WORK/outbox-block.txt")" \
+  >"$WORK/outbox-bob.txt" 2>/dev/null ||
+  fail "bob could not receive the recovered group block"
+grep -q "lost block" "$WORK/outbox-bob.txt" ||
+  fail "the recovered group block did not decrypt"
 
 echo
 echo "smoke: all end-to-end checks passed"

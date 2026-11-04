@@ -21,6 +21,8 @@ leak-*
 # Never let a real vault or a seed near the repository.
 vault.bin
 vault.bin.tmp
+vault.bin.outbox
+vault.bin.outbox.tmp.*
 *.seed
 
 # Never commit a release signing key. The CI key lives in GitHub Secrets.

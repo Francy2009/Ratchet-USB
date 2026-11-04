@@ -151,10 +151,17 @@ deve essere già verificato. Ogni involucro è sigillato con la chiave d'identit
 del membro sotto un effimero nuovo, quindi l'intestazione del ratchet 1:1 non
 viaggia in chiaro e non può collegare un membro al traffico precedente. Il
 blocco è firmato con la chiave d'identità del mittente, quindi un membro non può
-ricifrare il corpo condiviso e attribuirlo al mittente. Il blocco mostra quanti
-membri ci sono, non le loro identità. I messaggi di gruppo per ora esistono solo
-nella CLI: l'interfaccia a terminale e quella desktop mostrano ancora la
-conversazione 1:1.
+ricifrare il corpo condiviso e attribuirlo al mittente. La firma è trasferibile:
+un membro può mostrare blocco e chiave a terzi come prova che il mittente ha
+scritto quel contenuto, quindi i blocchi di gruppo non sono negabili. Il blocco
+mostra quanti membri ci sono, non le loro identità. I messaggi di gruppo per ora
+esistono solo nella CLI: l'interfaccia a terminale e quella desktop mostrano
+ancora la conversazione 1:1.
+
+Se lo standard output non riesce a ricevere un blocco generato, il blocco viene
+scritto accanto al vault come `vault.bin.outbox`; `ratchet-usb outbox` lo stampa
+di nuovo e rimuove il file. Un nuovo invio viene rifiutato finché il blocco
+pendente non è stato esportato o eliminato.
 
 Il programma prova a individuare un'unità rimovibile. Se la rilevazione non è
 adatta al tuo caso, passa `--usb-path <cartella>` ai comandi o imposta

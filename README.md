@@ -148,6 +148,10 @@ identities.
 Group messages are currently CLI-only: the terminal and desktop interfaces still
 show the 1:1 conversation.
 
+If standard output cannot accept a generated block, the block is written beside
+the vault as `vault.bin.outbox`; `ratchet-usb outbox` prints it again and removes
+the file. A new send is refused until the pending block is exported or deleted.
+
 The program tries to find a removable drive. If detection is unsuitable for
 your setup, pass `--usb-path <directory>` to commands or set `RATCHET_USB_PATH`.
 
