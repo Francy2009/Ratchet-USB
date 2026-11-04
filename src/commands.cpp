@@ -85,14 +85,14 @@ void write_block_or_throw(const std::string& block, const fs::path& outbox) {
   }
 }
 
-// Refuse to start a new send while a block from an earlier interrupted write
-// is still pending: overwriting the outbox would lose that block.
+// Keep the exact saved generation bound to a pending block intact. Even an
+// unrelated save could invalidate recovery or make an uncommitted block match.
 void ensure_no_pending_outbox(const fs::path& usb) {
   const fs::path outbox = vault::outbox_path(usb);
   if (fs::exists(outbox)) {
     throw Error("a previously generated block is pending at " +
                 outbox.string() + "; run `" + std::string(kProgram) +
-                " outbox --usb-path <dir>` to print it, then delete it");
+                " outbox --usb-path <dir>` to export it, or delete the pending file");
   }
 }
 
@@ -360,6 +360,7 @@ int cmd_migrate(const Options& opts) {
     throw Error("prepared vault generation did not advance");
   }
 
+  ensure_no_pending_outbox(usb);
   vault::promote_prepared(prepared, path);
   const rollback::Digest promoted_digest = rollback::digest(bytes.data(), bytes.size());
   if (rollback::backend_available()) {
@@ -400,6 +401,7 @@ int cmd_unlock(const Options& opts) {
   changed = expire_skipped_keys(store) || changed;
 
   if (changed) {
+    ensure_no_pending_outbox(usb);
     app::save_vault(path, store, opened.params, opened.passphrase);
   }
 
@@ -417,6 +419,7 @@ int cmd_passphrase(const Options& opts) {
   const fs::path path = vault::vault_path(usb);
   OpenedVault opened = unlock_vault(
       path, "Current vault passphrase");
+  ensure_no_pending_outbox(usb);
 
   // A new passphrase is generated and shown once, exactly as at init. The old
   // one is never shown and cannot be recovered; that is the point of changing
@@ -445,6 +448,7 @@ int cmd_passphrase(const Options& opts) {
     terminal::clear_screen();
   }
 
+  ensure_no_pending_outbox(usb);
   app::rekey_vault(path, opened.store, opened.params, next);
   if (!opts.structured_output) {
     next.clear();
@@ -528,6 +532,7 @@ int cmd_card(const Options& opts) {
   }
 
   if (changed || store.generation == 0) {
+    ensure_no_pending_outbox(usb);
     app::save_vault(path, store, opened.params, opened.passphrase);
   }
   return 0;
@@ -576,6 +581,7 @@ int cmd_add_contact(const Options& opts) {
                                 static_cast<std::size_t>(alias_index);
                        }),
         store.sessions.end());
+    ensure_no_pending_outbox(usb);
     app::save_vault(path, store, opened.params, opened.passphrase);
     // A legacy alias may contain a control character this build refuses for
     // new imports. It still has to be printable here, because the upgrade is
@@ -610,6 +616,7 @@ int cmd_add_contact(const Options& opts) {
   contact.card = imported.card;
   store.contacts.push_back(std::move(contact));
 
+  ensure_no_pending_outbox(usb);
   app::save_vault(path, store, opened.params, opened.passphrase);
 
   std::cout << "Added '" << name << "'. Verify this fingerprint with them\n"
@@ -758,6 +765,7 @@ int cmd_trust(const Options& opts) {
   }
   verified.verified = true;
 
+  ensure_no_pending_outbox(usb);
   app::save_vault(path, store, opened.params, opened.passphrase);
   std::cout << "'" << shown_name << "' marked as verified.\n";
   return 0;
@@ -769,6 +777,7 @@ int cmd_reset_session(const Options& opts) {
       opts.name, "Contact alias: ", "a contact alias is required");
   const fs::path path = vault::vault_path(usb);
   OpenedVault opened = unlock_vault(path);
+  ensure_no_pending_outbox(usb);
   store::VaultStore& store = opened.store;
   const int contact_idx = store.find_contact(name);
   if (contact_idx < 0) throw Error("no contact named '" + name + "'");
@@ -782,6 +791,7 @@ int cmd_reset_session(const Options& opts) {
       "Close this session and discard pending/skipped message keys? Type RESET: ");
   if (answer != "RESET") throw Error("session reset cancelled");
   store.sessions.erase(store.sessions.begin() + session_idx);
+  ensure_no_pending_outbox(usb);
   app::save_vault(path, store, opened.params, opened.passphrase);
   std::cout << "Session with '" << terminal::escape_control_chars(name)
             << "' reset. A fresh authenticated PQ opening is required.\n";
@@ -830,6 +840,7 @@ int cmd_remove(const Options& opts) {
     if (session.contact_index > idx) --session.contact_index;
   }
 
+  ensure_no_pending_outbox(usb);
   app::save_vault(path, store, opened.params, opened.passphrase);
   std::cout << "Removed '" << terminal::escape_control_chars(name)
             << "' and its session.\n";
@@ -1097,6 +1108,7 @@ int cmd_recv(const Options& opts) {
 
   OpenedVault opened = unlock_vault(path);
   store::VaultStore& store = opened.store;
+  ensure_no_pending_outbox(usb);
 
   IdentitySigningSecretKey identity_sk;
   IdentitySigningPublicKey identity_pk;

@@ -665,6 +665,7 @@ grep -q "hello group" "$WORK/group-carol.txt" ||
 # has to report the error, leave the outbox behind, and let `outbox` print the
 # exact block later.
 step "a failed block write is recoverable from the outbox"
+cp "$ALICE/vault.bin" "$WORK/pre-outbox-vault.bin"
 BEFORE_HASH="$(sha256sum "$ALICE/vault.bin" | awk '{print $1}')"
 if printf '%s\n' "$NEW_PASS" |
      "$BIN" group-send --usb-path "$ALICE" --to bob --to carol "lost block" \
@@ -683,9 +684,60 @@ if printf '%s\n' "$NEW_PASS" |
      >/dev/null 2>&1; then
   fail "group-send overwrote a pending outbox"
 fi
+# Exercise both the committed binding and a crash before the vault commit.
+cp "$ALICE/vault.bin" "$WORK/committed-vault.bin"
+cp "$ALICE/vault.bin.outbox" "$WORK/pending-outbox.bin"
+printf '%s\n' "$BOB_PASS" |
+  "$BIN" send --usb-path "$BOB" alice "incoming during outbox" \
+  >"$WORK/incoming.txt" 2>/dev/null || fail "bob could not send"
+for binding in committed stale; do
+  if [[ "$binding" == stale ]]; then
+    cp "$WORK/pre-outbox-vault.bin" "$ALICE/vault.bin"
+  fi
+  for operation in recv card remove passphrase reset-session; do
+    args=()
+    case "$operation" in
+      recv) args=("$(cat "$WORK/incoming.txt")");;
+      card) args=(--rotate-spk);;
+      remove) args=(carol --yes);;
+      reset-session) args=(bob);;
+    esac
+    if printf '%s\n' "$NEW_PASS" |
+       "$BIN" "$operation" --usb-path "$ALICE" "${args[@]}" \
+       > /dev/null 2>"$WORK/blocked.err"; then
+      fail "$operation accepted a $binding outbox"
+    fi
+    cmp "$ALICE/vault.bin.outbox" "$WORK/pending-outbox.bin" ||
+      fail "$operation changed the outbox"
+  done
+  expected="$WORK/committed-vault.bin"
+  [[ "$binding" == stale ]] && expected="$WORK/pre-outbox-vault.bin"
+  cmp "$ALICE/vault.bin" "$expected" || fail "pending writers changed vault"
+  printf '%s\n' "$NEW_PASS" |
+    "$BIN" contacts --usb-path "$ALICE" >/dev/null 2>&1 || fail "contacts blocked"
+  printf '%s\n' "$NEW_PASS" |
+    "$BIN" card --fingerprint --usb-path "$ALICE" >/dev/null 2>&1 || fail "fingerprint blocked"
+  if [[ "$binding" == stale ]]; then
+    if printf '%s\n' "$NEW_PASS" |
+       "$BIN" outbox --usb-path "$ALICE" >/dev/null 2>"$WORK/stale.err"; then
+      fail "stale outbox exported"
+    fi
+    grep -q "does not match" "$WORK/stale.err" || fail "wrong stale error"
+  fi
+done
+cp "$WORK/committed-vault.bin" "$ALICE/vault.bin"
 printf '%s\n' "$NEW_PASS" |
   "$BIN" outbox --usb-path "$ALICE" >"$WORK/outbox-block.txt" 2>/dev/null ||
   fail "outbox could not re-export the pending block"
+python3 - "$WORK/pending-outbox.bin" "$WORK/outbox-block.txt" <<'PYBLOCK'
+import pathlib, sys
+pending = pathlib.Path(sys.argv[1]).read_bytes()
+assert pending[33:] == pathlib.Path(sys.argv[2]).read_bytes()
+PYBLOCK
+printf '%s\n' "$NEW_PASS" |
+  "$BIN" recv --usb-path "$ALICE" "$(cat "$WORK/incoming.txt")" \
+  >"$WORK/after-outbox.txt" 2>/dev/null || fail "receive after export failed"
+grep -q "incoming during outbox" "$WORK/after-outbox.txt" || fail "incoming lost"
 grep -q "BEGIN RATCHET GROUP" "$WORK/outbox-block.txt" ||
   fail "outbox did not print a GROUP block"
 [ ! -e "$ALICE/vault.bin.outbox" ] ||

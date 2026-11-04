@@ -211,6 +211,9 @@ std::vector<ContactRow> Driver::contact_rows() const {
 }
 
 void Driver::save() {
+  if (fs::exists(vault::outbox_path(vault_path_.parent_path()))) {
+    throw Error("a pending outbox must be exported or deleted before saving the vault");
+  }
   app::save_vault(vault_path_, vault().store, vault().params,
                   vault().passphrase);
 }
@@ -559,6 +562,9 @@ void Driver::change_passphrase() {
       }
       std::cout << "\n  " << t(Str::DerivingKey) << "\n";
       std::cout.flush();
+      if (fs::exists(vault::outbox_path(vault_path_.parent_path()))) {
+        throw Error("a pending outbox must be exported or deleted before saving the vault");
+      }
       app::rekey_vault(vault_path_, vault().store, vault().params, next);
     }
     vault().passphrase = std::move(next);
