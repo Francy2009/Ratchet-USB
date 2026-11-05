@@ -348,6 +348,71 @@ TEST("remember_handshake refuses silent replay-history eviction") {
   CHECK_EQ(s.accepted_handshakes.size(), before);
 }
 
+TEST("remember_handshake prunes handshakes too old to still decrypt") {
+  // Signed prekeys rotate after 30 days and only the newest two are kept, so
+  // an opening older than 90 days cannot name a prekey the vault still holds
+  // and keeping its replay record buys nothing. A full list of such stale
+  // history must make room instead of refusing new handshakes forever.
+  store::VaultStore s;
+  IdentitySigningPublicKey id{};
+  randombytes_buf(id.data(), id.size());
+
+  constexpr uint64_t kOld = 1700000000;
+  for (std::size_t i = 0; i < store::kMaxAcceptedHandshakes; ++i) {
+    x25519::PublicKey e{};
+    randombytes_buf(e.data(), e.size());
+    s.remember_handshake(id, e, kOld + i);
+  }
+  CHECK_EQ(s.accepted_handshakes.size(), store::kMaxAcceptedHandshakes);
+
+  const uint64_t much_later =
+      kOld + store::kHandshakeMaxAgeSeconds + 3600;
+  x25519::PublicKey fresh{};
+  randombytes_buf(fresh.data(), fresh.size());
+  s.remember_handshake(id, fresh, much_later);
+  CHECK_EQ(s.accepted_handshakes.size(), std::size_t(1));
+  CHECK(s.handshake_already_accepted(id, fresh));
+}
+
+TEST("remember_handshake still refuses eviction when nothing is prunable") {
+  // Pruning is by age, not a way to forget live replay protection: a full
+  // list of recent handshakes -- an active flood, not slow accumulation --
+  // must keep failing closed.
+  store::VaultStore s;
+  IdentitySigningPublicKey id{};
+  randombytes_buf(id.data(), id.size());
+
+  constexpr uint64_t kNow = 1700000000;
+  for (std::size_t i = 0; i < store::kMaxAcceptedHandshakes; ++i) {
+    x25519::PublicKey e{};
+    randombytes_buf(e.data(), e.size());
+    s.remember_handshake(id, e, kNow + i);
+  }
+  x25519::PublicKey extra{};
+  randombytes_buf(extra.data(), extra.size());
+  CHECK_THROWS(s.remember_handshake(id, extra, kNow + 10000));
+  CHECK_EQ(s.accepted_handshakes.size(), store::kMaxAcceptedHandshakes);
+}
+
+TEST("prune_old_handshakes keeps future timestamps and recent entries") {
+  store::VaultStore s;
+  IdentitySigningPublicKey id{};
+  randombytes_buf(id.data(), id.size());
+
+  constexpr uint64_t kNow = 1700000000;
+  x25519::PublicKey recent{};
+  randombytes_buf(recent.data(), recent.size());
+  s.remember_handshake(id, recent, kNow);
+  // Future timestamps are clock skew, not age: they must survive pruning.
+  x25519::PublicKey skewed{};
+  randombytes_buf(skewed.data(), skewed.size());
+  s.remember_handshake(id, skewed, kNow + 3600);
+
+  CHECK_EQ(s.prune_old_handshakes(kNow + 3600), std::size_t(0));
+  CHECK(s.handshake_already_accepted(id, recent));
+  CHECK(s.handshake_already_accepted(id, skewed));
+}
+
 // RU-03. decrypt() ratchets chains, caches skipped keys and can perform a whole
 // DH step before the AEAD tag is checked -- it has to, since the tag cannot be
 // verified until the key exists. So a forged message rearranges the session and

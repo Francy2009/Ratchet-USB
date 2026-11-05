@@ -319,6 +319,9 @@ void VaultStore::remember_handshake(const IdentitySigningPublicKey& initiator,
     return;
   }
   if (accepted_handshakes.size() >= kMaxAcceptedHandshakes) {
+    prune_old_handshakes(now);
+  }
+  if (accepted_handshakes.size() >= kMaxAcceptedHandshakes) {
     throw Error("accepted-handshake history is full; refusing replay-window eviction");
   }
   AcceptedHandshake h;
@@ -326,6 +329,20 @@ void VaultStore::remember_handshake(const IdentitySigningPublicKey& initiator,
   h.ephemeral_pub = ephemeral_pub;
   h.accepted_at = now;
   accepted_handshakes.push_back(h);
+}
+
+std::size_t VaultStore::prune_old_handshakes(uint64_t now) {
+  const std::size_t before = accepted_handshakes.size();
+  accepted_handshakes.erase(
+      std::remove_if(accepted_handshakes.begin(), accepted_handshakes.end(),
+                     [now](const AcceptedHandshake& h) {
+                       // A timestamp in the future is clock skew, not age:
+                       // only what is certainly past the bound goes.
+                       return now > h.accepted_at &&
+                              now - h.accepted_at > kHandshakeMaxAgeSeconds;
+                     }),
+      accepted_handshakes.end());
+  return before - accepted_handshakes.size();
 }
 
 int VaultStore::find_session(std::size_t contact_index) const {
