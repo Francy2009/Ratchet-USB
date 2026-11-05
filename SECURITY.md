@@ -229,7 +229,10 @@ to defend against it:
   party as proof that the sender wrote that content, so group blocks are not
   deniable. It is not a group ratchet and keeps no group
   state: the block reveals how many recipients there are (not who they are),
-  the sender chooses the member list, and a member who leaves still holds the
+  but it carries the sender's Ed25519 identity key in the clear, so anyone
+  holding the sender's contact card can link the block to that identity.
+  The same holds for 1:1 envelopes, which carry a truncated SHA-256 hash of
+  the sender's identity key that links the same way. The sender chooses the member list, and a member who leaves still holds the
   content keys of messages already delivered. Membership changes therefore do
   not rekey the group; start a fresh message after a removal.
 

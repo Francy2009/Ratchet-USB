@@ -156,7 +156,10 @@ blocco è firmato con la chiave d'identità del mittente, quindi un membro non p
 ricifrare il corpo condiviso e attribuirlo al mittente. La firma è trasferibile:
 un membro può mostrare blocco e chiave a terzi come prova che il mittente ha
 scritto quel contenuto, quindi i blocchi di gruppo non sono negabili. Il blocco
-mostra quanti membri ci sono, non le loro identità. I messaggi di gruppo per ora
+mostra quanti membri ci sono, non le loro identità; contiene però la chiave
+d'identità del mittente in chiaro, quindi chiunque abbia la sua scheda di
+contatto può collegare il blocco a lui, così come l'hash del mittente delle
+buste 1:1 si collega alla stessa chiave. I messaggi di gruppo per ora
 esistono anche nell'interfaccia a terminale: Spazio segna un contatto per un
 gruppo e `g` scrive ai contatti segnati. L'interfaccia desktop mostra ancora solo
 la conversazione 1:1.

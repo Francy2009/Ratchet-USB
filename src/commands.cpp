@@ -491,6 +491,13 @@ int cmd_card(const Options& opts) {
     return 0;
   }
 
+  // An explicitly requested key change must fail before touching anything:
+  // the printed card has to match the saved vault, and a pending outbox
+  // pins the on-disk generation until it is exported or deleted.
+  if (opts.rotate_spk || opts.replenish_otpk > 0) {
+    ensure_no_pending_outbox(usb);
+  }
+
   bool changed = false;
 
   if (opts.rotate_spk) {
@@ -519,6 +526,12 @@ int cmd_card(const Options& opts) {
   app::replenish_pq_prekeys(store, kDefaultOtpkCount);
   changed = changed || !had_pq_spk ||
             store.pq_one_time_prekeys.size() != pq_before;
+  // Implicit maintenance above can also change keys, so re-check before
+  // printing: a card that cannot be saved must never reach stdout, while an
+  // unchanged card stays printable with an outbox pending.
+  if (changed || store.generation == 0) {
+    ensure_no_pending_outbox(usb);
+  }
   const pq::MlDsaKeyPair pq_identity = derive_pq_identity(store.seed);
   std::cout << x3dh::export_hybrid_card(
       identity_sk, identity_pk, pq_identity, spk, store.one_time_prekeys,
@@ -532,7 +545,6 @@ int cmd_card(const Options& opts) {
   }
 
   if (changed || store.generation == 0) {
-    ensure_no_pending_outbox(usb);
     app::save_vault(path, store, opened.params, opened.passphrase);
   }
   return 0;

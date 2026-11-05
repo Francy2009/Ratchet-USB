@@ -146,7 +146,9 @@ key under a fresh ephemeral, so the inner 1:1 ratchet header is not on the wire
 and cannot link a member to earlier traffic. The block is signed with the
 sender's identity key, so a member cannot re-encrypt the shared body and pass it
 off as the sender's. The block shows how many members there are, but not their
-identities.
+identities; it does carry the sender's identity key in the clear, so anyone
+with the sender's contact card can link the block to them, just as a 1:1
+envelope's sender hash links to the same key.
 In the terminal interface, Space marks a contact for a group and `g` writes to
 the marked contacts. The desktop GUI still shows only the 1:1 conversation.
 

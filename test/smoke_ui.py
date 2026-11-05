@@ -35,10 +35,12 @@ failures = []
 
 
 def step(text):
+    """Logs one labelled phase of the scripted conversation."""
     print("  ui-smoke: %s" % text)
 
 
 def fail(text):
+    """Records a failed expectation without stopping the run."""
     print("  ui-smoke: FAIL -- %s" % text)
     failures.append(text)
 
@@ -106,6 +108,7 @@ class Ui:
         self.pump(1.0)
 
     def pump(self, seconds):
+        """Drains whatever the child wrote during `seconds`."""
         end = time.time() + seconds
         while time.time() < end:
             ready, _, _ = select.select([self.fd], [], [], 0.1)
@@ -120,6 +123,7 @@ class Ui:
             self.buffer.extend(chunk)
 
     def send(self, data, wait=0.5):
+        """Types `data`, streaming large pastes in 1 KiB chunks."""
         payload = data.encode() if isinstance(data, str) else data
         # Hybrid cards are tens of KiB. A single blocking write can fill the
         # pty while the child is also trying to redraw; stream it as a real
@@ -134,6 +138,7 @@ class Ui:
         self.send("\x1b[200~" + text + "\x1b[201~", wait)
 
     def raw(self):
+        """Returns the screen buffer including escape sequences."""
         return self.buffer.decode("utf-8", "replace")
 
     def text(self):
@@ -142,6 +147,7 @@ class Ui:
                       self.raw())
 
     def expect(self, needle, label):
+        """Checks `needle` is on screen, logging `label` either way."""
         if needle in self.text():
             step(label)
         else:
@@ -150,6 +156,7 @@ class Ui:
             print(self.text()[-2000:])
 
     def quit(self):
+        """Asks the interface to exit and returns its status."""
         self.send("q", 0.8)
         return self.reap()
 
@@ -173,6 +180,7 @@ class Ui:
         return -1
 
     def unlock(self, words):
+        """Enters the vault passphrase the way the prompt asks."""
         # The passphrase is entered one word per line and ended with Ctrl-D,
         # exactly as the prompt asks.
         self.send("".join(word + "\n" for word in words) + "\x04", 3.0)
@@ -194,6 +202,7 @@ def block_from(text, label):
 
 
 def main():
+    """Drives a full two-vault conversation through the real interface."""
     work = tempfile.mkdtemp(prefix="ratchet-ui-smoke-")
     alice = os.path.join(work, "alice")
     bob = os.path.join(work, "bob")
