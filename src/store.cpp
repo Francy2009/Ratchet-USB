@@ -4,6 +4,7 @@
 #include <array>
 #include <cstring>
 #include <ctime>
+#include <limits>
 
 #include "ratchet/serial.hpp"
 
@@ -319,7 +320,7 @@ void VaultStore::remember_handshake(const IdentitySigningPublicKey& initiator,
     return;
   }
   if (accepted_handshakes.size() >= kMaxAcceptedHandshakes) {
-    prune_old_handshakes(now);
+    prune_old_handshakes();
   }
   if (accepted_handshakes.size() >= kMaxAcceptedHandshakes) {
     throw Error("accepted-handshake history is full; refusing replay-window eviction");
@@ -331,15 +332,32 @@ void VaultStore::remember_handshake(const IdentitySigningPublicKey& initiator,
   accepted_handshakes.push_back(h);
 }
 
-std::size_t VaultStore::prune_old_handshakes(uint64_t now) {
+std::size_t VaultStore::prune_old_handshakes() {
+  // An opening names its signed prekey by id, and receive() looks that id up
+  // in signed_prekeys before decrypting anything. Rotation appends with an
+  // increasing id and drops from the front, keeping the newest two -- and
+  // resigning never changes an id or a timestamp -- so a record accepted
+  // before every retained prekey was created cannot name one of them: its
+  // opening fails the lookup and its replay protection is spent. (The
+  // ML-KEM signed prekey is not consulted: only one is ever kept and it is
+  // never rotated away, so the EC prekey is the binding constraint.)
+  if (signed_prekeys.empty()) {
+    return 0;
+  }
+  uint64_t oldest = std::numeric_limits<uint64_t>::max();
+  for (const prekey::SignedPrekey& spk : signed_prekeys) {
+    if (spk.created_at == 0) {
+      // A pre-v2 prekey carries no timestamp, so the ordering argument does
+      // not hold. Keep everything: a stuck list fails closed elsewhere.
+      return 0;
+    }
+    oldest = std::min(oldest, spk.created_at);
+  }
   const std::size_t before = accepted_handshakes.size();
   accepted_handshakes.erase(
       std::remove_if(accepted_handshakes.begin(), accepted_handshakes.end(),
-                     [now](const AcceptedHandshake& h) {
-                       // A timestamp in the future is clock skew, not age:
-                       // only what is certainly past the bound goes.
-                       return now > h.accepted_at &&
-                              now - h.accepted_at > kHandshakeMaxAgeSeconds;
+                     [oldest](const AcceptedHandshake& h) {
+                       return h.accepted_at < oldest;
                      }),
       accepted_handshakes.end());
   return before - accepted_handshakes.size();

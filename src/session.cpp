@@ -159,10 +159,10 @@ ReceiveResult receive(store::VaultStore& vault, const IdentitySigningSecretKey& 
     }
     if (vault.accepted_handshakes.size() >= store::kMaxAcceptedHandshakes) {
       // Same bound remember_handshake enforces after decrypting: drop only
-      // openings too old to still decrypt (their signed prekey is long
-      // rotated away), so a full list of stale history does not block a
+      // records whose signed prekey is certainly gone (every retained prekey
+      // postdates them), so a full list of spent history does not block a
       // genuine new handshake before its validity is even examined.
-      vault.prune_old_handshakes(static_cast<uint64_t>(std::time(nullptr)));
+      vault.prune_old_handshakes();
     }
     if (vault.accepted_handshakes.size() >= store::kMaxAcceptedHandshakes) {
       throw Error("accepted-handshake history is full; refusing replay-window eviction");

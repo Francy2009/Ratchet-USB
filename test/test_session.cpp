@@ -348,11 +348,11 @@ TEST("remember_handshake refuses silent replay-history eviction") {
   CHECK_EQ(s.accepted_handshakes.size(), before);
 }
 
-TEST("remember_handshake prunes handshakes too old to still decrypt") {
-  // Signed prekeys rotate after 30 days and only the newest two are kept, so
-  // an opening older than 90 days cannot name a prekey the vault still holds
-  // and keeping its replay record buys nothing. A full list of such stale
-  // history must make room instead of refusing new handshakes forever.
+TEST("remember_handshake prunes records whose signed prekey is gone") {
+  // Rotation keeps only the newest two signed prekeys, so a record accepted
+  // before every retained prekey was created cannot name one of them: its
+  // opening fails the prekey lookup before decrypting. A full list of such
+  // spent records must make room instead of refusing new handshakes forever.
   store::VaultStore s;
   IdentitySigningPublicKey id{};
   randombytes_buf(id.data(), id.size());
@@ -365,52 +365,65 @@ TEST("remember_handshake prunes handshakes too old to still decrypt") {
   }
   CHECK_EQ(s.accepted_handshakes.size(), store::kMaxAcceptedHandshakes);
 
-  const uint64_t much_later =
-      kOld + store::kHandshakeMaxAgeSeconds + 3600;
+  // Both retained prekeys postdate every record: none of the recorded
+  // openings can name them.
+  prekey::SignedPrekey first;
+  first.created_at = kOld + store::kMaxAcceptedHandshakes + 100;
+  prekey::SignedPrekey second;
+  second.created_at = first.created_at + 10;
+  s.signed_prekeys.push_back(std::move(first));
+  s.signed_prekeys.push_back(std::move(second));
+
   x25519::PublicKey fresh{};
   randombytes_buf(fresh.data(), fresh.size());
-  s.remember_handshake(id, fresh, much_later);
+  s.remember_handshake(id, fresh, second.created_at + 10);
   CHECK_EQ(s.accepted_handshakes.size(), std::size_t(1));
   CHECK(s.handshake_already_accepted(id, fresh));
 }
 
 TEST("remember_handshake still refuses eviction when nothing is prunable") {
-  // Pruning is by age, not a way to forget live replay protection: a full
-  // list of recent handshakes -- an active flood, not slow accumulation --
-  // must keep failing closed.
+  // Pruning follows prekey removal, not the clock: a full list of records
+  // that may still name a retained prekey -- an active flood, not spent
+  // history -- must keep failing closed. Here the records are newer than
+  // every retained prekey, so none is provably spent.
   store::VaultStore s;
   IdentitySigningPublicKey id{};
   randombytes_buf(id.data(), id.size());
 
-  constexpr uint64_t kNow = 1700000000;
+  prekey::SignedPrekey spk;
+  spk.created_at = 1700000000;
+  s.signed_prekeys.push_back(std::move(spk));
+
   for (std::size_t i = 0; i < store::kMaxAcceptedHandshakes; ++i) {
     x25519::PublicKey e{};
     randombytes_buf(e.data(), e.size());
-    s.remember_handshake(id, e, kNow + i);
+    s.remember_handshake(id, e, spk.created_at + 100 + i);
   }
   x25519::PublicKey extra{};
   randombytes_buf(extra.data(), extra.size());
-  CHECK_THROWS(s.remember_handshake(id, extra, kNow + 10000));
+  CHECK_THROWS(s.remember_handshake(id, extra, spk.created_at + 100000));
   CHECK_EQ(s.accepted_handshakes.size(), store::kMaxAcceptedHandshakes);
 }
 
-TEST("prune_old_handshakes keeps future timestamps and recent entries") {
+TEST("prune_old_handshakes keeps everything without prekey evidence") {
+  // No signed prekeys, or a pre-v2 one without a timestamp: the ordering
+  // argument does not hold, so pruning must change nothing and the ceiling
+  // keeps failing closed.
   store::VaultStore s;
   IdentitySigningPublicKey id{};
   randombytes_buf(id.data(), id.size());
 
-  constexpr uint64_t kNow = 1700000000;
-  x25519::PublicKey recent{};
-  randombytes_buf(recent.data(), recent.size());
-  s.remember_handshake(id, recent, kNow);
-  // Future timestamps are clock skew, not age: they must survive pruning.
-  x25519::PublicKey skewed{};
-  randombytes_buf(skewed.data(), skewed.size());
-  s.remember_handshake(id, skewed, kNow + 3600);
+  for (std::size_t i = 0; i < store::kMaxAcceptedHandshakes; ++i) {
+    x25519::PublicKey e{};
+    randombytes_buf(e.data(), e.size());
+    s.remember_handshake(id, e, 1000 + i);
+  }
+  CHECK_EQ(s.prune_old_handshakes(), std::size_t(0));
 
-  CHECK_EQ(s.prune_old_handshakes(kNow + 3600), std::size_t(0));
-  CHECK(s.handshake_already_accepted(id, recent));
-  CHECK(s.handshake_already_accepted(id, skewed));
+  prekey::SignedPrekey legacy;  // created_at == 0: timestamp unknown.
+  s.signed_prekeys.push_back(std::move(legacy));
+  CHECK_EQ(s.prune_old_handshakes(), std::size_t(0));
+  CHECK_EQ(s.accepted_handshakes.size(), store::kMaxAcceptedHandshakes);
 }
 
 // RU-03. decrypt() ratchets chains, caches skipped keys and can perform a whole

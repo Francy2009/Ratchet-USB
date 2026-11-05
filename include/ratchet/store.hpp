@@ -173,41 +173,34 @@ struct VaultStore {
   bool handshake_already_accepted(const IdentitySigningPublicKey& initiator,
                                   const x25519::PublicKey& ephemeral_pub) const;
 
-  // Records an accepted handshake. When the bounded store is full, entries
-  // older than kHandshakeMaxAgeSeconds are pruned first: an opening that
-  // old can no longer decrypt anyway, because it must reference a signed
-  // prekey and only the newest two are kept (each rotating after
-  // kSpkMaxAgeDays). Past the ceiling with no prunable entry the vault still
-  // refuses new handshakes rather than forgetting an authenticated one.
+  // Records an accepted handshake. When the bounded store is full, records
+  // whose signed prekey is certainly gone are pruned first (see
+  // prune_old_handshakes); past the ceiling with nothing prunable the vault
+  // still refuses new handshakes rather than forgetting an authenticated one.
   // Call it only after the message actually decrypted: recording an attempt
   // that failed would let anyone fill the list with entries of their choosing.
   void remember_handshake(const IdentitySigningPublicKey& initiator,
                           const x25519::PublicKey& ephemeral_pub, uint64_t now);
 
-  // Drops accepted-handshake records older than kHandshakeMaxAgeSeconds and
-  // returns how many were removed. Future timestamps (clock skew) are kept:
-  // pruning must only discard what is certainly too old to still decrypt.
-  std::size_t prune_old_handshakes(uint64_t now);
+  // Drops accepted-handshake records that can no longer protect anything: a
+  // record is kept while its opening might still decrypt, and an opening
+  // must name a signed prekey the vault still holds. Returns how many were
+  // removed. Records are never pruned when the vault holds no signed prekey
+  // or a prekey without a timestamp (legacy): without evidence of removal,
+  // keeping is the fail-closed choice.
+  std::size_t prune_old_handshakes();
 };
 
 // Maximum number of accepted handshakes stored in a vault.
 //
 // Each entry is 72 bytes, so the whole list is a few tens of kilobytes at this
 // ceiling. A vault that never pruned would eventually refuse new handshakes,
-// so entries older than kHandshakeMaxAgeSeconds are dropped to make room (see
-// remember_handshake). That expiry is not silent eviction of live replay
-// protection: only openings too old to still decrypt go, because those must
-// name a signed prekey and only the newest two survive rotation.
+// so records whose signed prekey is certainly gone are dropped to make room
+// (see VaultStore::prune_old_handshakes). That expiry follows prekey removal
+// rather than the clock alone: an opening must name a signed prekey the vault
+// still holds, and only the newest two survive rotation, so a record predating
+// every retained prekey can no longer match a decryptable opening.
 inline constexpr std::size_t kMaxAcceptedHandshakes = 512;
-
-// Age after which an accepted handshake stops being replay protection worth
-// keeping. Signed prekeys rotate after kSpkMaxAgeDays (30) and only the newest
-// two are retained, so an opening older than two rotations can no longer name
-// a prekey the vault still holds and fails before decrypting. Ninety days is
-// that bound with margin for clock skew and long-offline vaults.
-inline constexpr uint64_t kHandshakeMaxAgeDays = 90;
-inline constexpr uint64_t kHandshakeMaxAgeSeconds =
-    kHandshakeMaxAgeDays * 24 * 60 * 60;
 
 // A deliberate, deep copy of a session, key material and all.
 //
