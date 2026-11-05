@@ -961,8 +961,16 @@ void Model::render_body(screen::Frame& frame, std::size_t rows) const {
 
     case Screen::Compose: {
       if (group_mode_) {
-        frame.line(indent(std::string(i18n::t(lang_, Str::WritingToGroup)) +
-                          " " + group_recipient_list()));
+        // The recipient list can hold up to 64 aliases: wrap it across lines
+        // so the user sees every recipient before confirming the send.
+        // Truncating it would hide the tail of the list on the one screen
+        // whose job is to show who will receive the message.
+        for (const std::string& line : screen::wrap_text(
+                 std::string(i18n::t(lang_, Str::WritingToGroup)) + " " +
+                     group_recipient_list(),
+                 inner)) {
+          frame.line(indent(line));
+        }
         frame.line(indent(i18n::t(lang_, Str::ComposeGroupHint)),
                    screen::Style::Dim);
       } else {
@@ -974,7 +982,10 @@ void Model::render_body(screen::Frame& frame, std::size_t rows) const {
       }
       frame.blank();
       const std::vector<std::string> lines = screen::wrap_text(text_, inner);
-      const std::size_t room = rows > 3 ? rows - 3 : 1;
+      // Count the heading lines actually emitted above, so a wrapped group
+      // list shrinks the message area instead of pushing the footer down.
+      const std::size_t used = frame.lines().size() - before;
+      const std::size_t room = rows > used ? rows - used : 1;
       const std::size_t top = lines.size() > room ? lines.size() - room : 0;
       for (std::size_t i = top; i < lines.size(); ++i) {
         frame.line(indent(lines[i]));
