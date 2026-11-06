@@ -183,7 +183,8 @@ std::string unseal_wrapper(const IdentitySigningSecretKey& my_identity_sk,
 }
 
 std::array<uint8_t, crypto_hash_sha256_BYTES> transcript_digest(
-    const std::vector<uint8_t>& aad, const std::vector<uint8_t>& ciphertext) {
+    const std::vector<uint8_t>& aad, const std::vector<uint8_t>& ciphertext,
+    const std::array<uint8_t, kNonceBytes>& nonce) {
   init_sodium();
   crypto_hash_sha256_state state;
   crypto_hash_sha256_init(&state);
@@ -191,6 +192,7 @@ std::array<uint8_t, crypto_hash_sha256_BYTES> transcript_digest(
       &state, reinterpret_cast<const uint8_t*>(kSignDomain.data()),
       kSignDomain.size());
   crypto_hash_sha256_update(&state, aad.data(), aad.size());
+  crypto_hash_sha256_update(&state, nonce.data(), nonce.size());
   crypto_hash_sha256_update(&state, ciphertext.data(), ciphertext.size());
   std::array<uint8_t, crypto_hash_sha256_BYTES> digest{};
   crypto_hash_sha256_final(&state, digest.data());
@@ -340,9 +342,12 @@ std::string send(store::VaultStore& vault,
   // signs the transcript, binding the content, the wrappers and the header to
   // the one identity the recipient already verified. Without this, any member
   // could re-encrypt the body under the shared key and attribute it to the
-  // sender before the original reached the others.
+  // sender before the original reached the others. The content nonce is part
+  // of the signed transcript as well: it travels in the clear and feeds the
+  // content AEAD, so leaving it unsigned would let a tampered copy pass the
+  // signature and fail only later at content decryption.
   std::array<uint8_t, crypto_hash_sha256_BYTES> digest =
-      transcript_digest(aad, ciphertext);
+      transcript_digest(aad, ciphertext, nonce);
   Signature signature{};
   sign(my_identity_sk, digest.data(), digest.size(), signature);
   sodium_memzero(digest.data(), digest.size());
@@ -425,7 +430,7 @@ ReceiveResult receive(store::VaultStore& vault,
 
   const std::vector<uint8_t> aad = content_aad(group_id, sender, wrappers);
   std::array<uint8_t, crypto_hash_sha256_BYTES> digest =
-      transcript_digest(aad, ciphertext);
+      transcript_digest(aad, ciphertext, nonce);
   const bool sender_ok =
       verify(sender, digest.data(), digest.size(), signature);
   sodium_memzero(digest.data(), digest.size());

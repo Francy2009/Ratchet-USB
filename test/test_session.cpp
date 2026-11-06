@@ -309,6 +309,7 @@ TEST("the accepted-handshake list survives a vault round-trip") {
   randombytes_buf(h.initiator_identity.data(), h.initiator_identity.size());
   randombytes_buf(h.ephemeral_pub.data(), h.ephemeral_pub.size());
   h.accepted_at = 1700000000;
+  h.spk_id = 7;
   s.accepted_handshakes.push_back(h);
 
   const SecureBuffer bytes = store::serialize(s);
@@ -318,6 +319,7 @@ TEST("the accepted-handshake list survives a vault round-trip") {
   CHECK(parsed.accepted_handshakes[0].initiator_identity == h.initiator_identity);
   CHECK(parsed.accepted_handshakes[0].ephemeral_pub == h.ephemeral_pub);
   CHECK_EQ(parsed.accepted_handshakes[0].accepted_at, h.accepted_at);
+  CHECK_EQ(parsed.accepted_handshakes[0].spk_id, h.spk_id);
   CHECK(parsed.handshake_already_accepted(h.initiator_identity, h.ephemeral_pub));
 }
 
@@ -349,34 +351,37 @@ TEST("remember_handshake refuses silent replay-history eviction") {
 }
 
 TEST("remember_handshake prunes records whose signed prekey is gone") {
-  // Rotation keeps only the newest two signed prekeys, so a record accepted
-  // before every retained prekey was created cannot name one of them: its
-  // opening fails the prekey lookup before decrypting. A full list of such
-  // spent records must make room instead of refusing new handshakes forever.
+  // An opening names its signed prekey by id, and receive() looks that id up
+  // before decrypting. A record carrying a known id no longer stored names
+  // an opening that fails the lookup, so a full list of such spent records
+  // must make room instead of refusing new handshakes forever. Timestamps
+  // play no role: they are stored for legibility, never for pruning.
   store::VaultStore s;
   IdentitySigningPublicKey id{};
   randombytes_buf(id.data(), id.size());
 
-  constexpr uint64_t kOld = 1700000000;
+  constexpr uint32_t kGoneSpk = 41;
   for (std::size_t i = 0; i < store::kMaxAcceptedHandshakes; ++i) {
     x25519::PublicKey e{};
     randombytes_buf(e.data(), e.size());
-    s.remember_handshake(id, e, kOld + i);
+    s.remember_handshake(id, e, 1700000000 + i, kGoneSpk);
   }
   CHECK_EQ(s.accepted_handshakes.size(), store::kMaxAcceptedHandshakes);
 
-  // Both retained prekeys postdate every record: none of the recorded
-  // openings can name them.
+  // Neither retained prekey carries the recorded id: none of the recorded
+  // openings can name them, even though the timestamps overlap.
   prekey::SignedPrekey first;
-  first.created_at = kOld + store::kMaxAcceptedHandshakes + 100;
+  first.id = 100;
+  first.created_at = 1700000000;
   prekey::SignedPrekey second;
-  second.created_at = first.created_at + 10;
+  second.id = 101;
+  second.created_at = 1700000000;
   s.signed_prekeys.push_back(std::move(first));
   s.signed_prekeys.push_back(std::move(second));
 
   x25519::PublicKey fresh{};
   randombytes_buf(fresh.data(), fresh.size());
-  s.remember_handshake(id, fresh, second.created_at + 10);
+  s.remember_handshake(id, fresh, 1700000000, 101);
   CHECK_EQ(s.accepted_handshakes.size(), std::size_t(1));
   CHECK(s.handshake_already_accepted(id, fresh));
 }
@@ -384,31 +389,34 @@ TEST("remember_handshake prunes records whose signed prekey is gone") {
 TEST("remember_handshake still refuses eviction when nothing is prunable") {
   // Pruning follows prekey removal, not the clock: a full list of records
   // that may still name a retained prekey -- an active flood, not spent
-  // history -- must keep failing closed. Here the records are newer than
-  // every retained prekey, so none is provably spent.
+  // history -- must keep failing closed. Here every record names the
+  // retained prekey id, so none is provably spent. A backward clock step on
+  // the new record must not change that.
   store::VaultStore s;
   IdentitySigningPublicKey id{};
   randombytes_buf(id.data(), id.size());
 
   prekey::SignedPrekey spk;
+  spk.id = 9;
   spk.created_at = 1700000000;
   s.signed_prekeys.push_back(std::move(spk));
 
   for (std::size_t i = 0; i < store::kMaxAcceptedHandshakes; ++i) {
     x25519::PublicKey e{};
     randombytes_buf(e.data(), e.size());
-    s.remember_handshake(id, e, spk.created_at + 100 + i);
+    s.remember_handshake(id, e, 1700000100 + i, 9);
   }
   x25519::PublicKey extra{};
   randombytes_buf(extra.data(), extra.size());
-  CHECK_THROWS(s.remember_handshake(id, extra, spk.created_at + 100000));
+  CHECK_THROWS(s.remember_handshake(id, extra, 1000, 9));
   CHECK_EQ(s.accepted_handshakes.size(), store::kMaxAcceptedHandshakes);
 }
 
 TEST("prune_old_handshakes keeps everything without prekey evidence") {
-  // No signed prekeys, or a pre-v2 one without a timestamp: the ordering
-  // argument does not hold, so pruning must change nothing and the ceiling
-  // keeps failing closed.
+  // Records with an unknown prekey id (legacy vaults predating the field)
+  // can never prove removal, so pruning must change nothing and the ceiling
+  // keeps failing closed -- even with no signed prekeys at all, and even
+  // when a retained prekey carries no timestamp.
   store::VaultStore s;
   IdentitySigningPublicKey id{};
   randombytes_buf(id.data(), id.size());
@@ -420,7 +428,7 @@ TEST("prune_old_handshakes keeps everything without prekey evidence") {
   }
   CHECK_EQ(s.prune_old_handshakes(), std::size_t(0));
 
-  prekey::SignedPrekey legacy;  // created_at == 0: timestamp unknown.
+  prekey::SignedPrekey legacy;  // id 0, created_at 0: nothing known.
   s.signed_prekeys.push_back(std::move(legacy));
   CHECK_EQ(s.prune_old_handshakes(), std::size_t(0));
   CHECK_EQ(s.accepted_handshakes.size(), store::kMaxAcceptedHandshakes);

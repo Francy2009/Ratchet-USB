@@ -158,6 +158,13 @@ passphrase, checks that the block belongs to the saved vault state, prints it
 again and removes the file. A new send is refused until the pending block is
 exported or deleted.
 
+Deleting an undelivered opening can leave the sender with a session the
+recipient never established. Prefer exporting with `outbox` and delivering
+the exact block. If it was lost, reset the affected session with
+`reset-session <alias>` (confirm `RESET`) before sending a fresh opening; for
+a group, repeat for each affected recipient. Resetting discards pending and
+skipped message keys.
+
 The program tries to find a removable drive. If detection is unsuitable for
 your setup, pass `--usb-path <directory>` to commands or set `RATCHET_USB_PATH`.
 

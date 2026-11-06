@@ -97,12 +97,16 @@ and libFuzzer. The single required check is the `ci` gate job.
   this stated in `SECURITY.md`, `README.md` and `README.it.md` alongside the
   existing recipient-count disclosure (count visible, identities not).
 - Accepted-handshake replay window: `remember_handshake` records only after a
-  message decrypts; when the 512-entry store is full, records predating every
-  retained signed prekey are pruned first (an opening must name a stored SPK
-  and rotation keeps the newest two, so those openings fail the lookup before
-  decrypting). A full list with nothing prunable still refuses new handshakes
-  (fail closed); with no SPKs, or a pre-v2 SPK without `created_at`, nothing
-  is pruned. Update the bound only with the SPK-retention argument re-checked.
+  message decrypts and stores the opening's signed-prekey id alongside the
+  timestamp (timestamps are legibility only, never pruning evidence). When
+  the 512-entry store is full, only records with a known id absent from the
+  vault are pruned first -- those openings fail the prekey lookup before
+  decrypting, so their replay protection is spent. Records with an unknown
+  id (legacy) are never pruned, and a full list with nothing prunable still
+  refuses new handshakes (fail closed). Pre-v2 signed prekeys keep
+  `created_at == 0` across migrations so no synthetic date can feed any age
+  reasoning. Update the bound only with the SPK-retention argument
+  re-checked.
 - Ephemeral messages (sender-chosen TTL): the expiry rides *inside* the
   encrypted plaintext framing, never in cleartext metadata, so it is AEAD-
   authenticated and adds no observable fingerprint. Offer fixed buckets

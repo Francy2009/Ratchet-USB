@@ -4,7 +4,6 @@
 #include <array>
 #include <cstring>
 #include <ctime>
-#include <limits>
 
 #include "ratchet/serial.hpp"
 
@@ -19,7 +18,9 @@ constexpr std::array<uint8_t, 4> kStoreMagic = {'R', 'S', 'T', 'R'};
 // handshakes already accepted, so an initial message cannot be replayed. All
 // four are still readable: a vault written before the guard existed simply
 // starts with an empty list, which is the same state a fresh vault is in.
-constexpr uint8_t kStoreVersion = 9;
+// Version 10 records the signed-prekey id each handshake used, so pruning
+// follows key removal instead of wall-clock ordering.
+constexpr uint8_t kStoreVersion = 10;
 
 void write_pq_prekey(serial::Writer<SecureBuffer>& w, const PqPrekey& p) {
   w.u32(p.id);
@@ -62,8 +63,13 @@ prekey::SignedPrekey read_signed_prekey(serial::Reader& r, uint8_t version) {
     spk.created_at = r.u64();
   } else {
     // Vaults written before rotation tracking existed have no recorded age;
-    // treat the prekey as fresh rather than immediately flagging it stale.
-    spk.created_at = static_cast<uint64_t>(std::time(nullptr));
+    // keep that uncertainty instead of synthesising a timestamp. A synthetic
+    // load-time date is indistinguishable from a genuine one and would let
+    // pruning (or rotation-age checks) reason from a bound the prekey never
+    // provided. Zero forces the fail-closed path elsewhere: pruning keeps
+    // everything while such a key is retained, and maintenance treats it as
+    // stale and rotates it away.
+    spk.created_at = 0;
   }
   return spk;
 }
@@ -315,7 +321,7 @@ bool VaultStore::handshake_already_accepted(
 
 void VaultStore::remember_handshake(const IdentitySigningPublicKey& initiator,
                                     const x25519::PublicKey& ephemeral_pub,
-                                    uint64_t now) {
+                                    uint64_t now, uint32_t spk_id) {
   if (handshake_already_accepted(initiator, ephemeral_pub)) {
     return;
   }
@@ -329,35 +335,34 @@ void VaultStore::remember_handshake(const IdentitySigningPublicKey& initiator,
   h.initiator_identity = initiator;
   h.ephemeral_pub = ephemeral_pub;
   h.accepted_at = now;
+  h.spk_id = spk_id;
   accepted_handshakes.push_back(h);
 }
 
 std::size_t VaultStore::prune_old_handshakes() {
   // An opening names its signed prekey by id, and receive() looks that id up
-  // in signed_prekeys before decrypting anything. Rotation appends with an
-  // increasing id and drops from the front, keeping the newest two -- and
-  // resigning never changes an id or a timestamp -- so a record accepted
-  // before every retained prekey was created cannot name one of them: its
-  // opening fails the lookup and its replay protection is spent. (The
-  // ML-KEM signed prekey is not consulted: only one is ever kept and it is
-  // never rotated away, so the EC prekey is the binding constraint.)
-  if (signed_prekeys.empty()) {
-    return 0;
-  }
-  uint64_t oldest = std::numeric_limits<uint64_t>::max();
-  for (const prekey::SignedPrekey& spk : signed_prekeys) {
-    if (spk.created_at == 0) {
-      // A pre-v2 prekey carries no timestamp, so the ordering argument does
-      // not hold. Keep everything: a stuck list fails closed elsewhere.
-      return 0;
-    }
-    oldest = std::min(oldest, spk.created_at);
-  }
+  // in signed_prekeys before decrypting anything. A record carrying a known
+  // id absent from the vault therefore names an opening that fails the
+  // lookup: its replay protection is spent and the record can go. Records
+  // with an unknown id (spk_id == 0, written before the field existed) are
+  // never pruned -- nothing proves their prekey is gone. Timestamps are
+  // deliberately ignored here: wall clocks move backwards and old migrations
+  // synthesised dates, so no age bound can prove removal. (The ML-KEM signed
+  // prekey is not consulted: only one is ever kept and it is never rotated
+  // away, so the EC prekey is the binding constraint.)
   const std::size_t before = accepted_handshakes.size();
   accepted_handshakes.erase(
       std::remove_if(accepted_handshakes.begin(), accepted_handshakes.end(),
-                     [oldest](const AcceptedHandshake& h) {
-                       return h.accepted_at < oldest;
+                     [this](const AcceptedHandshake& h) {
+                       if (h.spk_id == 0) {
+                         return false;
+                       }
+                       for (const prekey::SignedPrekey& spk : signed_prekeys) {
+                         if (spk.id == h.spk_id) {
+                           return false;
+                         }
+                       }
+                       return true;
                      }),
       accepted_handshakes.end());
   return before - accepted_handshakes.size();
@@ -455,11 +460,13 @@ SecureBuffer serialize(const VaultStore& store) {
 
   // Appended last, so a version 3 vault is exactly this file minus these
   // bytes and the reader below can tell the two apart on the version alone.
+  // Version 10 appends the signed-prekey id each handshake named.
   w.u32(static_cast<uint32_t>(store.accepted_handshakes.size()));
   for (const AcceptedHandshake& h : store.accepted_handshakes) {
     w.bytes(h.initiator_identity.data(), h.initiator_identity.size());
     w.bytes(h.ephemeral_pub.data(), h.ephemeral_pub.size());
     w.u64(h.accepted_at);
+    w.u32(h.spk_id);
   }
 
   return out;
@@ -533,7 +540,8 @@ VaultStore parse(const uint8_t* data, std::size_t len) {
 
   if (version >= 4) {
     const uint32_t handshake_count = r.u32();
-    // initiator_identity(32) + ephemeral_pub(32) + accepted_at(8).
+    // initiator_identity(32) + ephemeral_pub(32) + accepted_at(8);
+    // version 10 appends spk_id(4).
     store.accepted_handshakes.reserve(
         r.bounded_count(handshake_count, 32 + 32 + 8));
     for (uint32_t i = 0; i < handshake_count; ++i) {
@@ -541,6 +549,7 @@ VaultStore parse(const uint8_t* data, std::size_t len) {
       r.bytes(h.initiator_identity.data(), h.initiator_identity.size());
       r.bytes(h.ephemeral_pub.data(), h.ephemeral_pub.size());
       h.accepted_at = r.u64();
+      h.spk_id = (version >= 10) ? r.u32() : 0;
       store.accepted_handshakes.push_back(h);
     }
   }

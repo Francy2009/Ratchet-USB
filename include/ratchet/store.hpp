@@ -107,6 +107,10 @@ struct AcceptedHandshake {
   IdentitySigningPublicKey initiator_identity{};
   x25519::PublicKey ephemeral_pub{};
   uint64_t accepted_at = 0;
+  // Signed-prekey id the recorded opening named (0 when unknown: vaults
+  // written before the field existed). Only a known id absent from the
+  // vault proves the opening can no longer decrypt, so only it is prunable.
+  uint32_t spk_id = 0;
 };
 
 // Double Ratchet state for one contact. Field names follow the Signal Double
@@ -180,14 +184,16 @@ struct VaultStore {
   // Call it only after the message actually decrypted: recording an attempt
   // that failed would let anyone fill the list with entries of their choosing.
   void remember_handshake(const IdentitySigningPublicKey& initiator,
-                          const x25519::PublicKey& ephemeral_pub, uint64_t now);
+                          const x25519::PublicKey& ephemeral_pub, uint64_t now,
+                          uint32_t spk_id = 0);
 
-  // Drops accepted-handshake records that can no longer protect anything: a
-  // record is kept while its opening might still decrypt, and an opening
-  // must name a signed prekey the vault still holds. Returns how many were
-  // removed. Records are never pruned when the vault holds no signed prekey
-  // or a prekey without a timestamp (legacy): without evidence of removal,
-  // keeping is the fail-closed choice.
+  // Drops accepted-handshake records that can no longer protect anything: an
+  // opening names its signed prekey by id and receive() looks that id up
+  // before decrypting, so a record whose prekey id is known and no longer
+  // stored is spent -- replaying its opening fails the lookup. Records with
+  // an unknown prekey id (legacy vaults predating the field) are never
+  // pruned: without evidence of removal, keeping is the fail-closed choice.
+  // Returns how many were removed.
   std::size_t prune_old_handshakes();
 };
 
@@ -197,9 +203,11 @@ struct VaultStore {
 // ceiling. A vault that never pruned would eventually refuse new handshakes,
 // so records whose signed prekey is certainly gone are dropped to make room
 // (see VaultStore::prune_old_handshakes). That expiry follows prekey removal
-// rather than the clock alone: an opening must name a signed prekey the vault
-// still holds, and only the newest two survive rotation, so a record predating
-// every retained prekey can no longer match a decryptable opening.
+// rather than the clock: an opening names its signed prekey by id, and only
+// records carrying a known id absent from the vault are pruned. Wall-clock
+// timestamps cannot prove which prekey an opening used (clocks move
+// backwards, old migrations synthesised dates), so they are stored for
+// legibility only and never drive pruning.
 inline constexpr std::size_t kMaxAcceptedHandshakes = 512;
 
 // A deliberate, deep copy of a session, key material and all.

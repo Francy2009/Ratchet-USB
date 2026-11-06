@@ -3,6 +3,7 @@
 #include <string>
 
 #include "ratchet/store.hpp"
+#include "ratchet/serial.hpp"
 #include "test_support.hpp"
 
 using namespace ratchet;
@@ -307,4 +308,55 @@ TEST("the format-character check does not trust malformed UTF-8 to hide one") {
   CHECK(has_unicode_format_chars(hidden));
   CHECK(contact_alias_problem(hidden) ==
         kContactAliasFormatCharsError.data());
+}
+
+TEST("pre-v2 signed prekey age stays unknown after migration") {
+  // Vaults written before rotation tracking have no recorded age. The loader
+  // must preserve that uncertainty as zero across saves and reloads: a
+  // synthetic load-time date would be indistinguishable from a genuine one.
+  SecureBuffer bytes;
+  serial::Writer<SecureBuffer> w(bytes);
+  const uint8_t magic[] = {'R', 'S', 'T', 'R'};
+  w.bytes(magic, sizeof(magic));
+  w.u8(1);
+  std::array<uint8_t, 32> zero{};
+  w.bytes(zero.data(), zero.size());  // seed
+  w.u32(2);
+  w.u32(1);
+  w.u32(1);
+  w.bytes(zero.data(), zero.size());  // public key
+  w.bytes(zero.data(), zero.size());  // secret key
+  w.bytes(zero.data(), zero.size());  // signature
+  w.bytes(zero.data(), zero.size());
+  w.u32(1);  // next one-time prekey
+  w.u32(0);
+  w.u32(0);  // contacts
+  w.u32(0);  // sessions
+  auto legacy = store::parse(bytes.data(), bytes.size());
+  CHECK_EQ(legacy.signed_prekeys[0].created_at, uint64_t(0));
+  const auto saved = store::serialize(legacy);
+  auto migrated = store::parse(saved.data(), saved.size());
+  CHECK_EQ(migrated.signed_prekeys[0].created_at, uint64_t(0));
+  CHECK_EQ(migrated.prune_old_handshakes(), std::size_t(0));
+}
+
+TEST("legacy handshakes without a prekey id are never pruned") {
+  // Handshakes recorded before the spk_id field carry zero (unknown). Even
+  // when no retained prekey could have produced them, nothing proves their
+  // prekey is gone, so the bounded registry keeps failing closed.
+  store::VaultStore s;
+  IdentitySigningPublicKey id{};
+  randombytes_buf(id.data(), id.size());
+  for (std::size_t i = 0; i < store::kMaxAcceptedHandshakes; ++i) {
+    x25519::PublicKey e{};
+    randombytes_buf(e.data(), e.size());
+    s.remember_handshake(id, e, 1000 + i);
+    CHECK_EQ(s.accepted_handshakes.back().spk_id, uint32_t(0));
+  }
+  prekey::SignedPrekey spk;
+  spk.id = 99;
+  spk.created_at = 1700000000;
+  s.signed_prekeys.push_back(std::move(spk));
+  CHECK_EQ(s.prune_old_handshakes(), std::size_t(0));
+  CHECK_EQ(s.accepted_handshakes.size(), store::kMaxAcceptedHandshakes);
 }

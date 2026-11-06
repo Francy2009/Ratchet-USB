@@ -159,9 +159,9 @@ ReceiveResult receive(store::VaultStore& vault, const IdentitySigningSecretKey& 
     }
     if (vault.accepted_handshakes.size() >= store::kMaxAcceptedHandshakes) {
       // Same bound remember_handshake enforces after decrypting: drop only
-      // records whose signed prekey is certainly gone (every retained prekey
-      // postdates them), so a full list of spent history does not block a
-      // genuine new handshake before its validity is even examined.
+      // records whose signed prekey is certainly gone (a known id no longer
+      // stored), so a full list of spent history does not block a genuine
+      // new handshake before its validity is even examined.
       vault.prune_old_handshakes();
     }
     if (vault.accepted_handshakes.size() >= store::kMaxAcceptedHandshakes) {
@@ -280,7 +280,8 @@ ReceiveResult receive(store::VaultStore& vault, const IdentitySigningSecretKey& 
     if (existing < 0) vault.sessions.reserve(vault.sessions.size() + 1);
     vault.accepted_handshakes.reserve(vault.accepted_handshakes.size() + 1);
     vault.remember_handshake(f.initiator_identity_pub, env.header.dh_pub,
-                             static_cast<uint64_t>(std::time(nullptr)));
+                             static_cast<uint64_t>(std::time(nullptr)),
+                             f.spk_id);
     if (existing >= 0) {
       vault.sessions[static_cast<std::size_t>(existing)] = std::move(fresh);
     } else {

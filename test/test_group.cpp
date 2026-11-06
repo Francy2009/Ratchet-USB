@@ -149,13 +149,15 @@ std::vector<uint8_t> test_content_aad(
 }
 
 std::array<uint8_t, crypto_hash_sha256_BYTES> test_transcript_digest(
-    const std::vector<uint8_t>& aad, const std::vector<uint8_t>& ciphertext) {
+    const std::vector<uint8_t>& aad, const std::vector<uint8_t>& ciphertext,
+    const std::array<uint8_t, kTestNonceBytes>& nonce) {
   crypto_hash_sha256_state state;
   crypto_hash_sha256_init(&state);
   crypto_hash_sha256_update(
       &state, reinterpret_cast<const uint8_t*>(kTestSignDomain.data()),
       kTestSignDomain.size());
   crypto_hash_sha256_update(&state, aad.data(), aad.size());
+  crypto_hash_sha256_update(&state, nonce.data(), nonce.size());
   crypto_hash_sha256_update(&state, ciphertext.data(), ciphertext.size());
   std::array<uint8_t, crypto_hash_sha256_BYTES> digest{};
   crypto_hash_sha256_final(&state, digest.data());
@@ -192,7 +194,7 @@ std::string test_build_group(
     const IdentitySigningSecretKey& sender_sk) {
   const std::vector<uint8_t> aad =
       test_content_aad(group_id, sender, wrappers);
-  const auto digest = test_transcript_digest(aad, ciphertext);
+  const auto digest = test_transcript_digest(aad, ciphertext, nonce);
   Signature signature{};
   sign(sender_sk, digest.data(), digest.size(), signature);
 
@@ -297,10 +299,10 @@ TEST("group-send refuses an unverified recipient") {
 }
 
 TEST("group-receive rolls back when only the nonce is changed") {
-  // The nonce is not part of the signed transcript, so this block still passes
-  // the sender signature and Bob's wrapper opens. It must fail at content
-  // authentication, and that failure must not consume Bob's wrapper: the
-  // genuine block has to decrypt afterwards.
+  // The content nonce rides in the clear and feeds the content AEAD, so it
+  // is part of the signed transcript. Flipping it must fail the sender
+  // signature before any wrapper is tried, and that failure must not consume
+  // Bob's wrapper: the genuine block has to decrypt afterwards.
   Party alice = make_party(3);
   Party bob = make_party(3);
   Party carol = make_party(3);
@@ -322,7 +324,8 @@ TEST("group-receive rolls back when only the nonce is changed") {
     group::receive(bob.vault, bob.sk, bob.pk, forged);
   } catch (const Error& e) {
     authentication_error =
-        std::string(e.what()).find("authentication failed") != std::string::npos;
+        std::string(e.what()).find("sender signature is invalid") !=
+        std::string::npos;
   }
   CHECK(authentication_error);
 
