@@ -144,6 +144,7 @@ add_library(ratchet_core
             src/terminal.cpp
             src/media.cpp
             src/file.cpp
+            src/ephemeral.cpp
             src/clipboard.cpp
             src/cli.cpp
             src/app.cpp
