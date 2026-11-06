@@ -80,7 +80,9 @@ Puoi creare il vault, aggiungere un contatto, verificare la sua impronta,
 scrivere e leggere messaggi con i tasti indicati sullo schermo. La lingua segue
 la locale del sistema; puoi scegliere esplicitamente `--lang it` o `--lang en`.
 L'interfaccia si blocca dopo tre minuti di inattività. L'intervallo si cambia
-con `--idle-lock <secondi>`.
+con `--idle-lock <secondi>`. Nella lista dei contatti, Spazio segna un contatto
+per un messaggio di gruppo e `g` scrive ai contatti segnati; accanto a ciascuno
+compare `[x]`.
 
 Se preferisci una finestra, avvia `ratchet-gui`. Mette le stesse operazioni
 dietro Qt6 — scegli la cartella del vault, la sblocchi, poi usi le schede
@@ -141,6 +143,39 @@ viaggia interamente dentro il blocco, quindi il blocco cresce con il file
 L'interfaccia usa anche gli appunti di sistema: premi `y` su una carta o su un
 blocco di messaggio per copiarlo, e `Ctrl-V` per incollare gli appunti in un
 campo di testo. Così non devono passare dalla selezione del terminale.
+
+Per più destinatari, `ratchet-usb group-send --to alice --to bob` cifra il
+messaggio una sola volta con una chiave di contenuto casuale e incapsula quella
+chiave per ogni membro attraverso la sessione 1:1 già esistente. Ogni membro
+riceve lo stesso blocco; `recv` trova l'involucro indirizzato al vault locale e
+decifra il contenuto condiviso. Servono almeno due alias `--to` e ogni contatto
+deve essere già verificato. Ogni involucro è sigillato con la chiave d'identità
+del membro sotto un effimero nuovo, quindi l'intestazione del ratchet 1:1 non
+viaggia in chiaro e non può collegare un membro al traffico precedente. Il
+blocco è firmato con la chiave d'identità del mittente, quindi un membro non può
+ricifrare il corpo condiviso e attribuirlo al mittente. La firma è trasferibile:
+un membro può mostrare blocco e chiave a terzi come prova che il mittente ha
+scritto quel contenuto, quindi i blocchi di gruppo non sono negabili. Il blocco
+mostra quanti membri ci sono, non le loro identità; contiene però la chiave
+d'identità del mittente in chiaro, quindi chiunque abbia la sua scheda di
+contatto può collegare il blocco a lui, così come l'hash del mittente delle
+buste 1:1 si collega alla stessa chiave. I messaggi di gruppo per ora
+esistono anche nell'interfaccia a terminale: Spazio segna un contatto per un
+gruppo e `g` scrive ai contatti segnati. L'interfaccia desktop mostra ancora solo
+la conversazione 1:1.
+
+Se lo standard output non riesce a ricevere un blocco generato, il blocco viene
+scritto accanto al vault come `vault.bin.outbox`; `ratchet-usb outbox` chiede la
+passphrase del vault, verifica che il blocco appartenga allo stato salvato, lo
+stampa di nuovo e rimuove il file. Un nuovo invio viene rifiutato finché il
+blocco pendente non è stato esportato o eliminato.
+
+Eliminare un'apertura non consegnata può lasciare al mittente una sessione che
+il destinatario non ha mai aperto. Preferisci esportare con `outbox` e
+consegnare il blocco esatto. Se è perso, usa `reset-session <alias>` (conferma
+`RESET`) prima di inviare una nuova apertura; per un gruppo ripeti per ogni
+destinatario coinvolto. Il reset elimina le chiavi dei messaggi pendenti e
+saltati.
 
 Il programma prova a individuare un'unità rimovibile. Se la rilevazione non è
 adatta al tuo caso, passa `--usb-path <cartella>` ai comandi o imposta

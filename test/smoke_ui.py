@@ -35,10 +35,12 @@ failures = []
 
 
 def step(text):
+    """Logs one labelled phase of the scripted conversation."""
     print("  ui-smoke: %s" % text)
 
 
 def fail(text):
+    """Records a failed expectation without stopping the run."""
     print("  ui-smoke: FAIL -- %s" % text)
     failures.append(text)
 
@@ -90,6 +92,7 @@ class Ui:
     """The interface running on a pty, with a way to read the screen back."""
 
     def __init__(self, drive, extra=None, env_extra=None):
+        """Start the terminal UI in a private pty for the supplied vault."""
         self.buffer = bytearray()
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
@@ -100,12 +103,13 @@ class Ui:
             os.execve(BIN, [BIN, "ui", "--usb-path", drive] + (extra or []), env)
         # A window big enough that a message block is not scrolled: this test
         # reads blocks off the screen, the way a person copies one out.
-        # With hybrid PQXDH handshakes and padded blocks, 90 rows accommodates
-        # the entire block without scrolling.
-        fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", 90, 100, 0, 0))
+        # With hybrid PQXDH handshakes, a group block carries one initial
+        # wrapper per new member, so give the pty room for the whole block.
+        fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", 200, 100, 0, 0))
         self.pump(1.0)
 
     def pump(self, seconds):
+        """Drains whatever the child wrote during `seconds`."""
         end = time.time() + seconds
         while time.time() < end:
             ready, _, _ = select.select([self.fd], [], [], 0.1)
@@ -120,6 +124,7 @@ class Ui:
             self.buffer.extend(chunk)
 
     def send(self, data, wait=0.5):
+        """Types `data`, streaming large pastes in 1 KiB chunks."""
         payload = data.encode() if isinstance(data, str) else data
         # Hybrid cards are tens of KiB. A single blocking write can fill the
         # pty while the child is also trying to redraw; stream it as a real
@@ -134,6 +139,7 @@ class Ui:
         self.send("\x1b[200~" + text + "\x1b[201~", wait)
 
     def raw(self):
+        """Returns the screen buffer including escape sequences."""
         return self.buffer.decode("utf-8", "replace")
 
     def text(self):
@@ -142,6 +148,7 @@ class Ui:
                       self.raw())
 
     def expect(self, needle, label):
+        """Checks `needle` is on screen, logging `label` either way."""
         if needle in self.text():
             step(label)
         else:
@@ -150,6 +157,7 @@ class Ui:
             print(self.text()[-2000:])
 
     def quit(self):
+        """Asks the interface to exit and returns its status."""
         self.send("q", 0.8)
         return self.reap()
 
@@ -173,6 +181,7 @@ class Ui:
         return -1
 
     def unlock(self, words):
+        """Enters the vault passphrase the way the prompt asks."""
         # The passphrase is entered one word per line and ended with Ctrl-D,
         # exactly as the prompt asks.
         self.send("".join(word + "\n" for word in words) + "\x04", 3.0)
@@ -194,11 +203,14 @@ def block_from(text, label):
 
 
 def main():
+    """Drives a full two-vault conversation through the real interface."""
     work = tempfile.mkdtemp(prefix="ratchet-ui-smoke-")
     alice = os.path.join(work, "alice")
     bob = os.path.join(work, "bob")
+    carol = os.path.join(work, "carol")
     os.makedirs(alice)
     os.makedirs(bob)
+    os.makedirs(carol)
 
     try:
         step("setting up two vaults with the command line")
@@ -219,6 +231,11 @@ def main():
         # the test non-interactive. The default path is covered by smoke.sh.
         cli(["trust", "--usb-path", bob, "alice", "--confirmed"],
             stdin=feed(bob_words))
+
+        # Carol only needs a vault and a card: Alice imports her for the group
+        # test, and Carol does not have to read the message back.
+        carol_words = init_vault(carol)
+        carol_card = cli(["card", "--usb-path", carol], stdin=feed(carol_words))
 
         # --- Alice does everything through the interface --------------------
         step("opening the interface on Alice's drive")
@@ -269,8 +286,43 @@ def main():
             fail("the plaintext was still on screen next to the ciphertext")
 
         ui.send("q", 0.5)   # `q` closes the block, as in any pager
-        ui.expect("no contacts yet", "q closes the block and goes back") \
-            if False else None
+
+        step("adding Carol for a group message")
+        ui.send("a")
+        ui.expect("call this contact", "it asks what to call her")
+        ui.send("carol")
+        ui.send("\n")
+        ui.expect("contact card here", "it asks for her card")
+        ui.paste(carol_card)
+        ui.send("\x04", 2.0)  # Ctrl-D
+        ui.expect("carol added", "Carol is in the contact list")
+        ui.expect("NOT verified", "and she is marked unverified")
+
+        step("verifying Carol")
+        ui.send("\x1b[B")  # move to Carol
+        ui.send("\n")
+        ui.expect("Fingerprint:", "her fingerprint is shown to check")
+        ui.send("t", 2.0)
+        ui.expect("marked as verified", "she is verified now")
+
+        step("writing a group message to Bob and Carol")
+        ui.send("\x1b")     # back to the contact list, Carol selected
+        ui.send(" ")        # mark Carol
+        ui.send("\x1b[A")   # move up to Bob
+        ui.send(" ")        # mark Bob
+        ui.send("g")
+        ui.expect("Writing to group", "the group compose screen is up")
+        ui.expect("bob", "the first member is named")
+        ui.expect("carol", "the second member is named")
+        ui.send("ciao gruppo")
+        ui.send("\x04", 4.0)  # Ctrl-D sends
+        ui.expect("BEGIN RATCHET GROUP", "the encrypted group block is shown")
+
+        group_message = block_from(ui.text(), "GROUP")
+        if group_message is None:
+            fail("could not read the group block off the screen")
+            raise SystemExit(1)
+        ui.send("q", 0.5)   # close the block pager
         status = ui.quit()
         if status != 0:
             fail("quitting returned %d" % status)
@@ -291,6 +343,16 @@ def main():
         ui.expect("Message from alice", "the sender is named")
         ui.expect("ciao bob", "the plaintext came back")
         ui.expect("opened a new session", "and it opened the session")
+
+        step("reading the group message")
+        ui.send("\x1b", 0.5)  # back to the contact list
+        ui.send("r")
+        ui.expect("Paste the block here", "it asks for the group block")
+        ui.paste(group_message)
+        ui.send("\x04", 3.0)
+        ui.expect("Group message from alice", "the group sender is named")
+        ui.expect("ciao gruppo", "the group plaintext came back")
+        ui.send("\x1b", 0.5)  # back to the contact list
 
         step("the drawing itself")
         if "\x1b[36m" not in ui.raw() and "\x1b[1;36m" not in ui.raw():

@@ -78,6 +78,10 @@ struct Options {
   std::size_t passphrase_words = passphrase::kDefaultWords;
   std::string name;
   std::string to;
+  // group-send --to <alias>: repeated once per recipient. A group needs at
+  // least two, and each name is resolved against the vault before any session
+  // is advanced.
+  std::vector<std::string> group_members;
   std::string card_file;
   std::string file_path;  // send --file: encrypt a file instead of text
   std::optional<std::string> message;

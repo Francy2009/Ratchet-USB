@@ -20,6 +20,7 @@
 #include "ratchet/identity.hpp"
 #include "ratchet/media.hpp"
 #include "ratchet/file.hpp"
+#include "ratchet/group.hpp"
 #include "ratchet/passphrase.hpp"
 #include "ratchet/screen.hpp"
 #include "ratchet/secure.hpp"
@@ -123,6 +124,10 @@ class Driver {
   void use_path(const fs::path& path);
   void unlock();
   void after_unlock();
+  // Best-effort path to Home for after_unlock()'s failure branch. Never
+  // throws: reaching Home keeps a maintenance/save failure a status line
+  // instead of a dead terminal.
+  bool try_go_home() noexcept;
   void lock(Str reason);
 
   void create_identity(bool from_mnemonic);
@@ -138,6 +143,13 @@ class Driver {
   void paste_from_clipboard();
 
   void save();
+  // True when the command line left a generated-but-unexported block
+  // beside the vault. Every operation that would persist vault state checks
+  // this before mutating anything in memory, so a blocked save never burns
+  // a ratchet step for a block nobody received; save() re-checks as defence
+  // in depth.
+  bool has_pending_outbox() const;
+  void require_no_pending_outbox() const;
   void go_home();
   // Every operation below runs only with a vault open. value() rather than
   // operator-> so that a bug which got here with the vault closed throws
@@ -156,6 +168,10 @@ class Driver {
   }
   std::vector<ContactRow> contact_rows() const;
   void report(const std::exception& error);
+  // Resolves the contacts marked for a group against the vault that is open
+  // now: alias plus fingerprint, never a positional index captured earlier.
+  // Throws when a marked contact is gone, changed, or no longer verified.
+  std::vector<std::size_t> resolve_group_recipients() const;
 
   Config config_;
   Model model_;
@@ -211,8 +227,49 @@ std::vector<ContactRow> Driver::contact_rows() const {
 }
 
 void Driver::save() {
+  require_no_pending_outbox();
   app::save_vault(vault_path_, vault().store, vault().params,
                   vault().passphrase);
+}
+
+bool Driver::has_pending_outbox() const {
+  std::error_code ec;
+  return fs::exists(vault::outbox_path(vault_path_.parent_path()), ec);
+}
+
+void Driver::require_no_pending_outbox() const {
+  if (has_pending_outbox()) {
+    throw Error("a pending outbox must be exported or deleted before saving the vault");
+  }
+}
+
+std::vector<std::size_t> Driver::resolve_group_recipients() const {
+  const store::VaultStore& store = vault().store;
+  std::vector<std::size_t> indices;
+  indices.reserve(model_.group_recipients().size());
+  for (const GroupRecipient& marked : model_.group_recipients()) {
+    const int index = store.find_contact(marked.alias);
+    if (index < 0) {
+      throw Error("group contact '" + marked.alias + "' is no longer in the vault");
+    }
+    const store::Contact& contact = store.contacts[static_cast<std::size_t>(index)];
+    const std::string fingerprint =
+        contact.card.has_value() && contact.card->pq_bundle.has_value()
+            ? hybrid_fingerprint(contact.identity_pub,
+                                 contact.card->pq_identity_pub)
+            : ratchet::fingerprint(contact.identity_pub);
+    if (fingerprint != marked.fingerprint) {
+      throw Error("group contact '" + marked.alias + "' changed since it was marked");
+    }
+    if (!contact.verified) {
+      throw Error("group contact '" + marked.alias + "' is no longer verified");
+    }
+    indices.push_back(static_cast<std::size_t>(index));
+  }
+  if (indices.size() < 2) {
+    throw Error("a group message needs at least two recipients");
+  }
+  return indices;
 }
 
 // --- getting to an open vault ------------------------------------------------
@@ -307,24 +364,69 @@ void Driver::unlock() {
   after_unlock();
 }
 
-void Driver::after_unlock() {
-  IdentitySigningSecretKey identity_sk;
-  IdentitySigningPublicKey identity_pk;
-  derive_identity(vault().store.seed, identity_sk, identity_pk);
-
-  // The same maintenance `unlock` has always run: rotate a signed prekey past
-  // its age, top the one-time pool back up, drop skipped keys nobody claimed.
-  const app::MaintenanceReport report =
-      app::maintain_prekeys(vault().store, identity_pk, identity_sk);
-  identity_sk.wipe();
-  const bool swept = app::expire_skipped_keys(vault().store) > 0;
-  if (report.changed() || swept) {
-    save();
+bool Driver::try_go_home() noexcept {
+  try {
+    if (!vault_.has_value()) {
+      return false;
+    }
+    if (fingerprint_.empty()) {
+      IdentitySigningSecretKey identity_sk;
+      IdentitySigningPublicKey identity_pk;
+      derive_identity(vault().store.seed, identity_sk, identity_pk);
+      fingerprint_ = hybrid_fingerprint(
+          identity_pk, derive_pq_identity(vault().store.seed).public_key);
+      identity_sk.wipe();
+    }
+    go_home();
+    return true;
+  } catch (...) {
+    return false;
   }
+}
 
-  fingerprint_ = hybrid_fingerprint(
-      identity_pk, derive_pq_identity(vault().store.seed).public_key);
-  go_home();
+void Driver::after_unlock() {
+  // unlock() and create_identity() call this outside their try blocks, and
+  // the drive loop has no handler: anything thrown here would leave run()
+  // and kill the interface. Every failure below stays a status line.
+  try {
+    IdentitySigningSecretKey identity_sk;
+    IdentitySigningPublicKey identity_pk;
+    derive_identity(vault().store.seed, identity_sk, identity_pk);
+
+    // A pending outbox means the on-disk vault is behind a block the user
+    // has not exported yet. Skip the maintenance writes (which would widen
+    // the gap between memory and disk) and stay usable: the status line
+    // tells the user to resolve the outbox with the command line.
+    if (has_pending_outbox()) {
+      identity_sk.wipe();
+      fingerprint_ = hybrid_fingerprint(
+          identity_pk, derive_pq_identity(vault().store.seed).public_key);
+      go_home();
+      report(Error("a pending outbox must be exported or deleted before "
+                   "saving the vault"));
+      return;
+    }
+
+    // The same maintenance `unlock` has always run: rotate a signed prekey past
+    // its age, top the one-time pool back up, drop skipped keys nobody claimed.
+    const app::MaintenanceReport report =
+        app::maintain_prekeys(vault().store, identity_pk, identity_sk);
+    identity_sk.wipe();
+    const bool swept = app::expire_skipped_keys(vault().store) > 0;
+    if (report.changed() || swept) {
+      save();
+    }
+
+    fingerprint_ = hybrid_fingerprint(
+        identity_pk, derive_pq_identity(vault().store.seed).public_key);
+    go_home();
+  } catch (const std::exception& e) {
+    // A failed maintenance save (disk error, lost lock) must not exit the
+    // UI either. Best-effort Home keeps the failure a status line on
+    // screen rather than a dead terminal.
+    try_go_home();
+    report(e);
+  }
 }
 
 void Driver::go_home() {
@@ -437,6 +539,9 @@ void Driver::create_identity(bool from_mnemonic) {
 
 void Driver::show_card() {
   try {
+    // Before the ratchet moves: with an outbox pending the save below would
+    // refuse, and the advanced session would be lost along with the block.
+    require_no_pending_outbox();
     IdentitySigningSecretKey identity_sk;
     IdentitySigningPublicKey identity_pk;
     derive_identity(vault().store.seed, identity_sk, identity_pk);
@@ -484,6 +589,9 @@ void Driver::import_card() {
   model_.clear_text();
 
   try {
+    // The contact row is appended before save(): refuse here so a pending
+    // outbox cannot leave memory ahead of disk.
+    require_no_pending_outbox();
     const x3dh::ImportedCard imported = x3dh::import_card(text);
     wipe_string(text);
 
@@ -524,6 +632,9 @@ void Driver::trust_selected() {
     if (index < 0) {
       throw Error("no contact named '" + alias + "'");
     }
+    // The verified flag flips before save(): refuse here so a pending
+    // outbox cannot leave memory ahead of disk.
+    require_no_pending_outbox();
     vault().store.contacts[static_cast<std::size_t>(index)].verified = true;
     save();
     model_.show_contacts(contact_rows());
@@ -559,6 +670,7 @@ void Driver::change_passphrase() {
       }
       std::cout << "\n  " << t(Str::DerivingKey) << "\n";
       std::cout.flush();
+      require_no_pending_outbox();
       app::rekey_vault(vault_path_, vault().store, vault().params, next);
     }
     vault().passphrase = std::move(next);
@@ -570,34 +682,45 @@ void Driver::change_passphrase() {
 }
 
 void Driver::send_message() {
+  const bool group = model_.group_mode();
   const ContactRow* row = model_.selected_contact();
   std::string body = model_.text();
   model_.clear_text();
-  if (row == nullptr || body.empty()) {
+  if (body.empty() || (!group && row == nullptr)) {
     wipe_string(body);
     model_.set_status(std::string(t(Str::EmptyMessage)), screen::Style::Warn);
     return;
   }
 
   try {
-    const int index = vault().store.find_contact(row->alias);
-    if (index < 0) {
-      throw Error("no contact named '" + row->alias + "'");
-    }
-
+    // Before the ratchet moves: with an outbox pending the save below would
+    // refuse, and the advanced session would be lost along with the block.
+    require_no_pending_outbox();
     IdentitySigningSecretKey identity_sk;
     IdentitySigningPublicKey identity_pk;
     derive_identity(vault().store.seed, identity_sk, identity_pk);
-    std::string block =
-        session::send(vault().store, identity_sk, identity_pk,
-                      static_cast<std::size_t>(index), body);
+    std::string block;
+    if (group) {
+      const std::vector<std::size_t> recipients = resolve_group_recipients();
+      block = group::send(vault().store, identity_sk, identity_pk, recipients,
+                          body);
+    } else {
+      const int index = vault().store.find_contact(row->alias);
+      if (index < 0) {
+        throw Error("no contact named '" + row->alias + "'");
+      }
+      block = session::send(vault().store, identity_sk, identity_pk,
+                            static_cast<std::size_t>(index), body);
+    }
     identity_sk.wipe();
     wipe_string(body);
 
     save();
     model_.show_contacts(contact_rows());
-    model_.show_block(t(Str::MessageBlock), std::move(block));
-    model_.set_status(std::string(t(Str::MessageReady)), screen::Style::Good);
+    model_.show_block(group ? t(Str::GroupMessageBlock) : t(Str::MessageBlock),
+                      std::move(block));
+    model_.set_status(group ? Str::GroupMessageReady : Str::MessageReady,
+                      screen::Style::Good);
   } catch (const std::exception& e) {
     wipe_string(body);
     report(e);
@@ -613,11 +736,27 @@ void Driver::receive_message() {
   }
 
   try {
+    // Receiving advances the session before save(): refuse here so a pending
+    // outbox cannot leave memory ahead of disk. The pasted block is not
+    // lost; the user retries after resolving the outbox.
+    require_no_pending_outbox();
     IdentitySigningSecretKey identity_sk;
     IdentitySigningPublicKey identity_pk;
     derive_identity(vault().store.seed, identity_sk, identity_pk);
-    session::ReceiveResult result =
-        session::receive(vault().store, identity_sk, identity_pk, block);
+    const bool group_block = group::looks_like_group(block);
+    session::ReceiveResult result;
+    std::string group_id;
+    if (group_block) {
+      group::ReceiveResult received_group =
+          group::receive(vault().store, identity_sk, identity_pk, block);
+      result.contact_index = received_group.contact_index;
+      result.alias = std::move(received_group.alias);
+      result.plaintext = std::move(received_group.plaintext);
+      result.session_established = false;
+      group_id = group::group_id_hex(received_group.group_id);
+    } else {
+      result = session::receive(vault().store, identity_sk, identity_pk, block);
+    }
     identity_sk.wipe();
     wipe_string(block);
     // A decrypted body that is not a file is moved into the pager below; a
@@ -644,12 +783,14 @@ void Driver::receive_message() {
       // decrypted copy now instead of leaving it on the heap.
       sodium_memzero(received->bytes.data(), received->bytes.size());
       received->bytes.clear();
-      model_.show_file(result.alias, pending_file_->ext,
+      const std::string from =
+          group_block ? result.alias + " [group " + group_id + "]" : result.alias;
+      model_.show_file(from, pending_file_->ext,
                        file::is_dangerous_extension(pending_file_->ext),
                        result.session_established, unverified);
     } else {
       model_.show_message(result.alias, std::move(result.plaintext),
-                          result.session_established, unverified);
+                          result.session_established, unverified, group_id);
     }
   } catch (const std::exception& e) {
     wipe_string(block);
@@ -658,10 +799,11 @@ void Driver::receive_message() {
 }
 
 void Driver::send_file() {
+  const bool group = model_.group_mode();
   const ContactRow* row = model_.selected_contact();
   std::string path = model_.text();
   model_.clear_text();
-  if (row == nullptr || path.empty()) {
+  if (path.empty() || (!group && row == nullptr)) {
     wipe_string(path);
     model_.set_status(std::string(t(Str::FilePathRequired)),
                       screen::Style::Warn);
@@ -669,11 +811,6 @@ void Driver::send_file() {
   }
 
   try {
-    const int index = vault().store.find_contact(row->alias);
-    if (index < 0) {
-      throw Error("no contact named '" + row->alias + "'");
-    }
-
     // Read the file, frame it, then encrypt it through the very same ratchet a
     // text message uses. The raw bytes and the framed plaintext are zeroed as
     // soon as they are no longer needed; only the ciphertext block survives.
@@ -690,19 +827,34 @@ void Driver::send_file() {
     StringWipe wipe_payload(payload);
     wipe_vector(raw);
 
+    // Before the ratchet moves: with an outbox pending the save below would
+    // refuse, and the advanced session would be lost along with the block.
+    require_no_pending_outbox();
     IdentitySigningSecretKey identity_sk;
     IdentitySigningPublicKey identity_pk;
     derive_identity(vault().store.seed, identity_sk, identity_pk);
-    std::string block =
-        session::send(vault().store, identity_sk, identity_pk,
-                      static_cast<std::size_t>(index), payload);
+    std::string block;
+    if (group) {
+      const std::vector<std::size_t> recipients = resolve_group_recipients();
+      block = group::send(vault().store, identity_sk, identity_pk, recipients,
+                          payload);
+    } else {
+      const int index = vault().store.find_contact(row->alias);
+      if (index < 0) {
+        throw Error("no contact named '" + row->alias + "'");
+      }
+      block = session::send(vault().store, identity_sk, identity_pk,
+                            static_cast<std::size_t>(index), payload);
+    }
     identity_sk.wipe();
     wipe_string(payload);
 
     save();
     model_.show_contacts(contact_rows());
-    model_.show_block(t(Str::MessageBlock), std::move(block));
-    model_.set_status(std::string(t(Str::FileReady)), screen::Style::Good);
+    model_.show_block(group ? t(Str::GroupMessageBlock) : t(Str::MessageBlock),
+                      std::move(block));
+    model_.set_status(group ? Str::GroupMessageReady : Str::FileReady,
+                      screen::Style::Good);
   } catch (const std::exception& e) {
     wipe_string(path);
     report(e);

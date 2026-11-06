@@ -84,5 +84,38 @@ and libFuzzer. The single required check is the `ci` gate job.
   terminal. `test/smoke.sh` asserts both; keep CLI output stable for scripts.
 - Commands share `--usb-path` / `RATCHET_USB_PATH`; `--lang it|en` forces
   locale; `NO_COLOR` disables TUI colour.
+- Pending-outbox discipline (`vault.bin.outbox`): any command path that would
+  change keys or ratchet state must call `ensure_no_pending_outbox(usb)`
+  *before* mutating the store and *before* printing a block or card that the
+  subsequent save persists. A block/card that cannot be saved must never reach
+  stdout. Read-only paths (`--fingerprint`, unchanged `card`) stay usable with
+  an outbox pending. `send`/`group-send` write the exact block to the outbox
+  before committing state, and refuse a new send until it is exported/deleted.
+- Group privacy disclosures: GROUP blocks carry the sender's Ed25519 identity
+  key in the clear and 1:1 envelopes a truncated SHA-256 hash of it, so anyone
+  holding the sender's contact card can link either to that identity. Keep
+  this stated in `SECURITY.md`, `README.md` and `README.it.md` alongside the
+  existing recipient-count disclosure (count visible, identities not).
+- Accepted-handshake replay window: `remember_handshake` records only after a
+  message decrypts and stores the opening's signed-prekey id alongside the
+  timestamp (timestamps are legibility only, never pruning evidence). When
+  the 512-entry store is full, only records with a known id absent from the
+  vault are pruned first -- those openings fail the prekey lookup before
+  decrypting, so their replay protection is spent. Records with an unknown
+  id (legacy) are never pruned, and a full list with nothing prunable still
+  refuses new handshakes (fail closed). Pre-v2 signed prekeys keep
+  `created_at == 0` across migrations so no synthetic date can feed any age
+  reasoning. Update the bound only with the SPK-retention argument
+  re-checked.
+- Ephemeral messages (sender-chosen TTL): the expiry rides *inside* the
+  encrypted plaintext framing, never in cleartext metadata, so it is AEAD-
+  authenticated and adds no observable fingerprint. Offer fixed buckets
+  (`1h`/`24h`/`7d`) plus burn-after-reading, not free-form durations.
+  Enforcement is receiver-side and best-effort (old clients render normally);
+  document that TTLs do not stop screenshots or copies, only later exposure.
+  The vault stores no message history, so expiry means refusing display +
+  wiping UI state and staged files, not deleting vault records.
+- `test/smoke_ui.py`: every function and `Ui` method carries a docstring
+  (repo pre-merge docstring coverage gate).
 - `milestone/*` and `v0.5.0-dev` tags are published pre-releases. `v0.5.0-dev`
   stays pinned to its commit; do not move or re-point published tags.

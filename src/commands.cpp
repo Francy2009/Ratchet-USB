@@ -15,12 +15,14 @@
 #include "ratchet/command_io.hpp"
 #include "ratchet/file.hpp"
 #include "ratchet/gui_format.hpp"
+#include "ratchet/group.hpp"
 #include "ratchet/i18n.hpp"
 #include "ratchet/identity.hpp"
 #include "ratchet/media.hpp"
 #include "ratchet/passphrase.hpp"
 #include "ratchet/ratchet.hpp"
 #include "ratchet/screen.hpp"
+#include "ratchet/serial.hpp"
 #include "ratchet/secure.hpp"
 #include "ratchet/session.hpp"
 #include "ratchet/store.hpp"
@@ -67,6 +69,80 @@ std::string_view view_of(const SecureString& text) {
 void write_structured_or_throw(const gui_format::Result& result) {
   if (!gui_format::write_result(std::cout, result)) {
     throw Error("could not write structured output");
+  }
+}
+
+// Writes the pasteable block and makes sure it left the process. The caller
+// has already persisted the block in the outbox beside the vault, so a failed
+// write leaves a recoverable copy and the advanced ratchet state is committed.
+void write_block_or_throw(const std::string& block, const fs::path& outbox) {
+  std::cout << block;
+  std::cout.flush();
+  if (!std::cout) {
+    throw Error("could not write the message block; it is saved at " +
+                outbox.string() + " (run `" + std::string(kProgram) +
+                " outbox --usb-path <dir>` to print it again)");
+  }
+}
+
+// Keep the exact saved generation bound to a pending block intact. Even an
+// unrelated save could invalidate recovery or make an uncommitted block match.
+void ensure_no_pending_outbox(const fs::path& usb) {
+  const fs::path outbox = vault::outbox_path(usb);
+  if (fs::exists(outbox)) {
+    throw Error("a previously generated block is pending at " +
+                outbox.string() + "; run `" + std::string(kProgram) +
+                " outbox --usb-path <dir>` to export it, or delete the pending file");
+  }
+}
+
+constexpr std::array<uint8_t, 4> kOutboxMagic = {'R', 'B', 'O', 'X'};
+constexpr uint8_t kOutboxVersion = 1;
+
+void write_pending_outbox(const fs::path& usb, const store::VaultStore& store,
+                          uint64_t committed_generation,
+                          const std::string& block) {
+  std::vector<uint8_t> bytes;
+  serial::Writer<std::vector<uint8_t>> w(bytes);
+  w.bytes(kOutboxMagic.data(), kOutboxMagic.size());
+  w.u8(kOutboxVersion);
+  w.bytes(store.vault_id.data(), store.vault_id.size());
+  w.u64(committed_generation);
+  w.blob(reinterpret_cast<const uint8_t*>(block.data()), block.size());
+  vault::write_file(vault::outbox_path(usb), bytes, /*overwrite=*/false);
+}
+
+// True when the vault on disk carries `generation`, false when it does not, and
+// nullopt when that cannot be established. The caller keeps the outbox in the
+// last case: an unreadable or ambiguous vault is not proof that the commit did
+// not happen.
+std::optional<bool> vault_generation_is(const fs::path& path,
+                                        const SecureString& passphrase,
+                                        uint64_t generation) {
+  try {
+    const std::vector<uint8_t> bytes = vault::read_file(path);
+    SecureBuffer plaintext;
+    vault::unseal(bytes.data(), bytes.size(), passphrase, plaintext);
+    const store::VaultStore parsed =
+        store::parse(plaintext.data(), plaintext.size());
+    return parsed.generation == generation;
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+void discard_pending_outbox(const fs::path& usb) {
+  std::error_code ec;
+  fs::remove(vault::outbox_path(usb), ec);
+}
+
+void remove_pending_outbox(const fs::path& usb) {
+  std::error_code ec;
+  fs::remove(vault::outbox_path(usb), ec);
+  if (ec) {
+    throw Error("the block was written, but the pending copy at " +
+                vault::outbox_path(usb).string() +
+                " could not be removed: " + ec.message());
   }
 }
 
@@ -161,6 +237,9 @@ int cmd_init(const Options& opts) {
   }
 
   vault::write_file(path, file, opts.force);
+  // A block generated from the old vault cannot be delivered against the new
+  // one, so do not leave a stale outbox behind to block the first send.
+  discard_pending_outbox(usb);
 
   std::cout << "\nVault written to " << path.string() << "\n"
             << "Hybrid identity fingerprint:\n"
@@ -281,6 +360,7 @@ int cmd_migrate(const Options& opts) {
     throw Error("prepared vault generation did not advance");
   }
 
+  ensure_no_pending_outbox(usb);
   vault::promote_prepared(prepared, path);
   const rollback::Digest promoted_digest = rollback::digest(bytes.data(), bytes.size());
   if (rollback::backend_available()) {
@@ -321,6 +401,7 @@ int cmd_unlock(const Options& opts) {
   changed = expire_skipped_keys(store) || changed;
 
   if (changed) {
+    ensure_no_pending_outbox(usb);
     app::save_vault(path, store, opened.params, opened.passphrase);
   }
 
@@ -338,6 +419,7 @@ int cmd_passphrase(const Options& opts) {
   const fs::path path = vault::vault_path(usb);
   OpenedVault opened = unlock_vault(
       path, "Current vault passphrase");
+  ensure_no_pending_outbox(usb);
 
   // A new passphrase is generated and shown once, exactly as at init. The old
   // one is never shown and cannot be recovered; that is the point of changing
@@ -366,6 +448,7 @@ int cmd_passphrase(const Options& opts) {
     terminal::clear_screen();
   }
 
+  ensure_no_pending_outbox(usb);
   app::rekey_vault(path, opened.store, opened.params, next);
   if (!opts.structured_output) {
     next.clear();
@@ -408,6 +491,13 @@ int cmd_card(const Options& opts) {
     return 0;
   }
 
+  // An explicitly requested key change must fail before touching anything:
+  // the printed card has to match the saved vault, and a pending outbox
+  // pins the on-disk generation until it is exported or deleted.
+  if (opts.rotate_spk || opts.replenish_otpk > 0) {
+    ensure_no_pending_outbox(usb);
+  }
+
   bool changed = false;
 
   if (opts.rotate_spk) {
@@ -436,6 +526,12 @@ int cmd_card(const Options& opts) {
   app::replenish_pq_prekeys(store, kDefaultOtpkCount);
   changed = changed || !had_pq_spk ||
             store.pq_one_time_prekeys.size() != pq_before;
+  // Implicit maintenance above can also change keys, so re-check before
+  // printing: a card that cannot be saved must never reach stdout, while an
+  // unchanged card stays printable with an outbox pending.
+  if (changed || store.generation == 0) {
+    ensure_no_pending_outbox(usb);
+  }
   const pq::MlDsaKeyPair pq_identity = derive_pq_identity(store.seed);
   std::cout << x3dh::export_hybrid_card(
       identity_sk, identity_pk, pq_identity, spk, store.one_time_prekeys,
@@ -497,6 +593,7 @@ int cmd_add_contact(const Options& opts) {
                                 static_cast<std::size_t>(alias_index);
                        }),
         store.sessions.end());
+    ensure_no_pending_outbox(usb);
     app::save_vault(path, store, opened.params, opened.passphrase);
     // A legacy alias may contain a control character this build refuses for
     // new imports. It still has to be printable here, because the upgrade is
@@ -531,6 +628,7 @@ int cmd_add_contact(const Options& opts) {
   contact.card = imported.card;
   store.contacts.push_back(std::move(contact));
 
+  ensure_no_pending_outbox(usb);
   app::save_vault(path, store, opened.params, opened.passphrase);
 
   std::cout << "Added '" << name << "'. Verify this fingerprint with them\n"
@@ -679,6 +777,7 @@ int cmd_trust(const Options& opts) {
   }
   verified.verified = true;
 
+  ensure_no_pending_outbox(usb);
   app::save_vault(path, store, opened.params, opened.passphrase);
   std::cout << "'" << shown_name << "' marked as verified.\n";
   return 0;
@@ -690,6 +789,7 @@ int cmd_reset_session(const Options& opts) {
       opts.name, "Contact alias: ", "a contact alias is required");
   const fs::path path = vault::vault_path(usb);
   OpenedVault opened = unlock_vault(path);
+  ensure_no_pending_outbox(usb);
   store::VaultStore& store = opened.store;
   const int contact_idx = store.find_contact(name);
   if (contact_idx < 0) throw Error("no contact named '" + name + "'");
@@ -703,6 +803,7 @@ int cmd_reset_session(const Options& opts) {
       "Close this session and discard pending/skipped message keys? Type RESET: ");
   if (answer != "RESET") throw Error("session reset cancelled");
   store.sessions.erase(store.sessions.begin() + session_idx);
+  ensure_no_pending_outbox(usb);
   app::save_vault(path, store, opened.params, opened.passphrase);
   std::cout << "Session with '" << terminal::escape_control_chars(name)
             << "' reset. A fresh authenticated PQ opening is required.\n";
@@ -751,9 +852,112 @@ int cmd_remove(const Options& opts) {
     if (session.contact_index > idx) --session.contact_index;
   }
 
+  ensure_no_pending_outbox(usb);
   app::save_vault(path, store, opened.params, opened.passphrase);
   std::cout << "Removed '" << terminal::escape_control_chars(name)
             << "' and its session.\n";
+  return 0;
+}
+
+int cmd_group_send(const Options& opts) {
+  if (opts.group_members.size() < 2) {
+    throw Error("group-send needs at least two --to recipients");
+  }
+  if (opts.group_members.size() > group::kMaxMembers) {
+    throw Error("group-send accepts at most " +
+                std::to_string(group::kMaxMembers) + " recipients");
+  }
+  if (opts.stdin_payload_bytes && opts.message.has_value()) {
+    throw Error("--stdin-payload and a message cannot be combined");
+  }
+  require_known_usb_for_payload(opts);
+  const fs::path usb = require_usb_path(opts);
+  const fs::path path = vault::vault_path(usb);
+  ensure_no_pending_outbox(usb);
+
+  if (opts.message.has_value()) {
+    std::cerr
+        << "warning: the message was passed on the command line; it is visible "
+           "in the shell history and in /proc/<pid>/cmdline.\n"
+           "warning: omit it (read from standard input) or use --stdin-payload "
+           "to keep the plaintext out of argv.\n";
+  }
+
+  std::string plaintext;
+  StringWipe wipe_plaintext(plaintext);
+  if (opts.stdin_payload_bytes) {
+    if (*opts.stdin_payload_bytes > message::kMaxPlaintextBytes) {
+      throw Error("--stdin-payload exceeds the 4 MiB plaintext limit");
+    }
+    plaintext = read_exact(std::cin, *opts.stdin_payload_bytes, "message");
+    if (plaintext.empty()) {
+      throw Error("message must not be empty");
+    }
+  }
+
+  OpenedVault opened = unlock_vault(path);
+  store::VaultStore& store = opened.store;
+  // The early check avoids a passphrase prompt, but this one runs under the
+  // vault lock and is what makes two concurrent sends unable to race past it.
+  ensure_no_pending_outbox(usb);
+
+  std::vector<std::size_t> indices;
+  indices.reserve(opts.group_members.size());
+  for (const std::string& member : opts.group_members) {
+    const int idx = store.find_contact(member);
+    if (idx < 0) {
+      throw Error("no contact named '" +
+                  terminal::escape_line_control_chars(member) +
+                  "' (see `contacts`)");
+    }
+    indices.push_back(static_cast<std::size_t>(idx));
+  }
+
+  if (!opts.stdin_payload_bytes) {
+    plaintext = read_text_arg_or_stdin(
+        opts.message, "Message (end with Ctrl-D): ",
+        message::kMaxPlaintextBytes);
+    if (plaintext.empty()) {
+      throw Error("message must not be empty");
+    }
+  }
+
+  IdentitySigningSecretKey identity_sk;
+  IdentitySigningPublicKey identity_pk;
+  derive_identity(store.seed, identity_sk, identity_pk);
+
+  const std::string block = group::send(store, identity_sk, identity_pk,
+                                        indices, plaintext);
+  identity_sk.wipe();
+  wipe_string(plaintext);
+  wipe_plaintext.dismiss();
+
+  // Persist the exact block and the advanced state together. If stdout fails,
+  // the block is still in the outbox and can be exported with `outbox`; if the
+  // vault save fails, remove the outbox because the state it belongs to was
+  // not committed.
+  if (store.generation == UINT64_MAX) {
+    throw Error("vault generation counter exhausted");
+  }
+  const uint64_t outbox_generation = store.generation + 1;
+  write_pending_outbox(usb, store, outbox_generation, block);
+  try {
+    app::save_vault(path, store, opened.params, opened.passphrase);
+  } catch (...) {
+    // save_vault can throw after the vault rename (a rollback-anchor or
+    // directory-sync failure), so delete the outbox only when the on-disk
+    // generation proves the commit did not happen.
+    const std::optional<bool> committed =
+        vault_generation_is(path, opened.passphrase, outbox_generation);
+    if (committed.has_value() && !*committed) {
+      discard_pending_outbox(usb);
+    }
+    throw;
+  }
+
+  std::cerr << "\n";
+  write_block_or_throw(block, vault::outbox_path(usb));
+  remove_pending_outbox(usb);
   return 0;
 }
 
@@ -774,6 +978,7 @@ int cmd_send(const Options& opts) {
   const std::string to =
       require_value(opts.to, "Send to (contact alias): ", "a recipient alias is required");
   const fs::path path = vault::vault_path(usb);
+  ensure_no_pending_outbox(usb);
 
   if (!opts.file_path.empty() && opts.message.has_value()) {
     throw Error("--file and a message cannot be combined");
@@ -816,6 +1021,7 @@ int cmd_send(const Options& opts) {
 
   OpenedVault opened = unlock_vault(path);
   store::VaultStore& store = opened.store;
+  ensure_no_pending_outbox(usb);
 
   const int idx = store.find_contact(to);
   if (idx < 0) {
@@ -853,12 +1059,30 @@ int cmd_send(const Options& opts) {
   wipe_string(plaintext);
   wipe_plaintext.dismiss();
 
-  app::save_vault(path, store, opened.params, opened.passphrase);
-
   // stdout is only the block, so `send alice "hi" > msg.txt` yields a file that
   // can be pasted as-is; the blank separator is part of the terminal display.
+  if (store.generation == UINT64_MAX) {
+    throw Error("vault generation counter exhausted");
+  }
+  const uint64_t outbox_generation = store.generation + 1;
+  write_pending_outbox(usb, store, outbox_generation, block);
+  try {
+    app::save_vault(path, store, opened.params, opened.passphrase);
+  } catch (...) {
+    // save_vault can throw after the vault rename (a rollback-anchor or
+    // directory-sync failure), so delete the outbox only when the on-disk
+    // generation proves the commit did not happen.
+    const std::optional<bool> committed =
+        vault_generation_is(path, opened.passphrase, outbox_generation);
+    if (committed.has_value() && !*committed) {
+      discard_pending_outbox(usb);
+    }
+    throw;
+  }
+
   std::cerr << "\n";
-  std::cout << block;
+  write_block_or_throw(block, vault::outbox_path(usb));
+  remove_pending_outbox(usb);
   return 0;
 }
 
@@ -890,15 +1114,32 @@ int cmd_recv(const Options& opts) {
         std::size_t{12} * 1024u * 1024u);
   }
 
+  if (group::looks_like_group(block) && opts.structured_output) {
+    throw Error("--structured-output does not support group messages yet");
+  }
+
   OpenedVault opened = unlock_vault(path);
   store::VaultStore& store = opened.store;
+  ensure_no_pending_outbox(usb);
 
   IdentitySigningSecretKey identity_sk;
   IdentitySigningPublicKey identity_pk;
   derive_identity(store.seed, identity_sk, identity_pk);
 
-  session::ReceiveResult result =
-      session::receive(store, identity_sk, identity_pk, block);
+  const bool group_block = group::looks_like_group(block);
+  std::array<uint8_t, 16> group_id{};
+  session::ReceiveResult result;
+  if (group_block) {
+    group::ReceiveResult received =
+        group::receive(store, identity_sk, identity_pk, block);
+    result.contact_index = received.contact_index;
+    result.alias = std::move(received.alias);
+    result.plaintext = std::move(received.plaintext);
+    result.session_established = false;
+    group_id = received.group_id;
+  } else {
+    result = session::receive(store, identity_sk, identity_pk, block);
+  }
   identity_sk.wipe();
 
   // The decrypted body is an ordinary std::string because it has to leave the
@@ -909,6 +1150,9 @@ int cmd_recv(const Options& opts) {
   app::save_vault(path, store, opened.params, opened.passphrase);
 
   const std::string alias = terminal::escape_line_control_chars(result.alias);
+  if (group_block) {
+    std::cerr << "(group " << group::group_id_hex(group_id) << ")\n";
+  }
   if (result.session_established) {
     std::cerr << "(new session established with '" << alias << "')\n";
   }
@@ -1012,6 +1256,45 @@ int cmd_recv(const Options& opts) {
   return 0;
 }
 
+int cmd_outbox(const Options& opts) {
+  const fs::path usb = require_usb_path(opts);
+  const fs::path path = vault::outbox_path(usb);
+  if (!fs::exists(path)) {
+    throw Error("no pending block at " + path.string());
+  }
+  const std::vector<uint8_t> bytes = vault::read_file(path);
+  serial::Reader r(bytes.data(), bytes.size());
+  std::array<uint8_t, 4> magic{};
+  r.bytes(magic.data(), magic.size());
+  if (magic != kOutboxMagic || r.u8() != kOutboxVersion) {
+    throw Error("the pending block file has an unsupported format");
+  }
+  store::VaultId vault_id{};
+  r.bytes(vault_id.data(), vault_id.size());
+  const uint64_t generation = r.u64();
+  const std::vector<uint8_t> block_bytes = r.blob();
+  if (!r.at_end()) {
+    throw Error("the pending block file has trailing data");
+  }
+
+  // The outbox is written before the vault save. Unlock the vault and require
+  // the generation that the save was supposed to commit: a crash between the
+  // two leaves a stale outbox that must not be exported.
+  OpenedVault opened =
+      unlock_vault(vault::vault_path(usb), "Vault passphrase");
+  if (opened.store.vault_id != vault_id ||
+      opened.store.generation != generation) {
+    throw Error("the pending block does not match the saved vault state; "
+                "delete " + path.string() + " and send again");
+  }
+
+  const std::string block(block_bytes.begin(), block_bytes.end());
+  std::cerr << "\n";
+  write_block_or_throw(block, path);
+  remove_pending_outbox(usb);
+  return 0;
+}
+
 // The terminal interface, and the one gate in front of it.
 //
 // It runs only when stdin and stdout are both a terminal. That is what keeps
@@ -1085,6 +1368,12 @@ int run(const Options& opts) {
   }
   if (opts.command == "send") {
     return cmd_send(opts);
+  }
+  if (opts.command == "group-send") {
+    return cmd_group_send(opts);
+  }
+  if (opts.command == "outbox") {
+    return cmd_outbox(opts);
   }
   if (opts.command == "recv") {
     return cmd_recv(opts);

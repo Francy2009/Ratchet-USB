@@ -138,6 +138,7 @@ add_library(ratchet_core
             src/triple_ratchet.cpp
             src/spqr.cpp
             src/session.cpp
+            src/group.cpp
             src/rollback.cpp
             src/vault.cpp
             src/terminal.cpp

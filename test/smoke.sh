@@ -602,5 +602,152 @@ printf '%s\n' "$BOB_PASS" |
 grep -q "after remove" "$WORK/rerecv.txt" ||
   fail "the message after re-add did not decrypt"
 
+# ---------------------------------------------------------------------------
+# Multi-user: one content key wrapped once per member through the 1:1 session
+# each member already has with the sender. Bob and Carol get the same block;
+# each finds the wrapper addressed to their own vault.
+
+step "a group message reaches both members"
+CAROL="$WORK/carol"
+mkdir -p "$CAROL"
+"$BIN" init --usb-path "$CAROL" --otpk-count 3 "${CHEAP[@]}" </dev/null \
+  >"$WORK/carol-init.txt" 2>&1 ||
+  fail "carol init exited non-zero"
+CAROL_PASS="$(extract_phrase "$WORK/carol-init.txt")"
+
+printf '%s\n' "$NEW_PASS" |
+  "$BIN" card --usb-path "$ALICE" >"$WORK/alice-for-carol.card" 2>/dev/null ||
+  fail "alice could not export a card for carol"
+printf '%s\n' "$CAROL_PASS" |
+  "$BIN" add --usb-path "$CAROL" alice --card "$WORK/alice-for-carol.card" \
+  >/dev/null 2>&1 ||
+  fail "carol could not import alice"
+printf '%s\n' "$CAROL_PASS" |
+  "$BIN" trust --usb-path "$CAROL" alice --confirmed >/dev/null 2>&1 ||
+  fail "carol could not trust alice"
+
+printf '%s\n' "$CAROL_PASS" |
+  "$BIN" card --usb-path "$CAROL" >"$WORK/carol-for-alice.card" 2>/dev/null ||
+  fail "carol could not export a card"
+printf '%s\n' "$NEW_PASS" |
+  "$BIN" add --usb-path "$ALICE" carol --card "$WORK/carol-for-alice.card" \
+  >/dev/null 2>&1 ||
+  fail "alice could not import carol"
+printf '%s\n' "$NEW_PASS" |
+  "$BIN" trust --usb-path "$ALICE" carol --confirmed >/dev/null 2>&1 ||
+  fail "alice could not trust carol"
+
+printf '%s\n' "$NEW_PASS" |
+  "$BIN" group-send --usb-path "$ALICE" --to bob --to carol "hello group" \
+  >"$WORK/group.txt" 2>"$WORK/group.err" ||
+  fail "group-send exited non-zero"
+grep -q "BEGIN RATCHET GROUP" "$WORK/group.txt" ||
+  fail "group-send did not print a GROUP block"
+
+printf '%s\n' "$BOB_PASS" |
+  "$BIN" recv --usb-path "$BOB" "$(cat "$WORK/group.txt")" \
+  >"$WORK/group-bob.txt" 2>"$WORK/group-bob.err" ||
+  fail "bob could not receive the group message"
+grep -q "hello group" "$WORK/group-bob.txt" ||
+  fail "bob did not decrypt the group message"
+grep -q "^(group " "$WORK/group-bob.err" ||
+  fail "bob's recv did not label the message as a group"
+
+printf '%s\n' "$CAROL_PASS" |
+  "$BIN" recv --usb-path "$CAROL" "$(cat "$WORK/group.txt")" \
+  >"$WORK/group-carol.txt" 2>"$WORK/group-carol.err" ||
+  fail "carol could not receive the group message"
+grep -q "hello group" "$WORK/group-carol.txt" ||
+  fail "carol did not decrypt the group message"
+
+# A block that never reaches the caller is kept beside the vault together with
+# the advanced ratchet state. /dev/full fails on the first write, so group-send
+# has to report the error, leave the outbox behind, and let `outbox` print the
+# exact block later.
+step "a failed block write is recoverable from the outbox"
+cp "$ALICE/vault.bin" "$WORK/pre-outbox-vault.bin"
+BEFORE_HASH="$(sha256sum "$ALICE/vault.bin" | awk '{print $1}')"
+if printf '%s\n' "$NEW_PASS" |
+     "$BIN" group-send --usb-path "$ALICE" --to bob --to carol "lost block" \
+     >/dev/full 2>"$WORK/outbox.err"; then
+  fail "group-send succeeded with a failing stdout"
+fi
+grep -q "vault.bin.outbox" "$WORK/outbox.err" ||
+  fail "group-send did not point at the outbox: $(cat "$WORK/outbox.err")"
+[ -f "$ALICE/vault.bin.outbox" ] ||
+  fail "group-send left no outbox after a failed write"
+AFTER_HASH="$(sha256sum "$ALICE/vault.bin" | awk '{print $1}')"
+[ "$BEFORE_HASH" != "$AFTER_HASH" ] ||
+  fail "group-send did not commit the state that the outbox belongs to"
+if printf '%s\n' "$NEW_PASS" |
+     "$BIN" group-send --usb-path "$ALICE" --to bob --to carol "too soon" \
+     >/dev/null 2>&1; then
+  fail "group-send overwrote a pending outbox"
+fi
+# Exercise both the committed binding and a crash before the vault commit.
+cp "$ALICE/vault.bin" "$WORK/committed-vault.bin"
+cp "$ALICE/vault.bin.outbox" "$WORK/pending-outbox.bin"
+printf '%s\n' "$BOB_PASS" |
+  "$BIN" send --usb-path "$BOB" alice "incoming during outbox" \
+  >"$WORK/incoming.txt" 2>/dev/null || fail "bob could not send"
+for binding in committed stale; do
+  if [[ "$binding" == stale ]]; then
+    cp "$WORK/pre-outbox-vault.bin" "$ALICE/vault.bin"
+  fi
+  for operation in recv card remove passphrase reset-session; do
+    args=()
+    case "$operation" in
+      recv) args=("$(cat "$WORK/incoming.txt")");;
+      card) args=(--rotate-spk);;
+      remove) args=(carol --yes);;
+      reset-session) args=(bob);;
+    esac
+    if printf '%s\n' "$NEW_PASS" |
+       "$BIN" "$operation" --usb-path "$ALICE" "${args[@]}" \
+       > /dev/null 2>"$WORK/blocked.err"; then
+      fail "$operation accepted a $binding outbox"
+    fi
+    cmp "$ALICE/vault.bin.outbox" "$WORK/pending-outbox.bin" ||
+      fail "$operation changed the outbox"
+  done
+  expected="$WORK/committed-vault.bin"
+  [[ "$binding" == stale ]] && expected="$WORK/pre-outbox-vault.bin"
+  cmp "$ALICE/vault.bin" "$expected" || fail "pending writers changed vault"
+  printf '%s\n' "$NEW_PASS" |
+    "$BIN" contacts --usb-path "$ALICE" >/dev/null 2>&1 || fail "contacts blocked"
+  printf '%s\n' "$NEW_PASS" |
+    "$BIN" card --fingerprint --usb-path "$ALICE" >/dev/null 2>&1 || fail "fingerprint blocked"
+  if [[ "$binding" == stale ]]; then
+    if printf '%s\n' "$NEW_PASS" |
+       "$BIN" outbox --usb-path "$ALICE" >/dev/null 2>"$WORK/stale.err"; then
+      fail "stale outbox exported"
+    fi
+    grep -q "does not match" "$WORK/stale.err" || fail "wrong stale error"
+  fi
+done
+cp "$WORK/committed-vault.bin" "$ALICE/vault.bin"
+printf '%s\n' "$NEW_PASS" |
+  "$BIN" outbox --usb-path "$ALICE" >"$WORK/outbox-block.txt" 2>/dev/null ||
+  fail "outbox could not re-export the pending block"
+python3 - "$WORK/pending-outbox.bin" "$WORK/outbox-block.txt" <<'PYBLOCK'
+import pathlib, sys
+pending = pathlib.Path(sys.argv[1]).read_bytes()
+assert pending[33:] == pathlib.Path(sys.argv[2]).read_bytes()
+PYBLOCK
+printf '%s\n' "$NEW_PASS" |
+  "$BIN" recv --usb-path "$ALICE" "$(cat "$WORK/incoming.txt")" \
+  >"$WORK/after-outbox.txt" 2>/dev/null || fail "receive after export failed"
+grep -q "incoming during outbox" "$WORK/after-outbox.txt" || fail "incoming lost"
+grep -q "BEGIN RATCHET GROUP" "$WORK/outbox-block.txt" ||
+  fail "outbox did not print a GROUP block"
+[ ! -e "$ALICE/vault.bin.outbox" ] ||
+  fail "outbox left the pending file behind"
+printf '%s\n' "$BOB_PASS" |
+  "$BIN" recv --usb-path "$BOB" "$(cat "$WORK/outbox-block.txt")" \
+  >"$WORK/outbox-bob.txt" 2>/dev/null ||
+  fail "bob could not receive the recovered group block"
+grep -q "lost block" "$WORK/outbox-bob.txt" ||
+  fail "the recovered group block did not decrypt"
+
 echo
 echo "smoke: all end-to-end checks passed"

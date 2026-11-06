@@ -71,6 +71,10 @@ inline constexpr std::size_t kHeaderBytes = 4 + 1 + 16 + 4 + 4 + 12;  // 41
 inline constexpr std::size_t kTagBytes = crypto_aead_chacha20poly1305_ietf_ABYTES;
 
 inline constexpr const char* kVaultFilename = "vault.bin";
+// A generated block that could not be written to stdout. It is kept beside the
+// vault so the advanced ratchet state and the exact block are committed
+// together, and the user can re-export it with the `outbox` command.
+inline constexpr const char* kOutboxFilename = "vault.bin.outbox";
 inline constexpr const char* kPreparedVaultFilename = "vault.bin.v3-prepared";
 // Where a passphrase change writes the verified new container before promoting
 // it over vault.bin. A separate name from the v3 migration's prepared file so
@@ -122,6 +126,9 @@ void unseal(const uint8_t* data, std::size_t len, const SecureString& passphrase
 // vault.bin inside the given USB directory. This is the only path the tool
 // ever reads or writes secrets from.
 std::filesystem::path vault_path(const std::filesystem::path& usb_path);
+
+// vault.bin.outbox inside the given USB directory.
+std::filesystem::path outbox_path(const std::filesystem::path& usb_path);
 
 // Writes the vault to `path` with mode 0600, via a temporary file in the same
 // directory plus fsync and rename, so an interrupted write cannot leave a

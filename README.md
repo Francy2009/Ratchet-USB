@@ -77,6 +77,8 @@ create a vault, add a contact, verify their fingerprint, and exchange messages
 using the keys shown on screen. The interface follows your system locale; use
 `--lang it` or `--lang en` to choose explicitly. It locks after three minutes
 of inactivity by default. Change that interval with `--idle-lock <seconds>`.
+On the contact list, Space marks contacts for a group message and `g` writes to
+them; the same list shows a `[x]` beside each marked contact.
 
 If you would rather have a window, run `ratchet-gui`. It puts the same
 operations behind Qt6 — choose the vault folder, unlock it, then work from the
@@ -133,6 +135,35 @@ a third larger once armoured), and one file may not exceed 4 MiB.
 The interface also works with the system clipboard: press `y` on a card or a
 message block to copy it, and `Ctrl-V` to paste the clipboard into a text field.
 Neither has to pass through a terminal selection.
+
+For more than one recipient, `ratchet-usb group-send --to alice --to bob`
+encrypts the message once under a random content key and wraps that key for each
+member through the 1:1 session you already have with them. Every member receives
+the same block; `recv` finds the wrapper addressed to the local vault and
+decrypts the shared content. At least two `--to` aliases are required, and each
+contact must be verified first. Each wrapper is sealed to its member's identity
+key under a fresh ephemeral, so the inner 1:1 ratchet header is not on the wire
+and cannot link a member to earlier traffic. The block is signed with the
+sender's identity key, so a member cannot re-encrypt the shared body and pass it
+off as the sender's. The block shows how many members there are, but not their
+identities; it does carry the sender's identity key in the clear, so anyone
+with the sender's contact card can link the block to them, just as a 1:1
+envelope's sender hash links to the same key.
+In the terminal interface, Space marks a contact for a group and `g` writes to
+the marked contacts. The desktop GUI still shows only the 1:1 conversation.
+
+If standard output cannot accept a generated block, the block is written beside
+the vault as `vault.bin.outbox`; `ratchet-usb outbox` asks for the vault
+passphrase, checks that the block belongs to the saved vault state, prints it
+again and removes the file. A new send is refused until the pending block is
+exported or deleted.
+
+Deleting an undelivered opening can leave the sender with a session the
+recipient never established. Prefer exporting with `outbox` and delivering
+the exact block. If it was lost, reset the affected session with
+`reset-session <alias>` (confirm `RESET`) before sending a fresh opening; for
+a group, repeat for each affected recipient. Resetting discards pending and
+skipped message keys.
 
 The program tries to find a removable drive. If detection is unsuitable for
 your setup, pass `--usb-path <directory>` to commands or set `RATCHET_USB_PATH`.

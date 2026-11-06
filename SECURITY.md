@@ -216,8 +216,35 @@ to defend against it:
   generated vault passphrase cannot be reprinted or reset, and the 12-word
   BIP-39 phrase restores the identity, not the vault's contacts or history.
 - **Physical coercion.** There is no duress passphrase and no deniable volume.
-- **Multiple devices sharing one identity**, group chats, and a key directory.
-  These are not implemented in this version.
+- **Multiple devices sharing one identity** and a key directory. These are not
+  implemented in this version.
+- **Group chat as a ratcheted group.** `group-send` encrypts the content once
+  and wraps the content key once per member through that member's existing 1:1
+  session. Each wrapper is sealed to the recipient's identity key under a
+  fresh ephemeral, so the inner ratchet header is not on the wire and cannot be
+  matched to earlier 1:1 traffic. The block is signed with the sender's Ed25519
+  identity key, so a member who learns the shared content key still cannot
+  re-encrypt the body and attribute it to the sender. That signature is
+  transferable: a member can show the block and the content key to a third
+  party as proof that the sender wrote that content, so group blocks are not
+  deniable. It is not a group ratchet and keeps no group
+  state: the block reveals how many recipients there are (not who they are),
+  but it carries the sender's Ed25519 identity key in the clear, so anyone
+  holding the sender's contact card can link the block to that identity.
+  The same holds for 1:1 envelopes, which carry a truncated SHA-256 hash of
+  the sender's identity key that links the same way. The sender chooses the member list, and a member who leaves still holds the
+  content keys of messages already delivered. Membership changes therefore do
+  not rekey the group; start a fresh message after a removal.
+
+- **A failed stdout write leaves a pending ciphertext block.** `send` and
+  `group-send` persist the exact block as `vault.bin.outbox` (mode 0600, beside
+  the vault) before saving the advanced ratchet state, then remove it after a
+  successful write. If stdout fails, the block remains and `outbox` prints it
+  again; a new send is refused until it is exported or deleted. The outbox
+  records the vault id and the generation the save must commit, and `outbox`
+  asks for the passphrase and refuses a block that does not match the saved
+  vault, so a crash between the two writes cannot export stale state. The file
+  holds the same ciphertext that would have gone to stdout, not the plaintext.
 
 ## No warranty, and using it lawfully
 
