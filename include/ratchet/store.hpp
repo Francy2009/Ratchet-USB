@@ -182,24 +182,17 @@ struct VaultStore {
   void remember_handshake(const IdentitySigningPublicKey& initiator,
                           const x25519::PublicKey& ephemeral_pub, uint64_t now);
 
-  // Drops accepted-handshake records that can no longer protect anything: a
-  // record is kept while its opening might still decrypt, and an opening
-  // must name a signed prekey the vault still holds. Returns how many were
-  // removed. Records are never pruned when the vault holds no signed prekey
-  // or a prekey without a timestamp (legacy): without evidence of removal,
-  // keeping is the fail-closed choice.
+  // Retains all history: legacy synthetic timestamps and non-monotonic clocks
+  // cannot establish that a recorded opening's prekey has been removed.
+  // Returns zero; the full registry continues to fail closed.
   std::size_t prune_old_handshakes();
 };
 
 // Maximum number of accepted handshakes stored in a vault.
 //
 // Each entry is 72 bytes, so the whole list is a few tens of kilobytes at this
-// ceiling. A vault that never pruned would eventually refuse new handshakes,
-// so records whose signed prekey is certainly gone are dropped to make room
-// (see VaultStore::prune_old_handshakes). That expiry follows prekey removal
-// rather than the clock alone: an opening must name a signed prekey the vault
-// still holds, and only the newest two survive rotation, so a record predating
-// every retained prekey can no longer match a decryptable opening.
+// ceiling. At capacity the vault refuses new openings rather than evicting
+// replay protection based on unreliable wall-clock ordering.
 inline constexpr std::size_t kMaxAcceptedHandshakes = 512;
 
 // A deliberate, deep copy of a session, key material and all.

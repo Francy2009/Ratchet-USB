@@ -348,11 +348,8 @@ TEST("remember_handshake refuses silent replay-history eviction") {
   CHECK_EQ(s.accepted_handshakes.size(), before);
 }
 
-TEST("remember_handshake prunes records whose signed prekey is gone") {
-  // Rotation keeps only the newest two signed prekeys, so a record accepted
-  // before every retained prekey was created cannot name one of them: its
-  // opening fails the prekey lookup before decrypting. A full list of such
-  // spent records must make room instead of refusing new handshakes forever.
+TEST("remember_handshake retains history despite later prekey timestamps") {
+  // Synthetic migration dates and backward clock steps defeat age ordering.
   store::VaultStore s;
   IdentitySigningPublicKey id{};
   randombytes_buf(id.data(), id.size());
@@ -376,9 +373,9 @@ TEST("remember_handshake prunes records whose signed prekey is gone") {
 
   x25519::PublicKey fresh{};
   randombytes_buf(fresh.data(), fresh.size());
-  s.remember_handshake(id, fresh, second.created_at + 10);
-  CHECK_EQ(s.accepted_handshakes.size(), std::size_t(1));
-  CHECK(s.handshake_already_accepted(id, fresh));
+  CHECK_THROWS(s.remember_handshake(id, fresh, kOld - 100));
+  CHECK_EQ(s.prune_old_handshakes(), std::size_t(0));
+  CHECK_EQ(s.accepted_handshakes.size(), store::kMaxAcceptedHandshakes);
 }
 
 TEST("remember_handshake still refuses eviction when nothing is prunable") {

@@ -62,8 +62,8 @@ prekey::SignedPrekey read_signed_prekey(serial::Reader& r, uint8_t version) {
     spk.created_at = r.u64();
   } else {
     // Vaults written before rotation tracking existed have no recorded age;
-    // treat the prekey as fresh rather than immediately flagging it stale.
-    spk.created_at = static_cast<uint64_t>(std::time(nullptr));
+    // preserve that uncertainty across subsequent saves and reloads.
+    spk.created_at = 0;
   }
   return spk;
 }
@@ -333,34 +333,12 @@ void VaultStore::remember_handshake(const IdentitySigningPublicKey& initiator,
 }
 
 std::size_t VaultStore::prune_old_handshakes() {
-  // An opening names its signed prekey by id, and receive() looks that id up
-  // in signed_prekeys before decrypting anything. Rotation appends with an
-  // increasing id and drops from the front, keeping the newest two -- and
-  // resigning never changes an id or a timestamp -- so a record accepted
-  // before every retained prekey was created cannot name one of them: its
-  // opening fails the lookup and its replay protection is spent. (The
-  // ML-KEM signed prekey is not consulted: only one is ever kept and it is
-  // never rotated away, so the EC prekey is the binding constraint.)
-  if (signed_prekeys.empty()) {
-    return 0;
-  }
-  uint64_t oldest = std::numeric_limits<uint64_t>::max();
-  for (const prekey::SignedPrekey& spk : signed_prekeys) {
-    if (spk.created_at == 0) {
-      // A pre-v2 prekey carries no timestamp, so the ordering argument does
-      // not hold. Keep everything: a stuck list fails closed elsewhere.
-      return 0;
-    }
-    oldest = std::min(oldest, spk.created_at);
-  }
-  const std::size_t before = accepted_handshakes.size();
-  accepted_handshakes.erase(
-      std::remove_if(accepted_handshakes.begin(), accepted_handshakes.end(),
-                     [oldest](const AcceptedHandshake& h) {
-                       return h.accepted_at < oldest;
-                     }),
-      accepted_handshakes.end());
-  return before - accepted_handshakes.size();
+  // Wall-clock timestamps cannot prove which prekey an opening used: clocks
+  // can move backwards, and older migrations persisted synthetic creation
+  // times indistinguishable from genuine ones. Existing records contain no
+  // prekey id, so even rotation cannot establish that replay protection is
+  // spent. Retain history and let the bounded registry fail closed.
+  return 0;
 }
 
 int VaultStore::find_session(std::size_t contact_index) const {

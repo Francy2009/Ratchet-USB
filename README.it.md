@@ -170,6 +170,8 @@ passphrase del vault, verifica che il blocco appartenga allo stato salvato, lo
 stampa di nuovo e rimuove il file. Un nuovo invio viene rifiutato finché il
 blocco pendente non è stato esportato o eliminato.
 
+Eliminare un'apertura non consegnata può lasciare al mittente una sessione che il destinatario non ha mai aperto. Preferisci esportare con `outbox` e consegnare il blocco esatto. Se è perso, usa `reset-session <alias>` (conferma `RESET`) prima di inviare una nuova apertura; per un gruppo ripeti per ogni destinatario coinvolto. Il reset elimina le chiavi dei messaggi pendenti e saltati.
+
 Il programma prova a individuare un'unità rimovibile. Se la rilevazione non è
 adatta al tuo caso, passa `--usb-path <cartella>` ai comandi o imposta
 `RATCHET_USB_PATH`.

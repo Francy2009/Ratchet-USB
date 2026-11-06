@@ -92,6 +92,7 @@ class Ui:
     """The interface running on a pty, with a way to read the screen back."""
 
     def __init__(self, drive, extra=None, env_extra=None):
+        """Start the terminal UI in a private pty for the supplied vault."""
         self.buffer = bytearray()
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
