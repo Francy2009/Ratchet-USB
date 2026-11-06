@@ -6,15 +6,17 @@
 namespace ratchet::ephemeral {
 
 uint64_t ttl_seconds(Ttl ttl) {
+  // ULL literals: the products are computed in 64 bits, so no implicit
+  // widening of a 32-bit multiplication is left for the caller to wonder about.
   switch (ttl) {
     case Ttl::None:
       return 0;
     case Ttl::OneHour:
-      return 60u * 60u;
+      return 60ULL * 60ULL;
     case Ttl::OneDay:
-      return 24u * 60u * 60u;
+      return 24ULL * 60ULL * 60ULL;
     case Ttl::SevenDays:
-      return 7u * 24u * 60u * 60u;
+      return 7ULL * 24ULL * 60ULL * 60ULL;
   }
   return 0;
 }

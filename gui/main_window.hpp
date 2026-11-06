@@ -147,20 +147,40 @@ class MainWindow : public QMainWindow {
   // The one place a command's result is shown. `detail` (when not empty) goes
   // into a scrollable read-only box with a Copy button, so a large block never
   // stretches the window.
+  // `auto_close_ms` closes the dialog (wiping what it showed) after that
+  // long: the TTL of an ephemeral message, enforced where it can be -- on
+  // screen. It stops neither screenshots, copies nor a modified binary.
   void showResultDialog(bool ok, const QString& title, const QString& message,
-                        const QString& detail,
-                        const QString& command = QString());
+                        const QString& detail, const QString& command = QString(),
+                        int auto_close_ms = 0);
   QString extractError(const QString& text) const;
   QString commandTitle(const QString& command) const;
 
   // A received file: says what arrived and, when it was staged, offers to open
   // its folder in the file manager (the same staging ratchet-usb uses).
+  // `expiry_note`/`auto_close_ms` carry the sender's expiry choice when the
+  // message was ephemeral: the note is shown, and the dialog closes itself
+  // (wiping what it showed) when the TTL runs out.
   void showFileDialog(const QString& ext, const QString& path,
-                      const QString& detail);
+                      const QString& detail, const QString& expiry_note = {},
+                      int auto_close_ms = 0);
   // The dispatch behind both recv paths (a staged file, and a file type the
   // CLI refused to open, which exits non-zero).
   void showRecvFile(const ratchet::gui::ParsedRecvResult& parsed,
                     const QString& stderr_text);
+  // Sender-chosen expiry for the *next* send only: the combo holds the TTL
+  // bucket ("off" means ordinary) and the box the burn flag. Both ride in
+  // argv, which is fine -- they are the sender's choice, not a secret --
+  // while the message itself keeps travelling on stdin.
+  QString sendTtl() const;
+  bool sendBurn() const;
+  // Human line for the expiry the CLI reported, or empty for an ordinary
+  // message. Built from the parsed block only, never from the sender's text.
+  static QString expiryNotice(const ratchet::gui::ParsedRecvResult& parsed);
+  // Milliseconds the window keeps an ephemeral message on screen before
+  // closing its dialog (0 for ordinary messages and burn-only ones, which
+  // the user dismisses). Fits in an int even for the longest bucket.
+  static int expiryTimeoutMs(const QString& ttl);
 
   // Opens `dir` in the host file manager. Host programs are launched with a
   // cleaned environment so they do not load this process's bundled libraries.
@@ -194,6 +214,8 @@ class MainWindow : public QMainWindow {
   QComboBox* sendAliasCombo_ = nullptr;
   QWidget* sendRecipientsBox_ = nullptr;  // chip container, objectName for tests
   QStringList sendRecipients_;  // the recipients the next send goes to
+  QComboBox* ttlCombo_ = nullptr;  // per-message expiry: off, 1h, 24h or 7d
+  QCheckBox* burnCheck_ = nullptr;  // burn after reading for the next send
   QPlainTextEdit* sendMessageEdit_ = nullptr;
   QLineEdit* sendFileEdit_ = nullptr;
   QPlainTextEdit* recvBlockEdit_ = nullptr;

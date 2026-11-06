@@ -5,6 +5,7 @@
 #include <QComboBox>
 #include <QDir>
 #include <QFile>
+#include <QLabel>
 #include <QFileInfo>
 #include <QLineEdit>
 #include <QPlainTextEdit>
@@ -58,6 +59,8 @@ class GuiLaunchTest : public QObject {
   void sendKeepsPlaintextOutOfArgv();
   void groupSendUsesRecipientChips();
   void successClearsConsumedInputs();
+  void ephemeralSendAddsTtlFlags();
+  void recvEphemeralShowsNotice();
   void passphraseUsesStructuredOutput();
   void cliRunnerReportsExitCodeAndStdin();
   void cliRunnerReportsUnexpectedTermination();
@@ -603,6 +606,166 @@ void GuiLaunchTest::successClearsConsumedInputs() {
   recv->click();
   QTRY_VERIFY_WITH_TIMEOUT(block->toPlainText().isEmpty(), 5000);
 
+  QTRY_VERIFY_WITH_TIMEOUT(QApplication::activeModalWidget() == nullptr, 5000);
+  closer.stop();
+}
+
+void GuiLaunchTest::ephemeralSendAddsTtlFlags() {
+  QTemporaryDir dir;
+  QVERIFY(dir.isValid());
+
+  const QString script = dir.path() + QStringLiteral("/fake-eph.sh");
+  {
+    QFile file(script);
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    file.write(
+        "#!/bin/sh\n"
+        "out=\"${RATCHET_TEST_OUT:?}\"\n"
+        ": > \"$out/argv\"\n"
+        "for arg in \"$@\"; do\n"
+        "  printf '%s\\n' \"$arg\" >> \"$out/argv\"\n"
+        "done\n"
+        "cat > \"$out/stdin\"\n"
+        "exit 0\n");
+    file.close();
+  }
+  QVERIFY(QFile::setPermissions(
+      script, QFileDevice::ReadOwner | QFileDevice::WriteOwner |
+                  QFileDevice::ExeOwner));
+  QVERIFY(qputenv("RATCHET_BIN", script.toUtf8()));
+  QVERIFY(qputenv("RATCHET_TEST_OUT", dir.path().toUtf8()));
+
+  const QString usb = dir.path() + QStringLiteral("/usb");
+  QVERIFY(QDir().mkpath(usb));
+
+  MainWindow window;
+  window.show();
+
+  auto* usb_edit = window.findChild<QLineEdit*>(QStringLiteral("usbPathEdit"));
+  auto* passphrase =
+      window.findChild<QLineEdit*>(QStringLiteral("passphraseEdit"));
+  auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("tabs"));
+  auto* alias = window.findChild<QComboBox*>(QStringLiteral("sendAliasCombo"));
+  auto* ttl = window.findChild<QComboBox*>(QStringLiteral("ttlCombo"));
+  auto* burn = window.findChild<QCheckBox*>(QStringLiteral("burnCheck"));
+  auto* message = window.findChild<QPlainTextEdit*>(QStringLiteral("sendMessageEdit"));
+  auto* send = window.findChild<QPushButton*>(QStringLiteral("sendButton"));
+  QVERIFY(usb_edit != nullptr);
+  QVERIFY(tabs != nullptr);
+  QVERIFY(alias != nullptr);
+  QVERIFY(ttl != nullptr);
+  QVERIFY(burn != nullptr);
+  QVERIFY(message != nullptr);
+  QVERIFY(send != nullptr);
+
+  usb_edit->setText(usb);
+  passphrase->setText(QStringLiteral("parola uno due"));
+  tabs->setEnabled(true);
+  alias->addItem(QStringLiteral("bob"));
+  alias->setCurrentText(QStringLiteral("bob"));
+  ttl->setCurrentIndex(ttl->findData(QStringLiteral("24h")));
+  burn->setChecked(true);
+  message->setPlainText(QStringLiteral("segreto"));
+
+  QTimer closer;
+  connect(&closer, &QTimer::timeout, [] {
+    if (QWidget* modal = QApplication::activeModalWidget()) {
+      modal->close();
+    }
+  });
+  closer.start(20);
+
+  send->click();
+  QTRY_VERIFY_WITH_TIMEOUT(
+      QFileInfo(dir.path() + QStringLiteral("/stdin")).exists(), 5000);
+  // The retrying forms matter: only the finished signal (an event-loop
+  // delivery) runs the clearing and the dialog, so plain QCOMPAREs could
+  // read the widgets before the child is even reaped.
+  QTRY_COMPARE(ttl->currentData().toString(), QStringLiteral("off"));
+  QTRY_VERIFY(!burn->isChecked());
+  // The result dialog is up by now; the closer (still running) takes it down.
+  QTRY_VERIFY_WITH_TIMEOUT(QApplication::activeModalWidget() == nullptr, 5000);
+  closer.stop();
+
+  QFile argv_file(dir.path() + QStringLiteral("/argv"));
+  QVERIFY(argv_file.open(QIODevice::ReadOnly));
+  const QStringList argv = QString::fromUtf8(argv_file.readAll())
+                               .split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+  // The buckets ride in argv (they are the sender's choice, not a secret)
+  // while the message itself stays on stdin.
+  QCOMPARE(argv.first(), QStringLiteral("send"));
+  const int ttl_at = argv.indexOf(QStringLiteral("--ttl"));
+  QVERIFY(ttl_at >= 0);
+  QCOMPARE(argv.at(ttl_at + 1), QStringLiteral("24h"));
+  QVERIFY(argv.contains(QStringLiteral("--burn")));
+  QVERIFY(!argv.contains(QStringLiteral("segreto")));
+}
+
+void GuiLaunchTest::recvEphemeralShowsNotice() {
+  QTemporaryDir dir;
+  QVERIFY(dir.isValid());
+
+  const QString script = dir.path() + QStringLiteral("/fake-eph-recv.sh");
+  {
+    QFile file(script);
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    file.write(
+        "#!/bin/sh\n"
+        "cat >/dev/null\n"
+        "printf '%s\\n' '-----BEGIN RATCHET GUI RESULT-----' 'version=1' "
+        "'command=recv' 'kind=text' 'ttl=24h' 'burn=yes' "
+        "'-----END RATCHET GUI RESULT-----'\n"
+        "exit 0\n");
+    file.close();
+  }
+  QVERIFY(QFile::setPermissions(
+      script, QFileDevice::ReadOwner | QFileDevice::WriteOwner |
+                  QFileDevice::ExeOwner));
+  QVERIFY(qputenv("RATCHET_BIN", script.toUtf8()));
+
+  const QString usb = dir.path() + QStringLiteral("/usb");
+  QVERIFY(QDir().mkpath(usb));
+
+  MainWindow window;
+  window.show();
+
+  auto* usb_edit = window.findChild<QLineEdit*>(QStringLiteral("usbPathEdit"));
+  auto* passphrase =
+      window.findChild<QLineEdit*>(QStringLiteral("passphraseEdit"));
+  auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("tabs"));
+  auto* block = window.findChild<QPlainTextEdit*>(QStringLiteral("recvBlockEdit"));
+  auto* recv = window.findChild<QPushButton*>(QStringLiteral("recvButton"));
+  QVERIFY(usb_edit != nullptr);
+  QVERIFY(tabs != nullptr);
+  QVERIFY(block != nullptr);
+  QVERIFY(recv != nullptr);
+
+  usb_edit->setText(usb);
+  passphrase->setText(QStringLiteral("parola uno due"));
+  tabs->setEnabled(true);
+  block->setPlainText(QStringLiteral("-----BEGIN RATCHET MESSAGE-----\nfake"));
+
+  // The dialog names the sender's expiry choice; only then is it closed.
+  // A 24h timer never fires inside this test, so the close below is the
+  // burn path: whatever the dialog showed is wiped on the way out.
+  QString notice;
+  QTimer closer;
+  connect(&closer, &QTimer::timeout, [&] {
+    if (QWidget* modal = QApplication::activeModalWidget()) {
+      for (QLabel* label : modal->findChildren<QLabel*>()) {
+        if (label->text().contains(QStringLiteral("effimero"))) {
+          notice = label->text();
+        }
+      }
+      modal->close();
+    }
+  });
+  closer.start(20);
+
+  recv->click();
+  QTRY_VERIFY_WITH_TIMEOUT(!notice.isEmpty(), 5000);
+  QVERIFY(notice.contains(QStringLiteral("24h")));
+  QTRY_VERIFY_WITH_TIMEOUT(block->toPlainText().isEmpty(), 5000);
   QTRY_VERIFY_WITH_TIMEOUT(QApplication::activeModalWidget() == nullptr, 5000);
   closer.stop();
 }

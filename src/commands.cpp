@@ -1165,7 +1165,7 @@ int cmd_recv(const Options& opts) {
   // file frame: unwrap it first so what follows sees the text or file the
   // sender actually wrote. A malformed header throws rather than showing.
   ephemeral::Expiry expiry{};
-  if (const std::optional<ephemeral::Decoded> unwrapped =
+  if (std::optional<ephemeral::Decoded> unwrapped =
           ephemeral::decode(result.plaintext)) {
     expiry = unwrapped->expiry;
     std::string inner = std::move(unwrapped->body);

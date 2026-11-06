@@ -34,6 +34,8 @@
 #include <exception>
 #include <string>
 
+#include "ratchet/ephemeral.hpp"
+#include "ratchet/file.hpp"
 #include "ratchet/message.hpp"
 #include "ratchet/store.hpp"
 #include "ratchet/vault.hpp"
@@ -55,7 +57,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   const std::string text(reinterpret_cast<const char*>(body), body_len);
 
   try {
-    switch (selector % 5) {
+    switch (selector % 7) {
       case 0:
         // Pasted by the user, straight from an untrusted channel.
         (void)x3dh::import_card(text);
@@ -77,6 +79,17 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
       case 4:
         // The armour layer underneath both pasted formats.
         (void)wire::decode_block("MESSAGE", text);
+        break;
+      case 5:
+        // Post-decryption plaintext framing: a hostile sender chooses these
+        // bytes, so a bug here is reachable by anyone who can write to the
+        // conversation. Ordinary text decodes to nullopt; anything else
+        // either unwraps or throws.
+        (void)ephemeral::decode(text);
+        break;
+      case 6:
+        // Same reachability as the ephemeral header, one layer further in.
+        (void)file::decode_file_payload(text);
         break;
       default:
         break;

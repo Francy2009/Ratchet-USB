@@ -124,9 +124,11 @@ bool valid_staged_path(std::string_view path) noexcept {
   return true;
 }
 
+namespace {
 bool valid_ttl(std::string_view ttl) noexcept {
   return ttl == "off" || ttl == "1h" || ttl == "24h" || ttl == "7d";
 }
+}  // namespace
 
 bool write_recv_result(std::ostream& os, const RecvResult& result) {
   const bool text = result.kind == kRecvText;

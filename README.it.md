@@ -159,10 +159,23 @@ scritto quel contenuto, quindi i blocchi di gruppo non sono negabili. Il blocco
 mostra quanti membri ci sono, non le loro identità; contiene però la chiave
 d'identità del mittente in chiaro, quindi chiunque abbia la sua scheda di
 contatto può collegare il blocco a lui, così come l'hash del mittente delle
-buste 1:1 si collega alla stessa chiave. I messaggi di gruppo per ora
-esistono anche nell'interfaccia a terminale: Spazio segna un contatto per un
-gruppo e `g` scrive ai contatti segnati. L'interfaccia desktop mostra ancora solo
-la conversazione 1:1.
+buste 1:1 si collega alla stessa chiave. Alcuni messaggi non dovrebbero restare in giro. `send --ttl 24h` (anche `1h` e
+`7d`) e `send --burn` segnano un messaggio come effimero -- gli stessi flag
+funzionano con `group-send`. Il segno viaggia dentro al testo cifrato, quindi
+è autenticato e non aggiunge niente di visibile sul filo. Un ricevente che
+collabora smette di mostrare il messaggio allo scadere del tempo (`--burn`
+chiede una singola lettura invece di una durata; i due si combinano) e cancella
+ciò che ha mostrato. È un aiuto, non una revoca: non impedisce screenshot,
+copie o un client modificato. Il vault non conserva alcuno storico dei
+messaggi, quindi non c'è niente da cancellare dopo, solo qualcosa da smettere
+di mostrare. Un client precedente a questa funzione mostra il messaggio con il
+segno visibile invece di rifiutarlo. Nell'interfaccia a terminale la nota
+appare accanto al messaggio; la GUI desktop chiude la finestra del messaggio
+allo scadere del TTL.
+I messaggi di gruppo esistono anche nell'interfaccia a terminale: Spazio segna
+un contatto per un gruppo e `g` scrive ai contatti segnati. La GUI desktop
+offre lo stesso con i riquadri destinatari: scegli un contatto, premi Aggiungi,
+ripeti; un destinatario manda 1:1, due o più mandano un messaggio di gruppo.
 
 Se lo standard output non riesce a ricevere un blocco generato, il blocco viene
 scritto accanto al vault come `vault.bin.outbox`; `ratchet-usb outbox` chiede la

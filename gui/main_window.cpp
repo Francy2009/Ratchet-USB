@@ -37,6 +37,7 @@
 #include <QScrollArea>
 #include <QSpinBox>
 #include <QStatusBar>
+#include <QTimer>
 #include <QStyle>
 #include <QTabWidget>
 #include <QTemporaryFile>
@@ -544,8 +545,19 @@ QWidget* MainWindow::buildMessagesTab() {
     }
     recipients.removeDuplicates();
     const QString file = sendFileEdit_->text().trimmed();
+    // The expiry rides inside the encrypted plaintext (see ephemeral.hpp);
+    // the flags only name the bucket, which is the sender's choice and no
+    // secret, while the message itself keeps travelling on stdin.
+    QStringList expiry_flags;
+    const QString ttl = sendTtl();
+    if (ttl != QStringLiteral("off")) {
+      expiry_flags << "--ttl" << ttl;
+    }
+    if (sendBurn()) {
+      expiry_flags << "--burn";
+    }
     if (recipients.size() == 1) {
-      QStringList flags;
+      QStringList flags = expiry_flags;
       const QStringList positionals{recipients.first()};
       if (!file.isEmpty()) {
         flags << "--file" << file;
@@ -578,7 +590,7 @@ QWidget* MainWindow::buildMessagesTab() {
       warn(tr("Scrivi un messaggio per il gruppo."));
       return;
     }
-    QStringList flags;
+    QStringList flags = expiry_flags;
     for (const QString& recipient : recipients) {
       flags << "--to" << recipient;
     }
@@ -586,16 +598,33 @@ QWidget* MainWindow::buildMessagesTab() {
     launchWithPayload(QStringLiteral("group-send"), flags, {}, payload);
     ratchet::gui::wipeByteArray(payload);
   });
+  // A per-message choice, not a setting: the selector goes back to "off"
+  // after every successful send (see clearSendInputs), so the next message
+  // is ordinary unless the sender says otherwise. The buckets are coarse on
+  // purpose -- a free-form duration would fingerprint the message.
+  ttlCombo_ = new QComboBox;
+  ttlCombo_->setObjectName(QStringLiteral("ttlCombo"));
+  ttlCombo_->addItem(tr("Nessuna scadenza"), QStringLiteral("off"));
+  ttlCombo_->addItem(tr("1 ora"), QStringLiteral("1h"));
+  ttlCombo_->addItem(tr("24 ore"), QStringLiteral("24h"));
+  ttlCombo_->addItem(tr("7 giorni"), QStringLiteral("7d"));
+  burnCheck_ = new QCheckBox(tr("Distruggi dopo lettura"));
+  burnCheck_->setObjectName(QStringLiteral("burnCheck"));
+  burnCheck_->setToolTip(
+      tr("Il destinatario vede il messaggio una volta sola; chiuderlo lo cancella."));
   send_layout->addWidget(new QLabel(tr("A:")), 0, 0);
   send_layout->addWidget(sendAliasCombo_, 0, 1);
   send_layout->addWidget(add_recipient_button, 0, 2);
   send_layout->addWidget(new QLabel(tr("Destinatari:")), 1, 0);
   send_layout->addWidget(recipients_scroll, 1, 1, 1, 2);
-  send_layout->addWidget(new QLabel(tr("File:")), 2, 0);
-  send_layout->addWidget(sendFileEdit_, 2, 1);
-  send_layout->addWidget(send_file_button, 2, 2);
-  send_layout->addWidget(sendMessageEdit_, 3, 0, 1, 3);
-  send_layout->addWidget(send_button, 4, 0, 1, 3);
+  send_layout->addWidget(new QLabel(tr("Scadenza:")), 2, 0);
+  send_layout->addWidget(ttlCombo_, 2, 1);
+  send_layout->addWidget(burnCheck_, 2, 2);
+  send_layout->addWidget(new QLabel(tr("File:")), 3, 0);
+  send_layout->addWidget(sendFileEdit_, 3, 1);
+  send_layout->addWidget(send_file_button, 3, 2);
+  send_layout->addWidget(sendMessageEdit_, 4, 0, 1, 3);
+  send_layout->addWidget(send_button, 5, 0, 1, 3);
   layout->addWidget(makeGroup(tr("Invia (send / group-send)"), send_layout));
   syncRecipientChips();
 
@@ -946,6 +975,41 @@ void MainWindow::syncRecipientChips() {
   }
 }
 
+QString MainWindow::sendTtl() const {
+  if (ttlCombo_ == nullptr) return QStringLiteral("off");
+  const QString ttl = ttlCombo_->currentData().toString();
+  return ttl.isEmpty() ? QStringLiteral("off") : ttl;
+}
+
+bool MainWindow::sendBurn() const {
+  return burnCheck_ != nullptr && burnCheck_->isChecked();
+}
+
+QString MainWindow::expiryNotice(
+    const ratchet::gui::ParsedRecvResult& parsed) {
+  if (parsed.ttl == QStringLiteral("off") && !parsed.burn) {
+    return {};
+  }
+  QStringList parts;
+  if (parsed.ttl != QStringLiteral("off")) {
+    parts << tr("scade tra %1").arg(parsed.ttl);
+  }
+  if (parsed.burn) {
+    parts << tr("distruggi dopo lettura");
+  }
+  return tr("Messaggio effimero: %1. Alla chiusura non resta nulla.")
+      .arg(parts.join(QStringLiteral(", ")));
+}
+
+int MainWindow::expiryTimeoutMs(const QString& ttl) {
+  if (ttl == QStringLiteral("1h")) return 60 * 60 * 1000;
+  if (ttl == QStringLiteral("24h")) return 24 * 60 * 60 * 1000;
+  // 604'800'000: the longest bucket, still far from the int limit, so no
+  // overflow however long the dialog stays up.
+  if (ttl == QStringLiteral("7d")) return 7 * 24 * 60 * 60 * 1000;
+  return 0;
+}
+
 void MainWindow::clearPlainEdit(QPlainTextEdit* edit) {
   if (edit == nullptr) return;
   edit->clear();
@@ -957,6 +1021,14 @@ void MainWindow::clearSendInputs() {
   syncRecipientChips();
   if (sendAliasCombo_ != nullptr && sendAliasCombo_->lineEdit() != nullptr) {
     sendAliasCombo_->lineEdit()->clear();
+  }
+  // The expiry was a per-message choice: leaving it on would mark the next
+  // message ephemeral by accident. Ordinary is the fail-safe default.
+  if (ttlCombo_ != nullptr) {
+    ttlCombo_->setCurrentIndex(0);
+  }
+  if (burnCheck_ != nullptr) {
+    burnCheck_->setChecked(false);
   }
   clearPlainEdit(sendMessageEdit_);
   if (sendFileEdit_ != nullptr) {
@@ -1129,8 +1201,16 @@ QString MainWindow::commandTitle(const QString& command) const {
 void MainWindow::showResultDialog(bool ok, const QString& title,
                                   const QString& message,
                                   const QString& detail,
-                                  const QString& command) {
+                                  const QString& command,
+                                  int auto_close_ms) {
   QDialog dialog(this);
+  // An ephemeral TTL closes the dialog when it runs out. accept() runs the
+  // same finished handlers as Chiudi, so the visible copy is dropped either
+  // way; the single-shot is bound to the dialog, so closing early leaves no
+  // firing timer behind.
+  if (auto_close_ms > 0) {
+    QTimer::singleShot(auto_close_ms, &dialog, &QDialog::accept);
+  }
   dialog.setWindowTitle(title);
   auto* layout = new QVBoxLayout(&dialog);
   layout->setContentsMargins(16, 16, 16, 12);
@@ -1223,7 +1303,8 @@ bool MainWindow::openFolder(const QString& dir) {
 }
 
 void MainWindow::showFileDialog(const QString& ext, const QString& path,
-                                const QString& detail) {
+                                const QString& detail, const QString& expiry_note,
+                                int auto_close_ms) {
   ConfirmOnlyDialog dialog(this);
   dialog.setWindowTitle(tr("File ricevuto"));
   auto* layout = new QVBoxLayout(&dialog);
@@ -1244,6 +1325,10 @@ void MainWindow::showFileDialog(const QString& ext, const QString& path,
 
   QString message = tr("E' arrivato un file cifrato di tipo .%1.").arg(ext);
   message += QLatin1Char('\n');
+  if (!expiry_note.isEmpty()) {
+    message += expiry_note;
+    message += QLatin1Char('\n');
+  }
   if (path.isEmpty()) {
     message += tr("Non e' stato preparato automaticamente.");
   } else {
@@ -1318,6 +1403,12 @@ void MainWindow::showFileDialog(const QString& ext, const QString& path,
   buttons->addWidget(close);
   layout->addLayout(buttons);
 
+  // Same enforcement as the text dialog: the TTL closes the window, and the
+  // Chiudi handler removes the staged folder, so expiry also wipes the
+  // staged bytes rather than leaving them to the background reaper.
+  if (auto_close_ms > 0) {
+    QTimer::singleShot(auto_close_ms, &dialog, &QDialog::accept);
+  }
   dialog.resize(560, path.isEmpty() ? 320 : 220);
   dialog.exec();
 }
@@ -1515,8 +1606,13 @@ void MainWindow::handleFinished(int exit_code, bool normal_exit) {
       return;
     }
     clearRecvInput();
+    // The notice names the sender's expiry choice; the timer enforces it on
+    // screen by closing the dialog. Both come from the parsed block, never
+    // from the sender's text.
+    const QString notice = expiryNotice(parsed);
     showResultDialog(true, commandTitle(command),
-                     tr("Operazione completata."), parsed.body);
+                     notice.isEmpty() ? tr("Operazione completata.") : notice,
+                     parsed.body, {}, expiryTimeoutMs(parsed.ttl));
     return;
   }
 
@@ -1544,6 +1640,10 @@ void MainWindow::showRecvFile(const ratchet::gui::ParsedRecvResult& parsed,
   // A file is always announced, even when it was not staged: the one thing the
   // receiver must never do is mistake a file for a message and carry on. When
   // it was staged, the dialog offers to open the folder -- not the file.
+  // Ephemeral files carry the same notice and timer as ephemeral text; the
+  // dialog's close path removes the staged folder on expiry too.
+  const QString notice = expiryNotice(parsed);
+  const int auto_close_ms = expiryTimeoutMs(parsed.ttl);
   QString detail;
   if (parsed.staged) {
     detail = stderr_text;
@@ -1557,7 +1657,8 @@ void MainWindow::showRecvFile(const ratchet::gui::ParsedRecvResult& parsed,
       detail += tr("Contenuto del messaggio:\n%1").arg(body);
     }
   }
-  showFileDialog(parsed.ext, parsed.staged ? parsed.path : QString(), detail);
+  showFileDialog(parsed.ext, parsed.staged ? parsed.path : QString(), detail,
+                 notice, auto_close_ms);
 }
 
 QString MainWindow::aliasLine(const QString& text, const QString& key) {

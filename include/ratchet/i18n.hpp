@@ -121,6 +121,9 @@ namespace ratchet::i18n {
   X(WarnUnverified,                                                            \
     "This contact is NOT verified: you have not checked their fingerprint.",   \
     "Questo contatto NON e' verificato: non hai ancora controllato la sua impronta.") \
+  X(EphemeralTag, "Ephemeral", "Effimero")                                     \
+  X(EphemeralExpiresIn, "expires in", "scade tra")                            \
+  X(EphemeralBurn, "burn after reading", "distruggi dopo lettura")             \
   /* status lines */                                                           \
   X(Deriving, "Opening the vault with Argon2id, this takes a moment...",       \
     "Sto aprendo il vault con Argon2id, ci vuole un attimo...")                 \

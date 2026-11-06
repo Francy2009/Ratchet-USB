@@ -236,6 +236,15 @@ to defend against it:
   content keys of messages already delivered. Membership changes therefore do
   not rekey the group; start a fresh message after a removal.
 
+- **Ephemeral messages are a request, not a revocation.** `--ttl 1h|24h|7d`
+  and `--burn` ride inside the encrypted plaintext, so they are authenticated
+  and add no wire fingerprint, and a cooperating interface stops showing the
+  message (the desktop GUI closes its window when a TTL runs out; the terminal
+  interface shows a note) and wipes what it displayed. They stop neither
+  screenshots, copies, a modified client, nor a recipient who reads in time.
+  The vault keeps no message history: expiry means refusing display and
+  wiping UI state and staged files, and there is nothing to delete
+  afterwards.
 - **A failed stdout write leaves a pending ciphertext block.** `send` and
   `group-send` persist the exact block as `vault.bin.outbox` (mode 0600, beside
   the vault) before saving the advanced ratchet state, then remove it after a
