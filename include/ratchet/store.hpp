@@ -199,7 +199,8 @@ struct VaultStore {
 
 // Maximum number of accepted handshakes stored in a vault.
 //
-// Each entry is 72 bytes, so the whole list is a few tens of kilobytes at this
+// Each entry is 76 bytes (72 + the 4-byte signed-prekey id), so the whole
+// list is a few tens of kilobytes at this
 // ceiling. A vault that never pruned would eventually refuse new handshakes,
 // so records whose signed prekey is certainly gone are dropped to make room
 // (see VaultStore::prune_old_handshakes). That expiry follows prekey removal
