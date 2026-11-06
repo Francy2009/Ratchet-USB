@@ -144,6 +144,27 @@ TEST("gui format: recv block names the kind and nothing a sender chose") {
   CHECK(file.find("staged=yes") != std::string::npos);
   CHECK(file.find("path=/tmp/ratchet-Ab12/ratchet-file-x9.png") !=
         std::string::npos);
+  // Ordinary messages say so explicitly: the front end must not guess.
+  CHECK(text.find("ttl=off") != std::string::npos);
+  CHECK(text.find("burn=no") != std::string::npos);
+}
+
+TEST("gui format: recv block carries the sender's expiry choice") {
+  gui_format::RecvResult ephemeral{gui_format::kRecvText, {}, false, {},
+                                   "24h", true};
+  std::ostringstream out;
+  CHECK(gui_format::write_recv_result(out, ephemeral));
+  const std::string text = out.str();
+  CHECK(text.find("ttl=24h") != std::string::npos);
+  CHECK(text.find("burn=yes") != std::string::npos);
+
+  // Anything but a bucket is not a result: the writer is where a confused
+  // call site is stopped, not the parser on the other side.
+  CHECK(!gui_format::write_recv_result(
+      out, gui_format::RecvResult{gui_format::kRecvText, {}, false, {}, "60m"}));
+  CHECK(!gui_format::write_recv_result(
+      out, gui_format::RecvResult{gui_format::kRecvText, {}, false, {}, ""}));
+  CHECK(out.str().find("ttl=24h") != std::string::npos);
 }
 
 TEST("gui format: recv block refuses values that did not come from the frame") {

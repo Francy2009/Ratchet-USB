@@ -153,6 +153,12 @@ struct RecvResult {
   // and read back when the block is written at the end of it; a view into the
   // local string would dangle by then, which is exactly what it did.
   std::string path;             // only meaningful when staged is true
+  // Sender-chosen expiry from the ephemeral framing inside the plaintext:
+  // "off", "1h", "24h" or "7d" (never empty: the call site is explicit,
+  // and the writer rejects anything else), plus the burn flag. Plain data for
+  // the front end's timer; the human-readable warning is on stderr.
+  std::string_view ttl = "off";
+  bool burn = false;
 };
 
 // Writes `body` escaped: every occurrence of the begin and end markers becomes

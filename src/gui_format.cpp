@@ -124,10 +124,14 @@ bool valid_staged_path(std::string_view path) noexcept {
   return true;
 }
 
+bool valid_ttl(std::string_view ttl) noexcept {
+  return ttl == "off" || ttl == "1h" || ttl == "24h" || ttl == "7d";
+}
+
 bool write_recv_result(std::ostream& os, const RecvResult& result) {
   const bool text = result.kind == kRecvText;
   const bool file = result.kind == kRecvFile;
-  if (!os.good() || (!text && !file)) {
+  if (!os.good() || (!text && !file) || !valid_ttl(result.ttl)) {
     return false;
   }
   if (text) {
@@ -156,7 +160,9 @@ bool write_recv_result(std::ostream& os, const RecvResult& result) {
      << "version=" << kVersion << '\n'
      << "command=recv\n"
      << "kind=" << result.kind << '\n'
-     << "marker=percent-hex" << '\n';
+     << "marker=percent-hex" << '\n'
+     << "ttl=" << result.ttl << '\n'
+     << "burn=" << (result.burn ? "yes" : "no") << '\n';
   if (file) {
     os << "ext=" << result.ext << '\n'
        << "staged=" << (result.staged ? "yes" : "no") << '\n';

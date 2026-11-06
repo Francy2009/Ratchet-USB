@@ -13,6 +13,7 @@
 #include "ratchet/bip39.hpp"
 #include "ratchet/cli.hpp"
 #include "ratchet/command_io.hpp"
+#include "ratchet/ephemeral.hpp"
 #include "ratchet/file.hpp"
 #include "ratchet/gui_format.hpp"
 #include "ratchet/group.hpp"
@@ -922,6 +923,15 @@ int cmd_group_send(const Options& opts) {
     }
   }
 
+  // An ephemeral mark wraps the text (or the framed file) before it reaches
+  // the ratchet, so it is AEAD-authenticated and never touches the wire.
+  if (ephemeral::is_ephemeral({opts.ttl, opts.burn_after_reading})) {
+    std::string wrapped = ephemeral::encode(
+        plaintext, {opts.ttl, opts.burn_after_reading});
+    wipe_string(plaintext);
+    plaintext = std::move(wrapped);
+  }
+
   IdentitySigningSecretKey identity_sk;
   IdentitySigningPublicKey identity_pk;
   derive_identity(store.seed, identity_sk, identity_pk);
@@ -1049,6 +1059,15 @@ int cmd_send(const Options& opts) {
     }
   }
 
+  // An ephemeral mark wraps the text (or the framed file) before it reaches
+  // the ratchet, so it is AEAD-authenticated and never touches the wire.
+  if (ephemeral::is_ephemeral({opts.ttl, opts.burn_after_reading})) {
+    std::string wrapped = ephemeral::encode(
+        plaintext, {opts.ttl, opts.burn_after_reading});
+    wipe_string(plaintext);
+    plaintext = std::move(wrapped);
+  }
+
   IdentitySigningSecretKey identity_sk;
   IdentitySigningPublicKey identity_pk;
   derive_identity(store.seed, identity_sk, identity_pk);
@@ -1142,6 +1161,19 @@ int cmd_recv(const Options& opts) {
   }
   identity_sk.wipe();
 
+  // The expiry rides inside the ratchet plaintext, outside-in before the
+  // file frame: unwrap it first so what follows sees the text or file the
+  // sender actually wrote. A malformed header throws rather than showing.
+  ephemeral::Expiry expiry{};
+  if (const std::optional<ephemeral::Decoded> unwrapped =
+          ephemeral::decode(result.plaintext)) {
+    expiry = unwrapped->expiry;
+    std::string inner = std::move(unwrapped->body);
+    wipe_string(result.plaintext);
+    result.plaintext = std::move(inner);
+  }
+  const bool is_ephemeral = ephemeral::is_ephemeral(expiry);
+
   // The decrypted body is an ordinary std::string because it has to leave the
   // ratchet and reach the terminal. It still must not survive an exception from
   // file decoding, output or a later vault save.
@@ -1155,6 +1187,19 @@ int cmd_recv(const Options& opts) {
   }
   if (result.session_established) {
     std::cerr << "(new session established with '" << alias << "')\n";
+  }
+  // Best-effort and receiver-side: this only tells the human what the sender
+  // asked for. It stops neither screenshots, copies nor a modified client.
+  if (is_ephemeral) {
+    std::cerr << "(ephemeral";
+    if (expiry.ttl != ephemeral::Ttl::None) {
+      std::cerr << ": expires in " << ephemeral::ttl_label(expiry.ttl);
+    }
+    if (expiry.burn_after_reading) {
+      std::cerr << (expiry.ttl != ephemeral::Ttl::None ? ", burn after reading"
+                                                        : ": burn after reading");
+    }
+    std::cerr << ")\n";
   }
   if (!store.contacts[result.contact_index].verified) {
     std::cerr << "warning: '" << alias
@@ -1188,6 +1233,8 @@ int cmd_recv(const Options& opts) {
   // writes the message body has to know, so the block stays the last thing in
   // the stream and a sender's text cannot be mistaken for it.
   gui_format::RecvResult structured_result;
+  structured_result.ttl = ephemeral::ttl_label(expiry.ttl);
+  structured_result.burn = expiry.burn_after_reading;
   // `RecvResult::path` is a string_view. The string that backs it has to
   // outlive the try block below, because write_recv_result runs at the very
   // end of this function.
