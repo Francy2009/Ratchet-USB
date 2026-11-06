@@ -109,11 +109,18 @@ funzioni che richiedono un vault aperto.
      Dopo lo sblocco l'elenco contatti viene letto automaticamente e i menu a
      tendina (destinatario di `send`, alias di `trust`/`reset-session`/`remove`)
      si popolano da soli; il pulsante *Aggiorna elenco contatti* li ricarica.
-   - **Messaggi**: `send` (testo o `--file`) e `recv` (incolla il blocco). Se il
-     blocco contiene un file, compare un popup "File ricevuto" con *Apri
-     cartella* (apre nel file manager la cartella temporanea privata dove
-     `ratchet-usb` ha preparato il file, la stessa logica di `recv` da
-     terminale) e *Chiudi*.
+   - **Messaggi**: `send` (testo o `--file`) e `group-send` e `recv` (incolla
+     il blocco). Il destinatario si sceglie dalla tendina e si aggiunge con
+     *Aggiungi*: ogni destinatario diventa un riquadro con una × per
+     toglierlo. Con un destinatario l'invio usa `send`, con due o più
+     `group-send --to ...` (solo testo: per i file, un destinatario alla
+     volta). A invio riuscito destinatari, messaggio e file vengono
+     svuotati; dopo una `recv` riuscita il blocco incollato viene svuotato e
+     dopo un `add` riuscito alias e card. In caso di errore resta tutto, per
+     riprovare. Se il blocco contiene un file, compare un popup "File
+     ricevuto" con *Apri cartella* (apre nel file manager la cartella
+     temporanea privata dove `ratchet-usb` ha preparato il file, la stessa
+     logica di `recv` da terminale) e *Chiudi*.
 3. **Blocca** disabilita di nuovo le schede e cancella la passphrase dal campo.
 
 Non c'è un pannello di testo stile terminale: ogni comando apre un **popup** che
@@ -129,14 +136,16 @@ core accetta).
 
 ## Note
 
-- La GUI passa messaggi e blocchi come argomenti posizionali (`send <alias>
-  <messaggio>`, `recv <blocco>`), così su stdin resta solo la passphrase.
-  I flag vanno **prima** di un `--` letterale e i valori posizionali **dopo**:
-  la CLI emette `send --usb-path <dir> --file <f> -- <alias>`. Senza quel
-  separatore un messaggio che inizia con `-` (per esempio `-h`) verrebbe letto
-  come un'opzione: la CLI stamperebbe l'help e uscirebbe con 0, cioè la GUI
-  mostrerebbe "operazione completata" senza aver cifrato nulla. Il separatore è
-  emesso in un unico punto (`MainWindow::launch`), che tiene separati `flags` e
+- La GUI non mette mai il testo in chiaro negli argomenti (`/proc/<pid>/cmdline`
+  è leggibile a tutti i processi dello stesso utente): messaggi e blocchi
+  viaggiano su stdin con `--stdin-payload`, prima della passphrase
+  (`MainWindow::launchWithPayload`). I flag vanno **prima** di un `--`
+  letterale e i valori posizionali **dopo**: la CLI emette
+  `send --usb-path <dir> --file <f> -- <alias>`. Senza quel separatore un
+  alias che inizia con `-` (per esempio `-h`) verrebbe letto come un'opzione:
+  la CLI stamperebbe l'help e uscirebbe con 0, cioè la GUI mostrerebbe
+  "operazione completata" senza aver cifrato nulla. Il separatore è emesso in
+  un unico punto (`MainWindow::launch`), che tiene separati `flags` e
   `positionals`.
 - `add` legge la card da stdin fino a EOF: per questo una card incollata viene
   scritta in un file temporaneo privato e passata con `--card`, lasciando stdin

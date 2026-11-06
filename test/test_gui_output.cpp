@@ -314,6 +314,21 @@ void GuiOutputTest::recvAcceptsTextAndFileResults() {
   QVERIFY(refused.is_file);
   QVERIFY(!refused.staged);
   QVERIFY(refused.path.isEmpty());
+
+  // A block from before the ephemeral fields is an ordinary message: the
+  // window must not invent an expiry.
+  QCOMPARE(text.ttl, QStringLiteral("off"));
+  QVERIFY(!text.burn);
+
+  // The sender's expiry choice round-trips for the window's timer.
+  const auto ephemeral = ratchet::gui::parseRecvResult(
+      QStringLiteral("bob: hello\n") +
+      block(QStringLiteral("version=1\ncommand=recv\nkind=text\nttl=24h\n"
+                           "burn=yes")));
+  QVERIFY(ephemeral.ok);
+  QVERIFY(!ephemeral.is_file);
+  QCOMPARE(ephemeral.ttl, QStringLiteral("24h"));
+  QVERIFY(ephemeral.burn);
 }
 
 void GuiOutputTest::recvIgnoresTheAliasTheSenderChose() {
@@ -368,6 +383,10 @@ void GuiOutputTest::recvRejectsBrokenFramingAndFields() {
   bad((QStringLiteral("version=1\ncommand=recv\nkind=file\next=png\n"
                            "staged=yes\npath=/tmp/x.png\x1b")));
   bad((QStringLiteral("version=1\ncommand=recv\nkind=text\nkind=file")));
+  bad((QStringLiteral("version=1\ncommand=recv\nkind=text\nttl=60m")));
+  bad((QStringLiteral("version=1\ncommand=recv\nkind=text\nttl=")));
+  bad((QStringLiteral("version=1\ncommand=recv\nkind=text\nburn=maybe")));
+  bad((QStringLiteral("version=1\ncommand=recv\nkind=text\nttl=24h\nttl=1h")));
   bad((QStringLiteral("version=1\ncommand=recv\nkind=text\nother=1")));
   bad((QStringLiteral("version=1\ncommand=recv\nkind=text\r")));
 

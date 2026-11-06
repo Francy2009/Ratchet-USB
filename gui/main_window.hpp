@@ -62,6 +62,21 @@ class MainWindow : public QMainWindow {
   void refreshContacts();
   void parseContacts(const QString& text);
   QComboBox* makeAliasCombo(const QString& placeholder);
+  // Multi-recipient compose: the combo picks one contact, "Aggiungi" moves
+  // it into sendRecipients_, shown as one chip per recipient with a remove
+  // button. One recipient sends with `send`, two or more with `group-send`.
+  // The list (not a widget index) is what the send handler reads, so a
+  // contact list that changed in between cannot redirect the message.
+  void addSendRecipient(const QString& alias);
+  void removeSendRecipient(const QString& alias);
+  void syncRecipientChips();
+  // Inputs are consumed by a successful command and must not linger: the
+  // compose box held plaintext, and a stale recipient or block invites
+  // sending the same thing twice. Failures keep everything for a retry.
+  void clearPlainEdit(QPlainTextEdit* edit);
+  void clearSendInputs();
+  void clearAddInputs();
+  void clearRecvInput();
 
   // `flags` and `positionals` are kept apart on purpose. The CLI re-parses
   // anything that starts with "-" as an option, so an alias that happens to
@@ -177,6 +192,8 @@ class MainWindow : public QMainWindow {
   QComboBox* removeAliasCombo_ = nullptr;
 
   QComboBox* sendAliasCombo_ = nullptr;
+  QWidget* sendRecipientsBox_ = nullptr;  // chip container, objectName for tests
+  QStringList sendRecipients_;  // the recipients the next send goes to
   QPlainTextEdit* sendMessageEdit_ = nullptr;
   QLineEdit* sendFileEdit_ = nullptr;
   QPlainTextEdit* recvBlockEdit_ = nullptr;

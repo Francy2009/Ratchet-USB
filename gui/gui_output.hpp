@@ -52,6 +52,12 @@ struct ParsedRecvResult {
   // newline removed and the writer's escape undone when the block names an
   // escape this parser can reverse. Valid when ok is true.
   QString body;
+  // Sender-chosen expiry from the CLI's ephemeral framing: "off", "1h",
+  // "24h" or "7d" ("off" also covers a block from a CLI that predates the
+  // fields), plus the burn flag. The window shows both and, for a TTL,
+  // clears what it showed when the time is up.
+  QString ttl = QStringLiteral("off");
+  bool burn = false;
   QString error;  // safe to show
 };
 

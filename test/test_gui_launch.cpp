@@ -13,6 +13,7 @@
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTimer>
+#include <QToolButton>
 
 #include "cli_runner.hpp"
 #include "main_window.hpp"
@@ -55,6 +56,8 @@ class GuiLaunchTest : public QObject {
 
  private slots:
   void sendKeepsPlaintextOutOfArgv();
+  void groupSendUsesRecipientChips();
+  void successClearsConsumedInputs();
   void passphraseUsesStructuredOutput();
   void cliRunnerReportsExitCodeAndStdin();
   void cliRunnerReportsUnexpectedTermination();
@@ -402,6 +405,206 @@ void GuiLaunchTest::recvMarkerInAliasDoesNotOpenTheFileDialog() {
   const QString argv = QString::fromUtf8(argv_file.readAll());
   QVERIFY2(argv.contains(QStringLiteral("--structured-output")),
            "recv did not ask the CLI for the structured result block");
+}
+
+void GuiLaunchTest::groupSendUsesRecipientChips() {
+  QTemporaryDir dir;
+  QVERIFY(dir.isValid());
+
+  const QString script = dir.path() + QStringLiteral("/fake-group.sh");
+  {
+    QFile file(script);
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    file.write(
+        "#!/bin/sh\n"
+        "out=\"${RATCHET_TEST_OUT:?}\"\n"
+        ": > \"$out/argv\"\n"
+        "for arg in \"$@\"; do\n"
+        "  printf '%s\\n' \"$arg\" >> \"$out/argv\"\n"
+        "done\n"
+        "cat > \"$out/stdin\"\n"
+        "exit 0\n");
+    file.close();
+  }
+  QVERIFY(QFile::setPermissions(
+      script, QFileDevice::ReadOwner | QFileDevice::WriteOwner |
+                  QFileDevice::ExeOwner));
+  QVERIFY(qputenv("RATCHET_BIN", script.toUtf8()));
+  QVERIFY(qputenv("RATCHET_TEST_OUT", dir.path().toUtf8()));
+
+  const QString usb = dir.path() + QStringLiteral("/usb");
+  QVERIFY(QDir().mkpath(usb));
+
+  MainWindow window;
+  window.show();
+
+  auto* usb_edit = window.findChild<QLineEdit*>(QStringLiteral("usbPathEdit"));
+  auto* passphrase =
+      window.findChild<QLineEdit*>(QStringLiteral("passphraseEdit"));
+  auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("tabs"));
+  auto* alias = window.findChild<QComboBox*>(QStringLiteral("sendAliasCombo"));
+  auto* add = window.findChild<QPushButton*>(QStringLiteral("addRecipientButton"));
+  auto* chips = window.findChild<QWidget*>(QStringLiteral("sendRecipients"));
+  auto* message = window.findChild<QPlainTextEdit*>(QStringLiteral("sendMessageEdit"));
+  auto* send = window.findChild<QPushButton*>(QStringLiteral("sendButton"));
+  QVERIFY(usb_edit != nullptr);
+  QVERIFY(passphrase != nullptr);
+  QVERIFY(tabs != nullptr);
+  QVERIFY(alias != nullptr);
+  QVERIFY(add != nullptr);
+  QVERIFY(chips != nullptr);
+  QVERIFY(message != nullptr);
+  QVERIFY(send != nullptr);
+
+  usb_edit->setText(usb);
+  passphrase->setText(QStringLiteral("parola uno due"));
+  tabs->setEnabled(true);
+  alias->addItem(QStringLiteral("bob"));
+  alias->addItem(QStringLiteral("carol"));
+
+  // Chip removal is deferred (the cross deletes its own chip), so count with
+  // retries: each pass lets the event loop collect the deferred deletes.
+  const auto chipCount = [&] {
+    return chips
+        ->findChildren<QToolButton*>(
+            QStringLiteral("removeRecipientButton"))
+        .size();
+  };
+  // Two contacts become two chips; the cross on one of them takes it back.
+  alias->setCurrentText(QStringLiteral("bob"));
+  add->click();
+  alias->setCurrentText(QStringLiteral("carol"));
+  add->click();
+  QTRY_COMPARE(chipCount(), 2);
+  for (QToolButton* chip : chips->findChildren<QToolButton*>(
+           QStringLiteral("removeRecipientButton"))) {
+    if (chip->property("recipient").toString() == QStringLiteral("bob")) {
+      chip->click();
+    }
+  }
+  QTRY_COMPARE(chipCount(), 1);
+  // ... and back on, so the send below really goes to two recipients.
+  alias->setCurrentText(QStringLiteral("bob"));
+  add->click();
+  QTRY_COMPARE(chipCount(), 2);
+
+  const QString text = QStringLiteral("ciao a tutti e due");
+  message->setPlainText(text);
+
+  QTimer closer;
+  connect(&closer, &QTimer::timeout, [] {
+    if (QWidget* modal = QApplication::activeModalWidget()) {
+      modal->close();
+    }
+  });
+  closer.start(20);
+
+  send->click();
+  QTRY_VERIFY_WITH_TIMEOUT(
+      QFileInfo(dir.path() + QStringLiteral("/stdin")).exists(), 5000);
+  // The chips and the compose box are consumed by the successful send.
+  QTRY_VERIFY_WITH_TIMEOUT(
+      chips->findChildren<QToolButton*>(
+                QStringLiteral("removeRecipientButton"))
+          .isEmpty(),
+      5000);
+  QTRY_VERIFY_WITH_TIMEOUT(message->toPlainText().isEmpty(), 5000);
+  QTRY_VERIFY_WITH_TIMEOUT(QApplication::activeModalWidget() == nullptr, 5000);
+  closer.stop();
+
+  QFile argv_file(dir.path() + QStringLiteral("/argv"));
+  QVERIFY(argv_file.open(QIODevice::ReadOnly));
+  const QStringList argv = QString::fromUtf8(argv_file.readAll())
+                               .split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+  // Two recipients take the group command, one --to each, and the message
+  // still travels on stdin, never in argv.
+  QCOMPARE(argv.first(), QStringLiteral("group-send"));
+  QVERIFY(argv.contains(QStringLiteral("--to")));
+  QVERIFY(argv.contains(QStringLiteral("bob")));
+  QVERIFY(argv.contains(QStringLiteral("carol")));
+  QVERIFY(!argv.contains(text));
+
+  QFile stdin_file(dir.path() + QStringLiteral("/stdin"));
+  QVERIFY(stdin_file.open(QIODevice::ReadOnly));
+  QVERIFY(stdin_file.readAll().startsWith(text.toUtf8()));
+}
+
+void GuiLaunchTest::successClearsConsumedInputs() {
+  QTemporaryDir dir;
+  QVERIFY(dir.isValid());
+
+  const QString script = dir.path() + QStringLiteral("/fake-clear.sh");
+  {
+    QFile file(script);
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    file.write(
+        "#!/bin/sh\n"
+        "cat >/dev/null\n"
+        "case \"$*\" in\n"
+        "  *recv*)\n"
+        "    printf '%s\\n' '-----BEGIN RATCHET GUI RESULT-----' 'version=1' "
+        "'command=recv' 'kind=text' 'ttl=off' 'burn=no' "
+        "'-----END RATCHET GUI RESULT-----'\n"
+        "    ;;\n"
+        "esac\n"
+        "exit 0\n");
+    file.close();
+  }
+  QVERIFY(QFile::setPermissions(
+      script, QFileDevice::ReadOwner | QFileDevice::WriteOwner |
+                  QFileDevice::ExeOwner));
+  QVERIFY(qputenv("RATCHET_BIN", script.toUtf8()));
+
+  const QString usb = dir.path() + QStringLiteral("/usb");
+  QVERIFY(QDir().mkpath(usb));
+
+  MainWindow window;
+  window.show();
+
+  auto* usb_edit = window.findChild<QLineEdit*>(QStringLiteral("usbPathEdit"));
+  auto* passphrase =
+      window.findChild<QLineEdit*>(QStringLiteral("passphraseEdit"));
+  auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("tabs"));
+  auto* add_alias = window.findChild<QLineEdit*>(QStringLiteral("addAliasEdit"));
+  auto* add_card = window.findChild<QPlainTextEdit*>(QStringLiteral("addCardEdit"));
+  auto* add = window.findChild<QPushButton*>(QStringLiteral("addContactButton"));
+  auto* block = window.findChild<QPlainTextEdit*>(QStringLiteral("recvBlockEdit"));
+  auto* recv = window.findChild<QPushButton*>(QStringLiteral("recvButton"));
+  QVERIFY(usb_edit != nullptr);
+  QVERIFY(passphrase != nullptr);
+  QVERIFY(tabs != nullptr);
+  QVERIFY(add_alias != nullptr);
+  QVERIFY(add_card != nullptr);
+  QVERIFY(add != nullptr);
+  QVERIFY(block != nullptr);
+  QVERIFY(recv != nullptr);
+
+  usb_edit->setText(usb);
+  passphrase->setText(QStringLiteral("parola uno due"));
+  tabs->setEnabled(true);
+
+  QTimer closer;
+  connect(&closer, &QTimer::timeout, [] {
+    if (QWidget* modal = QApplication::activeModalWidget()) {
+      modal->close();
+    }
+  });
+  closer.start(20);
+
+  // A consumed add leaves neither the alias nor the pasted card behind.
+  add_alias->setText(QStringLiteral("dave"));
+  add_card->setPlainText(QStringLiteral("-----BEGIN RATCHET CARD-----\nfake"));
+  add->click();
+  QTRY_VERIFY_WITH_TIMEOUT(add_alias->text().isEmpty(), 5000);
+  QTRY_VERIFY_WITH_TIMEOUT(add_card->toPlainText().isEmpty(), 5000);
+
+  // Same for a consumed block: the next paste starts from nothing.
+  block->setPlainText(QStringLiteral("-----BEGIN RATCHET MESSAGE-----\nfake"));
+  recv->click();
+  QTRY_VERIFY_WITH_TIMEOUT(block->toPlainText().isEmpty(), 5000);
+
+  QTRY_VERIFY_WITH_TIMEOUT(QApplication::activeModalWidget() == nullptr, 5000);
+  closer.stop();
 }
 
 QTEST_MAIN(GuiLaunchTest)

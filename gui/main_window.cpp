@@ -375,17 +375,21 @@ QWidget* MainWindow::buildContactsTab() {
 
   auto* add_layout = new QGridLayout;
   addAliasEdit_ = new QLineEdit;
+  addAliasEdit_->setObjectName(QStringLiteral("addAliasEdit"));
   addAliasEdit_->setPlaceholderText(tr("alias del contatto"));
   addCardFileEdit_ = new QLineEdit;
+  addCardFileEdit_->setObjectName(QStringLiteral("addCardFileEdit"));
   addCardFileEdit_->setPlaceholderText(
       tr("file card (opzionale; altrimenti incolla sotto)"));
   auto* add_file_button = new QPushButton(tr("Da file..."));
   connect(add_file_button, &QPushButton::clicked, this,
           &MainWindow::chooseCardFile);
   addCardEdit_ = new QPlainTextEdit;
+  addCardEdit_->setObjectName(QStringLiteral("addCardEdit"));
   addCardEdit_->setPlaceholderText(tr("incolla qui la card ricevuta dal contatto"));
   addCardEdit_->setMaximumHeight(100);
   auto* add_button = new QPushButton(tr("Aggiungi contatto (add)"));
+  add_button->setObjectName(QStringLiteral("addContactButton"));
   actionButtons_.append(add_button);
   connect(add_button, &QPushButton::clicked, this, [this] {
     const QString alias = addAliasEdit_->text().trimmed();
@@ -492,8 +496,29 @@ QWidget* MainWindow::buildMessagesTab() {
   auto* send_layout = new QGridLayout;
   sendAliasCombo_ = makeAliasCombo(tr("destinatario (dalla lista contatti)"));
   sendAliasCombo_->setObjectName(QStringLiteral("sendAliasCombo"));
+  auto* add_recipient_button = new QPushButton(tr("Aggiungi"));
+  add_recipient_button->setObjectName(QStringLiteral("addRecipientButton"));
+  add_recipient_button->setToolTip(
+      tr("Aggiunge il destinatario ai selezionati (per un messaggio di gruppo)"));
+  connect(add_recipient_button, &QPushButton::clicked, this, [this] {
+    addSendRecipient(sendAliasCombo_->currentText());
+  });
+  sendRecipientsBox_ = new QWidget;
+  sendRecipientsBox_->setObjectName(QStringLiteral("sendRecipients"));
+  {
+    auto* chips_layout = new QHBoxLayout(sendRecipientsBox_);
+    chips_layout->setContentsMargins(0, 0, 0, 0);
+    chips_layout->setSpacing(6);
+  }
+  auto* recipients_scroll = new QScrollArea;
+  recipients_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+  recipients_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  recipients_scroll->setWidgetResizable(true);
+  recipients_scroll->setWidget(sendRecipientsBox_);
+  recipients_scroll->setFixedHeight(52);
   sendFileEdit_ = new QLineEdit;
-  sendFileEdit_->setPlaceholderText(tr("file da cifrare (opzionale; --file)"));
+  sendFileEdit_->setObjectName(QStringLiteral("sendFileEdit"));
+  sendFileEdit_->setPlaceholderText(tr("file da cifrare (opzionale; --file, solo 1 destinatario)"));
   auto* send_file_button = new QPushButton(tr("File..."));
   connect(send_file_button, &QPushButton::clicked, this,
           &MainWindow::chooseSendFile);
@@ -501,43 +526,78 @@ QWidget* MainWindow::buildMessagesTab() {
   sendMessageEdit_->setObjectName(QStringLiteral("sendMessageEdit"));
   sendMessageEdit_->setPlaceholderText(tr("messaggio in chiaro da cifrare"));
   sendMessageEdit_->setMaximumHeight(100);
-  auto* send_button = new QPushButton(tr("Cifra e genera blocco (send)"));
+  auto* send_button = new QPushButton(tr("Cifra e genera blocco (send / group-send)"));
   send_button->setObjectName(QStringLiteral("sendButton"));
   actionButtons_.append(send_button);
   connect(send_button, &QPushButton::clicked, this, [this] {
-    const QString alias = sendAliasCombo_->currentText().trimmed();
-    if (alias.isEmpty()) {
-      warn(tr("Serve un destinatario."));
-      return;
-    }
-    const QString file = sendFileEdit_->text().trimmed();
-    QStringList flags;
-    const QStringList positionals{alias};
-    if (!file.isEmpty()) {
-      flags << "--file" << file;
-      launchWithPassphrase(QStringLiteral("send"), flags, positionals);
-    } else {
-      const QString message = sendMessageEdit_->toPlainText();
-      if (message.isEmpty()) {
-        warn(tr("Scrivi un messaggio oppure scegli un file."));
+    // The chips are the recipients; when none was added, the combo itself is
+    // the single recipient, so the old one-contact flow is unchanged.
+    QStringList recipients = sendRecipients_;
+    if (recipients.isEmpty()) {
+      const QString alias = sendAliasCombo_->currentText().trimmed();
+      if (alias.isEmpty()) {
+        warn(tr("Serve un destinatario: sceglilo e premi Aggiungi, oppure "
+                "lascialo nella tendina per un messaggio singolo."));
         return;
       }
-      // The plaintext never enters argv (readable in /proc by every process of
-      // this user); it goes on stdin, before the passphrase, framed by its
-      // byte count.
-      QByteArray payload = message.toUtf8();
-      launchWithPayload(QStringLiteral("send"), flags, positionals, payload);
-      ratchet::gui::wipeByteArray(payload);
+      recipients << alias;
     }
+    recipients.removeDuplicates();
+    const QString file = sendFileEdit_->text().trimmed();
+    if (recipients.size() == 1) {
+      QStringList flags;
+      const QStringList positionals{recipients.first()};
+      if (!file.isEmpty()) {
+        flags << "--file" << file;
+        launchWithPassphrase(QStringLiteral("send"), flags, positionals);
+      } else {
+        const QString message = sendMessageEdit_->toPlainText();
+        if (message.isEmpty()) {
+          warn(tr("Scrivi un messaggio oppure scegli un file."));
+          return;
+        }
+        // The plaintext never enters argv (readable in /proc by every process
+        // of this user); it goes on stdin, before the passphrase, framed by
+        // its byte count.
+        QByteArray payload = message.toUtf8();
+        launchWithPayload(QStringLiteral("send"), flags, positionals, payload);
+        ratchet::gui::wipeByteArray(payload);
+      }
+      return;
+    }
+    // group-send wraps one content key per member through the existing 1:1
+    // sessions; the CLI refuses the send when a recipient is unknown or the
+    // session cannot move, and nothing is committed before that.
+    if (!file.isEmpty()) {
+      warn(tr("I messaggi di gruppo accettano solo testo: togli il file "
+              "oppure manda a un destinatario alla volta."));
+      return;
+    }
+    const QString message = sendMessageEdit_->toPlainText();
+    if (message.isEmpty()) {
+      warn(tr("Scrivi un messaggio per il gruppo."));
+      return;
+    }
+    QStringList flags;
+    for (const QString& recipient : recipients) {
+      flags << "--to" << recipient;
+    }
+    QByteArray payload = message.toUtf8();
+    launchWithPayload(QStringLiteral("group-send"), flags, {}, payload);
+    ratchet::gui::wipeByteArray(payload);
   });
   send_layout->addWidget(new QLabel(tr("A:")), 0, 0);
-  send_layout->addWidget(sendAliasCombo_, 0, 1, 1, 2);
-  send_layout->addWidget(new QLabel(tr("File:")), 1, 0);
-  send_layout->addWidget(sendFileEdit_, 1, 1);
-  send_layout->addWidget(send_file_button, 1, 2);
-  send_layout->addWidget(sendMessageEdit_, 2, 0, 1, 3);
-  send_layout->addWidget(send_button, 3, 0, 1, 3);
-  layout->addWidget(makeGroup(tr("Invia (send)"), send_layout));
+  send_layout->addWidget(sendAliasCombo_, 0, 1);
+  send_layout->addWidget(add_recipient_button, 0, 2);
+  send_layout->addWidget(new QLabel(tr("Destinatari:")), 1, 0);
+  send_layout->addWidget(recipients_scroll, 1, 1, 1, 2);
+  send_layout->addWidget(new QLabel(tr("File:")), 2, 0);
+  send_layout->addWidget(sendFileEdit_, 2, 1);
+  send_layout->addWidget(send_file_button, 2, 2);
+  send_layout->addWidget(sendMessageEdit_, 3, 0, 1, 3);
+  send_layout->addWidget(send_button, 4, 0, 1, 3);
+  layout->addWidget(makeGroup(tr("Invia (send / group-send)"), send_layout));
+  syncRecipientChips();
 
   auto* recv_layout = new QVBoxLayout;
   recvBlockEdit_ = new QPlainTextEdit;
@@ -797,7 +857,124 @@ void MainWindow::parseContacts(const QString& text) {
           ? tr("Nessun contatto nel vault.")
           : tr("Contatti disponibili: %1").arg(aliases.join(QStringLiteral(", "))),
       6000);
+
+  // A contact list that changed since the recipients were picked must not
+  // silently redirect a group message: drop whoever is gone. The CLI would
+  // refuse the unknown alias anyway; this keeps the chips honest before that.
+  QStringList pruned;
+  for (auto it = sendRecipients_.begin(); it != sendRecipients_.end();) {
+    if (!aliases.contains(*it)) {
+      pruned << *it;
+      it = sendRecipients_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  if (!pruned.isEmpty()) {
+    syncRecipientChips();
+    statusBar()->showMessage(
+        tr("Rimossi dai destinatari (non piu' nei contatti): %1")
+            .arg(pruned.join(QStringLiteral(", "))),
+        6000);
+  }
 }
+
+void MainWindow::addSendRecipient(const QString& alias) {
+  const QString name = alias.trimmed();
+  if (name.isEmpty()) {
+    warn(tr("Scegli un destinatario dalla lista e premi Aggiungi."));
+    return;
+  }
+  if (sendRecipients_.contains(name)) {
+    warn(tr("'%1' e' gia' tra i destinatari.").arg(name));
+    return;
+  }
+  sendRecipients_ << name;
+  syncRecipientChips();
+  // The combo fed the chip; clearing it invites picking the next contact
+  // instead of adding the same one twice.
+  if (sendAliasCombo_ != nullptr && sendAliasCombo_->lineEdit() != nullptr) {
+    sendAliasCombo_->lineEdit()->clear();
+  }
+}
+
+void MainWindow::removeSendRecipient(const QString& alias) {
+  sendRecipients_.removeAll(alias);
+  syncRecipientChips();
+}
+
+void MainWindow::syncRecipientChips() {
+  if (sendRecipientsBox_ == nullptr) return;
+  if (QLayout* layout = sendRecipientsBox_->layout()) {
+    while (QLayoutItem* item = layout->takeAt(0)) {
+      if (QWidget* widget = item->widget()) {
+        // Hide at once so a removed chip never lingers a frame; the deletion
+        // itself stays deferred because this can run from the chip's own
+        // remove button.
+        widget->hide();
+        widget->deleteLater();
+      }
+      delete item;
+    }
+    // An empty list reads as empty on purpose: the placeholder says where
+    // the recipients go, so no chip means no recipient.
+    if (sendRecipients_.isEmpty()) {
+      auto* hint = new QLabel(tr("nessun destinatario (la tendina vale come singolo)"));
+      hint->setEnabled(false);
+      layout->addWidget(hint);
+    }
+    for (const QString& recipient : sendRecipients_) {
+      auto* chip = new QFrame;
+      chip->setFrameStyle(QFrame::StyledPanel);
+      auto* chip_layout = new QHBoxLayout(chip);
+      chip_layout->setContentsMargins(8, 2, 2, 2);
+      chip_layout->setSpacing(4);
+      auto* label = new QLabel(recipient);
+      label->setTextFormat(Qt::PlainText);
+      chip_layout->addWidget(label);
+      auto* remove = new QToolButton;
+      remove->setObjectName(QStringLiteral("removeRecipientButton"));
+      remove->setText(QStringLiteral("\u00d7"));
+      remove->setToolTip(tr("Togli '%1' dai destinatari").arg(recipient));
+      remove->setProperty("recipient", recipient);
+      connect(remove, &QToolButton::clicked, this,
+              [this, recipient] { removeSendRecipient(recipient); });
+      chip_layout->addWidget(remove);
+      layout->addWidget(chip);
+    }
+    static_cast<QHBoxLayout*>(layout)->addStretch(1);
+  }
+}
+
+void MainWindow::clearPlainEdit(QPlainTextEdit* edit) {
+  if (edit == nullptr) return;
+  edit->clear();
+  edit->document()->clearUndoRedoStacks();
+}
+
+void MainWindow::clearSendInputs() {
+  sendRecipients_.clear();
+  syncRecipientChips();
+  if (sendAliasCombo_ != nullptr && sendAliasCombo_->lineEdit() != nullptr) {
+    sendAliasCombo_->lineEdit()->clear();
+  }
+  clearPlainEdit(sendMessageEdit_);
+  if (sendFileEdit_ != nullptr) {
+    sendFileEdit_->clear();
+  }
+}
+
+void MainWindow::clearAddInputs() {
+  if (addAliasEdit_ != nullptr) {
+    addAliasEdit_->clear();
+  }
+  if (addCardFileEdit_ != nullptr) {
+    addCardFileEdit_->clear();
+  }
+  clearPlainEdit(addCardEdit_);
+}
+
+void MainWindow::clearRecvInput() { clearPlainEdit(recvBlockEdit_); }
 
 QString MainWindow::usbPath() const { return usbEdit_->text().trimmed(); }
 
@@ -943,6 +1120,7 @@ QString MainWindow::commandTitle(const QString& command) const {
   if (command == QLatin1String("reset-session")) return tr("Sessione azzerata");
   if (command == QLatin1String("remove")) return tr("Contatto rimosso");
   if (command == QLatin1String("send")) return tr("Blocco cifrato");
+  if (command == QLatin1String("group-send")) return tr("Blocco di gruppo");
   if (command == QLatin1String("recv")) return tr("Messaggio ricevuto");
   if (command == QLatin1String("anchor")) return tr("Rollback anchor");
   return tr("Risultato");
@@ -1177,6 +1355,10 @@ void MainWindow::handleFinished(int exit_code, bool normal_exit) {
       const ratchet::gui::ParsedRecvResult parsed =
           ratchet::gui::parseRecvResult(commandStdout_);
       if (parsed.ok && parsed.is_file) {
+        // The block is consumed even though the command exits non-zero (the
+        // vault was already saved); keeping it would invite decrypting it
+        // twice.
+        clearRecvInput();
         showRecvFile(parsed, commandStderr_);
         return;
       }
@@ -1285,6 +1467,10 @@ void MainWindow::handleFinished(int exit_code, bool normal_exit) {
   }
 
   if (command == QLatin1String("add")) {
+    // The alias and the pasted card are consumed: keeping them would invite
+    // adding the same contact twice, and the card is their public key
+    // sitting in an editable box.
+    clearAddInputs();
     showResultDialog(true, tr("Contatto aggiunto"),
                      tr("Verifica l'impronta con la persona, fuori banda."),
                      commandStdout_);
@@ -1324,22 +1510,24 @@ void MainWindow::handleFinished(int exit_code, bool normal_exit) {
       return;
     }
     if (parsed.is_file) {
+      clearRecvInput();
       showRecvFile(parsed, commandStderr_);
       return;
     }
+    clearRecvInput();
     showResultDialog(true, commandTitle(command),
                      tr("Operazione completata."), parsed.body);
     return;
   }
 
-  if (command == QLatin1String("send") &&
-      sendFileEdit_->text().trimmed().isEmpty()) {
-    // The plaintext was encrypted and is no longer needed; keeping it in the
-    // compose box would keep a copy on screen and in the undo history. A
-    // failed send returns above, before this point, so the text is still there
-    // to retry.
-    sendMessageEdit_->clear();
-    sendMessageEdit_->document()->clearUndoRedoStacks();
+  if (command == QLatin1String("send") ||
+      command == QLatin1String("group-send")) {
+    // The plaintext was encrypted and the recipients consumed; keeping any
+    // of it would keep a copy on screen and in the undo history, and a stale
+    // recipient list invites sending the next message to the wrong people. A
+    // failed send returns above, before this point, so everything is still
+    // there to retry.
+    clearSendInputs();
   }
 
   if (!commandStdout_.trimmed().isEmpty()) {

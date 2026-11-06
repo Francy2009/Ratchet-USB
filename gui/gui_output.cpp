@@ -325,7 +325,8 @@ ParsedRecvResult parseRecvResult(const QString& stdout_text) {
     if (key != QLatin1String("version") && key != QLatin1String("command") &&
         key != QLatin1String("kind") && key != QLatin1String("ext") &&
         key != QLatin1String("staged") && key != QLatin1String("path") &&
-        key != QLatin1String("marker")) {
+        key != QLatin1String("marker") && key != QLatin1String("ttl") &&
+        key != QLatin1String("burn")) {
       return failRecv(QStringLiteral("structured result has an unknown field"));
     }
     if (fields.contains(key)) {
@@ -366,9 +367,26 @@ ParsedRecvResult parseRecvResult(const QString& stdout_text) {
         gui_format::unescape_body(message.toStdString()));
   }
 
+  // Optional, so a block from a CLI that predates the ephemeral fields still
+  // parses; when present the values must be exact, because the window drives
+  // its expiry timer off them.
+  const QString ttl = fields.value(QStringLiteral("ttl"),
+                                   QStringLiteral("off"));
+  if (ttl != QLatin1String("off") && ttl != QLatin1String("1h") &&
+      ttl != QLatin1String("24h") && ttl != QLatin1String("7d")) {
+    return failRecv(QStringLiteral("structured result has an unknown ttl"));
+  }
+  const QString burn = fields.value(QStringLiteral("burn"),
+                                    QStringLiteral("no"));
+  if (burn != QLatin1String("yes") && burn != QLatin1String("no")) {
+    return failRecv(QStringLiteral("structured result has an invalid burn value"));
+  }
+
   const QString kind = fields.value(QStringLiteral("kind"));
   ParsedRecvResult result;
   result.body = message;
+  result.ttl = ttl;
+  result.burn = burn == QLatin1String("yes");
   if (kind == QLatin1String("text")) {
     if (fields.contains(QStringLiteral("ext")) ||
         fields.contains(QStringLiteral("staged")) ||
