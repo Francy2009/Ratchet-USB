@@ -16,6 +16,7 @@
 class QCheckBox;
 class QCloseEvent;
 class QComboBox;
+class QGroupBox;
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
@@ -220,8 +221,25 @@ class MainWindow : public QMainWindow {
   QLineEdit* sendFileEdit_ = nullptr;
   QPlainTextEdit* recvBlockEdit_ = nullptr;
 
+  // A single Fusion-based look for the whole window: one palette and one
+  // style sheet, applied once, so every tab, dialog and popup shares the
+  // same spacing, radii and accent instead of each screen inventing its own.
+  void applyTheme();
+  // Keeps the access panel's state in one place: the group title, the status
+  // line and the lock button always agree on whether the vault is open.
+  void updateAccessState();
+  // The recipients the send button will use: the chips when at least one was
+  // added, otherwise the combo on its own (the old one-contact flow).
+  QStringList effectiveRecipients() const;
+  // The two meta lines under the compose box: who the message goes to, and
+  // how big it is against the 4 MiB plaintext ceiling.
+  void updateSendMeta();
+
+  QGroupBox* accessGroup_ = nullptr;
   QTabWidget* tabs_ = nullptr;
   QList<QPushButton*> actionButtons_;
+  QLabel* recipientCountLabel_ = nullptr;  // objectName for tests
+  QLabel* messageSizeLabel_ = nullptr;     // objectName for tests
 
   std::unique_ptr<QTemporaryFile> stagedCard_;
   QString lastCommand_;

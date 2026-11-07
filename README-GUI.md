@@ -130,6 +130,15 @@ funzioni che richiedono un vault aperto.
      preparato il file, la stessa logica di `recv` da terminale) e *Chiudi*.
 3. **Blocca** disabilita di nuovo le schede e cancella la passphrase dal campo.
 
+L'aspetto è volutamente sobrio e uguale ovunque (tema chiaro fisso): le sezioni
+sono schede bianche, i pulsanti che fanno andare avanti (Accedi, Cifra,
+Decifra, Aggiungi contatto) sono blu, il resto è neutro. Il titolo del
+pannello dice sempre se il vault è bloccato o sbloccato, con una riga di
+stato sotto. Scorciatoie: **Ctrl+Invio** nella casella del messaggio lo
+cifra, **Ctrl+Invio** nel blocco lo decifra. Sotto la casella di scrittura
+due righe dicono a chi va il messaggio (tendina o N riquadri, singolo o
+gruppo) e quanto è grande contro il limite di 4 MiB.
+
 Non c'è un pannello di testo stile terminale: ogni comando apre un **popup** che
 dice se è andato a buon fine o male. Se il risultato è lungo (card, blocco
 cifrato, lista contatti, impronta) viene mostrato in un'area **scorrevole** con i

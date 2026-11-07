@@ -35,8 +35,10 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScrollArea>
+#include <QShortcut>
 #include <QSpinBox>
 #include <QStatusBar>
+#include <QStyleFactory>
 #include <QTimer>
 #include <QStyle>
 #include <QTabWidget>
@@ -198,8 +200,128 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   }
 }
 
+void MainWindow::applyTheme() {
+  // Fusion draws every control itself instead of deferring to the desktop
+  // theme, so the window looks the same on every machine and the headless
+  // test sees the same widgets. The palette is deliberately light and fixed:
+  // a security tool should look identical everywhere, not inherit an
+  // unreviewed dark theme that could wash out a warning.
+  QApplication::setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
+
+  QPalette palette;
+  palette.setColor(QPalette::Window, QColor(0xf4, 0xf5, 0xf7));
+  palette.setColor(QPalette::WindowText, QColor(0x1c, 0x1e, 0x21));
+  palette.setColor(QPalette::Base, Qt::white);
+  palette.setColor(QPalette::AlternateBase, QColor(0xed, 0xf0, 0xf4));
+  palette.setColor(QPalette::Text, QColor(0x1c, 0x1e, 0x21));
+  palette.setColor(QPalette::PlaceholderText, QColor(0x7a8494));
+  palette.setColor(QPalette::Button, QColor(0xe8, 0xec, 0xf1));
+  palette.setColor(QPalette::ButtonText, QColor(0x1c, 0x1e, 0x21));
+  palette.setColor(QPalette::Highlight, QColor(0x2f, 0x6f, 0xed));
+  palette.setColor(QPalette::HighlightedText, Qt::white);
+  palette.setColor(QPalette::Link, QColor(0x2f, 0x6f, 0xed));
+  palette.setColor(QPalette::ToolTipBase, Qt::white);
+  palette.setColor(QPalette::ToolTipText, QColor(0x1c, 0x1e, 0x21));
+  QApplication::setPalette(palette);
+
+  // Cards for the sections, one accent for the actions that move the vault
+  // forward, pills for the recipients. Everything else stays neutral: colour
+  // marks what acts, not what informs.
+  setStyleSheet(QStringLiteral(
+      "QGroupBox {"
+      "  background: #ffffff;"
+      "  border: 1px solid #dfe3ea;"
+      "  border-radius: 8px;"
+      "  margin-top: 14px;"
+      "  padding: 10px 12px 12px 12px;"
+      "}"
+      "QGroupBox::title {"
+      "  subcontrol-origin: margin;"
+      "  subcontrol-position: top left;"
+      "  left: 10px;"
+      "  padding: 0 4px;"
+      "  color: #1c1e21;"
+      "}"
+      "QPushButton {"
+      "  padding: 7px 14px;"
+      "  border: 1px solid #c9d1dc;"
+      "  border-radius: 6px;"
+      "  background: #eef1f6;"
+      "}"
+      "QPushButton:hover { background: #e2e8f1; border-color: #b6c1d1; }"
+      "QPushButton:pressed { background: #d6dde8; }"
+      "QPushButton:disabled { color: #8a94a6; background: #f0f2f5;"
+      "  border-color: #dfe3ea; }"
+      "QPushButton[primary=\"true\"] {"
+      "  background: #2f6fed;"
+      "  border-color: #2f6fed;"
+      "  color: #ffffff;"
+      "  font-weight: bold;"
+      "}"
+      "QPushButton[primary=\"true\"]:hover {"
+      "  background: #2559d6; border-color: #2559d6; }"
+      "QPushButton[primary=\"true\"]:pressed {"
+      "  background: #1f4cb4; border-color: #1f4cb4; }"
+      "QPushButton[primary=\"true\"]:disabled {"
+      "  background: #a8b4c8; border-color: #a8b4c8; color: #f2f4f8; }"
+      "QLineEdit, QPlainTextEdit, QComboBox, QSpinBox {"
+      "  padding: 6px 8px;"
+      "  border: 1px solid #c9d1dc;"
+      "  border-radius: 6px;"
+      "  background: #ffffff;"
+      "  selection-background-color: #2f6fed;"
+      "}"
+      "QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus,"
+      "QSpinBox:focus { border: 1px solid #2f6fed; }"
+      "QLineEdit:disabled, QPlainTextEdit:disabled, QComboBox:disabled {"
+      "  background: #f0f2f5; color: #8a94a6; }"
+      "QTabWidget::pane {"
+      "  border: 1px solid #dfe3ea;"
+      "  border-radius: 8px;"
+      "  background: #ffffff;"
+      "}"
+      "QTabBar::tab {"
+      "  padding: 8px 18px;"
+      "  margin-right: 4px;"
+      "  margin-top: 4px;"
+      "  border-top-left-radius: 8px;"
+      "  border-top-right-radius: 8px;"
+      "  background: #e8ecf1;"
+      "  color: #3c4350;"
+      "}"
+      "QTabBar::tab:selected {"
+      "  background: #ffffff;"
+      "  color: #1c1e21;"
+      "  border: 1px solid #dfe3ea;"
+      "  border-bottom: none;"
+      "  margin-top: 0px;"
+      "}"
+      "QStatusBar { background: #eceff3; color: #3c4350; }"
+      "QStatusBar::item { border: none; }"
+      "QScrollArea { border: none; background: transparent; }"
+      "QCheckBox { spacing: 6px; }"
+      "QToolTip {"
+      "  background: #ffffff;"
+      "  color: #1c1e21;"
+      "  border: 1px solid #c9d1dc;"
+      "  padding: 4px;"
+      "}"
+      "QFrame[chipFrame=\"true\"] {"
+      "  background: #e8eefc;"
+      "  border: 1px solid #c4d3f7;"
+      "  border-radius: 12px;"
+      "}"
+      "QLabel[count=\"true\"], QLabel[hint=\"true\"] { color: #5b6472; }"
+      "QLabel#vaultWarningLabel { color: #9a3d00; font-weight: bold; }"
+      "QToolButton { border: none; border-radius: 10px; padding: 2px 6px; }"
+      "QToolButton:hover { background: #e2e8f1; }"
+      "QToolButton[destructive=\"true\"]:hover {"
+      "  background: #fde8e8; color: #b3261e; }"));
+}
+
 void MainWindow::buildUi() {
   setWindowTitle(tr("Ratchet-USB"));
+  applyTheme();
 
   auto* settings = menuBar()->addMenu(tr("Impostazioni"));
   QAction* choose_bin = settings->addAction(tr("Scegli binario CLI..."));
@@ -249,8 +371,10 @@ QWidget* MainWindow::buildAccessPanel() {
   auto* usb_buttons_layout = new QHBoxLayout(usb_buttons);
   usb_buttons_layout->setContentsMargins(0, 0, 0, 0);
   usb_buttons_layout->setSpacing(6);
-  auto* detect_button = new QPushButton(tr("Rileva chiavetta"));
-  auto* browse_button = new QPushButton(tr("Sfoglia..."));
+  auto* detect_button = new QPushButton(
+      style()->standardIcon(QStyle::SP_ComputerIcon), tr("Rileva chiavetta"));
+  auto* browse_button = new QPushButton(
+      style()->standardIcon(QStyle::SP_DirOpenIcon), tr("Sfoglia..."));
   connect(detect_button, &QPushButton::clicked, this,
           &MainWindow::detectUsbDrive);
   connect(browse_button, &QPushButton::clicked, this,
@@ -287,6 +411,7 @@ QWidget* MainWindow::buildAccessPanel() {
   unlockButton_ = new QPushButton(tr("Accedi"));
   unlockButton_->setObjectName(QStringLiteral("unlockButton"));
   unlockButton_->setDefault(true);
+  unlockButton_->setProperty("primary", true);
   lockButton_ = new QPushButton(tr("Blocca"));
   auto* init_button = new QPushButton(tr("Crea un nuovo vault..."));
   connect(unlockButton_, &QPushButton::clicked, this, &MainWindow::doUnlock);
@@ -309,17 +434,40 @@ QWidget* MainWindow::buildAccessPanel() {
   vaultWarningLabel_->setObjectName(QStringLiteral("vaultWarningLabel"));
   vaultWarningLabel_->setTextFormat(Qt::PlainText);
   vaultWarningLabel_->setWordWrap(true);
-  vaultWarningLabel_->setStyleSheet(
-      QStringLiteral("QLabel { color: #a04000; }"));
   vaultWarningLabel_->hide();
   layout->addWidget(vaultWarningLabel_, 4, 0, 1, 3);
 
   statusLabel_ = new QLabel;
+  statusLabel_->setObjectName(QStringLiteral("statusLabel"));
   statusLabel_->setTextFormat(Qt::PlainText);
+  statusLabel_->setWordWrap(true);
   layout->addWidget(statusLabel_, 5, 0, 1, 3);
 
   updateVaultPathLabel();
-  return makeGroup(tr("Accesso al vault"), layout);
+  accessGroup_ = makeGroup(tr("Accesso al vault"), layout);
+  updateAccessState();
+  return accessGroup_;
+}
+
+void MainWindow::updateAccessState() {
+  if (accessGroup_ != nullptr) {
+    accessGroup_->setTitle(unlocked_ ? tr("Accesso al vault — sbloccato")
+                                     : tr("Accesso al vault — bloccato"));
+  }
+  if (statusLabel_ != nullptr) {
+    statusLabel_->setText(
+        unlocked_
+            ? tr("Vault sbloccato: puoi usare le schede qui sotto.")
+            : tr("Vault bloccato: sbloccalo per usare le schede."));
+    // Inline on purpose: this is live state, not decoration, and it must
+    // win over the style sheet whatever the theme does.
+    statusLabel_->setStyleSheet(
+        unlocked_ ? QStringLiteral("QLabel { color: #1a7f37; }")
+                  : QStringLiteral("QLabel { color: #5b6472; }"));
+  }
+  if (lockButton_ != nullptr) {
+    lockButton_->setEnabled(unlocked_);
+  }
 }
 
 QWidget* MainWindow::buildVaultTab() {
@@ -361,7 +509,10 @@ QWidget* MainWindow::buildContactsTab() {
   auto* list_layout = new QGridLayout;
   auto* card_button = new QPushButton(tr("Genera card identita (card)"));
   auto* contacts_button = new QPushButton(tr("Lista contatti (contacts)"));
-  auto* refresh_button = new QPushButton(tr("Aggiorna elenco contatti"));
+  auto* refresh_button = new QPushButton(
+      style()->standardIcon(QStyle::SP_BrowserReload),
+      tr("Aggiorna elenco contatti"));
+  refresh_button->setToolTip(tr("Rilegge i contatti dal vault"));
   actionButtons_ << card_button << contacts_button << refresh_button;
   connect(card_button, &QPushButton::clicked, this,
           [this] { launchWithPassphrase(QStringLiteral("card"), {}, {}); });
@@ -382,7 +533,8 @@ QWidget* MainWindow::buildContactsTab() {
   addCardFileEdit_->setObjectName(QStringLiteral("addCardFileEdit"));
   addCardFileEdit_->setPlaceholderText(
       tr("file card (opzionale; altrimenti incolla sotto)"));
-  auto* add_file_button = new QPushButton(tr("Da file..."));
+  auto* add_file_button = new QPushButton(
+      style()->standardIcon(QStyle::SP_DialogOpenButton), tr("Da file..."));
   connect(add_file_button, &QPushButton::clicked, this,
           &MainWindow::chooseCardFile);
   addCardEdit_ = new QPlainTextEdit;
@@ -391,6 +543,7 @@ QWidget* MainWindow::buildContactsTab() {
   addCardEdit_->setMaximumHeight(100);
   auto* add_button = new QPushButton(tr("Aggiungi contatto (add)"));
   add_button->setObjectName(QStringLiteral("addContactButton"));
+  add_button->setProperty("primary", true);
   actionButtons_.append(add_button);
   connect(add_button, &QPushButton::clicked, this, [this] {
     const QString alias = addAliasEdit_->text().trimmed();
@@ -424,8 +577,14 @@ QWidget* MainWindow::buildContactsTab() {
   trustAliasCombo_->setObjectName(QStringLiteral("trustAliasCombo"));
   auto* trust_button = new QPushButton(tr("Segna verificato (trust)"));
   trust_button->setObjectName(QStringLiteral("trustButton"));
+  trust_button->setToolTip(
+      tr("Segna il contatto come verificato dopo averne controllato "
+         "l'impronta fuori banda"));
   resetAliasCombo_ = makeAliasCombo(tr("alias (dalla lista)"));
   auto* reset_button = new QPushButton(tr("Azzera sessione (reset-session)"));
+  reset_button->setToolTip(
+      tr("Butta le chiavi della sessione: il prossimo messaggio "
+         "richiede una nuova apertura autenticata"));
   actionButtons_ << trust_button << reset_button;
   connect(trust_button, &QPushButton::clicked, this, [this] {
     const QString alias = trustAliasCombo_->currentText().trimmed();
@@ -462,6 +621,9 @@ QWidget* MainWindow::buildContactsTab() {
   auto* remove_layout = new QGridLayout;
   removeAliasCombo_ = makeAliasCombo(tr("alias (dalla lista)"));
   auto* remove_button = new QPushButton(tr("Rimuovi contatto (remove)"));
+  remove_button->setToolTip(
+      tr("Elimina il contatto e la sua sessione, chiavi comprese. "
+         "Non si può annullare."));
   actionButtons_ << remove_button;
   connect(remove_button, &QPushButton::clicked, this, [this] {
     const QString alias = removeAliasCombo_->currentText().trimmed();
@@ -520,30 +682,36 @@ QWidget* MainWindow::buildMessagesTab() {
   sendFileEdit_ = new QLineEdit;
   sendFileEdit_->setObjectName(QStringLiteral("sendFileEdit"));
   sendFileEdit_->setPlaceholderText(tr("file da cifrare (opzionale; --file, solo 1 destinatario)"));
-  auto* send_file_button = new QPushButton(tr("File..."));
+  auto* send_file_button = new QPushButton(
+      style()->standardIcon(QStyle::SP_DialogOpenButton), tr("File..."));
+  send_file_button->setToolTip(tr("Scegli un file da cifrare al posto del testo"));
   connect(send_file_button, &QPushButton::clicked, this,
           &MainWindow::chooseSendFile);
   sendMessageEdit_ = new QPlainTextEdit;
   sendMessageEdit_->setObjectName(QStringLiteral("sendMessageEdit"));
   sendMessageEdit_->setPlaceholderText(tr("messaggio in chiaro da cifrare"));
   sendMessageEdit_->setMaximumHeight(100);
-  auto* send_button = new QPushButton(tr("Cifra e genera blocco (send / group-send)"));
+  auto* send_button = new QPushButton(
+      style()->standardIcon(QStyle::SP_ArrowForward),
+      tr("Cifra e genera blocco (send / group-send)"));
   send_button->setObjectName(QStringLiteral("sendButton"));
+  send_button->setProperty("primary", true);
+  send_button->setToolTip(tr("Cifra il messaggio per i destinatari (Ctrl+Invio)"));
   actionButtons_.append(send_button);
+  for (const int key : {Qt::Key_Return, Qt::Key_Enter}) {
+    auto* send_shortcut =
+        new QShortcut(QKeySequence(Qt::CTRL | key), sendMessageEdit_);
+    send_shortcut->setContext(Qt::WidgetShortcut);
+    connect(send_shortcut, &QShortcut::activated, send_button,
+            &QPushButton::click);
+  }
   connect(send_button, &QPushButton::clicked, this, [this] {
-    // The chips are the recipients; when none was added, the combo itself is
-    // the single recipient, so the old one-contact flow is unchanged.
-    QStringList recipients = sendRecipients_;
+    const QStringList recipients = effectiveRecipients();
     if (recipients.isEmpty()) {
-      const QString alias = sendAliasCombo_->currentText().trimmed();
-      if (alias.isEmpty()) {
-        warn(tr("Serve un destinatario: sceglilo e premi Aggiungi, oppure "
-                "lascialo nella tendina per un messaggio singolo."));
-        return;
-      }
-      recipients << alias;
+      warn(tr("Serve un destinatario: sceglilo e premi Aggiungi, oppure "
+              "lascialo nella tendina per un messaggio singolo."));
+      return;
     }
-    recipients.removeDuplicates();
     const QString file = sendFileEdit_->text().trimmed();
     // The expiry rides inside the encrypted plaintext (see ephemeral.hpp);
     // the flags only name the bucket, which is the sender's choice and no
@@ -624,8 +792,31 @@ QWidget* MainWindow::buildMessagesTab() {
   send_layout->addWidget(sendFileEdit_, 3, 1);
   send_layout->addWidget(send_file_button, 3, 2);
   send_layout->addWidget(sendMessageEdit_, 4, 0, 1, 3);
-  send_layout->addWidget(send_button, 5, 0, 1, 3);
+  // Live meta lines: who the message goes to, and how big it is against the
+  // 4 MiB plaintext ceiling. Read-only state, not controls.
+  recipientCountLabel_ = new QLabel;
+  recipientCountLabel_->setObjectName(QStringLiteral("recipientCountLabel"));
+  recipientCountLabel_->setProperty("count", true);
+  recipientCountLabel_->setTextFormat(Qt::PlainText);
+  messageSizeLabel_ = new QLabel;
+  messageSizeLabel_->setObjectName(QStringLiteral("messageSizeLabel"));
+  messageSizeLabel_->setProperty("count", true);
+  messageSizeLabel_->setTextFormat(Qt::PlainText);
+  messageSizeLabel_->setAlignment(Qt::AlignRight);
+  messageSizeLabel_->setToolTip(
+      tr("Dimensione del testo o del file contro il limite di 4 MiB"));
+  auto* meta_layout = new QHBoxLayout;
+  meta_layout->setContentsMargins(0, 0, 0, 0);
+  meta_layout->addWidget(recipientCountLabel_);
+  meta_layout->addStretch(1);
+  meta_layout->addWidget(messageSizeLabel_);
+  send_layout->addLayout(meta_layout, 5, 0, 1, 3);
+  send_layout->addWidget(send_button, 6, 0, 1, 3);
   layout->addWidget(makeGroup(tr("Invia (send / group-send)"), send_layout));
+  connect(sendAliasCombo_->lineEdit(), &QLineEdit::textChanged, this,
+          [this] { updateSendMeta(); });
+  connect(sendMessageEdit_, &QPlainTextEdit::textChanged, this,
+          [this] { updateSendMeta(); });
   syncRecipientChips();
 
   auto* recv_layout = new QVBoxLayout;
@@ -633,9 +824,20 @@ QWidget* MainWindow::buildMessagesTab() {
   recvBlockEdit_->setObjectName(QStringLiteral("recvBlockEdit"));
   recvBlockEdit_->setPlaceholderText(tr("incolla il blocco ricevuto da decifrare"));
   recvBlockEdit_->setMaximumHeight(130);
-  auto* recv_button = new QPushButton(tr("Decifra blocco (recv)"));
+  auto* recv_button = new QPushButton(
+      style()->standardIcon(QStyle::SP_ArrowDown),
+      tr("Decifra blocco (recv)"));
   recv_button->setObjectName(QStringLiteral("recvButton"));
+  recv_button->setProperty("primary", true);
+  recv_button->setToolTip(tr("Decifra il blocco incollato sopra (Ctrl+Invio)"));
   actionButtons_.append(recv_button);
+  for (const int key : {Qt::Key_Return, Qt::Key_Enter}) {
+    auto* recv_shortcut =
+        new QShortcut(QKeySequence(Qt::CTRL | key), recvBlockEdit_);
+    recv_shortcut->setContext(Qt::WidgetShortcut);
+    connect(recv_shortcut, &QShortcut::activated, recv_button,
+            &QPushButton::click);
+  }
   connect(recv_button, &QPushButton::clicked, this, [this] {
     const QString block = recvBlockEdit_->toPlainText();
     if (block.trimmed().isEmpty()) {
@@ -721,7 +923,10 @@ void MainWindow::chooseCardFile() {
 
 void MainWindow::chooseSendFile() {
   const QString path = QFileDialog::getOpenFileName(this, tr("Apri un file"));
-  if (!path.isEmpty()) sendFileEdit_->setText(path);
+  if (!path.isEmpty()) {
+    sendFileEdit_->setText(path);
+    updateSendMeta();
+  }
 }
 
 void MainWindow::doUnlock() {
@@ -745,9 +950,8 @@ void MainWindow::doLock() {
   // dropping them would make a retry after unlocking start from nothing.
   clearSensitiveState(/*include_unsent_input=*/false);
   // The warning described the vault that was open. Leaving it on screen next to
-  // "Non connesso" would report a state that no longer exists.
+  // a locked panel would report a state that no longer exists.
   setVaultWarnings(QString());
-  statusLabel_->setText(tr("Non connesso"));
 }
 
 void MainWindow::updateVaultPathLabel() {
@@ -948,13 +1152,14 @@ void MainWindow::syncRecipientChips() {
     // An empty list reads as empty on purpose: the placeholder says where
     // the recipients go, so no chip means no recipient.
     if (sendRecipients_.isEmpty()) {
-      auto* hint = new QLabel(tr("nessun destinatario (la tendina vale come singolo)"));
+      auto* hint = new QLabel(tr("Nessun riquadro: verrà usata la tendina qui sopra"));
       hint->setEnabled(false);
       layout->addWidget(hint);
     }
     for (const QString& recipient : sendRecipients_) {
       auto* chip = new QFrame;
       chip->setFrameStyle(QFrame::StyledPanel);
+      chip->setProperty("chipFrame", true);
       auto* chip_layout = new QHBoxLayout(chip);
       chip_layout->setContentsMargins(8, 2, 2, 2);
       chip_layout->setSpacing(4);
@@ -964,6 +1169,7 @@ void MainWindow::syncRecipientChips() {
       auto* remove = new QToolButton;
       remove->setObjectName(QStringLiteral("removeRecipientButton"));
       remove->setText(QStringLiteral("\u00d7"));
+      remove->setProperty("destructive", true);
       remove->setToolTip(tr("Togli '%1' dai destinatari").arg(recipient));
       remove->setProperty("recipient", recipient);
       connect(remove, &QToolButton::clicked, this,
@@ -972,6 +1178,7 @@ void MainWindow::syncRecipientChips() {
       layout->addWidget(chip);
     }
     static_cast<QHBoxLayout*>(layout)->addStretch(1);
+    updateSendMeta();
   }
 }
 
@@ -1008,6 +1215,61 @@ int MainWindow::expiryTimeoutMs(const QString& ttl) {
   // overflow however long the dialog stays up.
   if (ttl == QStringLiteral("7d")) return 7 * 24 * 60 * 60 * 1000;
   return 0;
+}
+
+QStringList MainWindow::effectiveRecipients() const {
+  // The chips are the recipients; when none was added, the combo itself is
+  // the single recipient, so the old one-contact flow is unchanged.
+  if (!sendRecipients_.isEmpty()) {
+    QStringList recipients = sendRecipients_;
+    recipients.removeDuplicates();
+    return recipients;
+  }
+  const QString alias =
+      sendAliasCombo_ != nullptr
+          ? sendAliasCombo_->currentText().trimmed()
+          : QString();
+  return alias.isEmpty() ? QStringList() : QStringList{alias};
+}
+
+void MainWindow::updateSendMeta() {
+  // The 4 MiB ceiling is on the framed plaintext the CLI encrypts, so this
+  // is an approximation for text (framing adds a few bytes) and exact for
+  // the file path display below -- close enough to warn before trying.
+  constexpr qint64 kMaxPlaintextBytes = 4 * 1024 * 1024;
+  const QStringList recipients = effectiveRecipients();
+  if (recipientCountLabel_ != nullptr) {
+    if (recipients.isEmpty()) {
+      recipientCountLabel_->setText(
+          tr("Nessun destinatario: scegli dalla tendina"));
+    } else if (recipients.size() == 1) {
+      recipientCountLabel_->setText(tr("1 destinatario: messaggio singolo"));
+    } else {
+      recipientCountLabel_->setText(
+          tr("%1 destinatari: messaggio di gruppo")
+              .arg(recipients.size()));
+    }
+  }
+  if (messageSizeLabel_ != nullptr) {
+    const QString file =
+        sendFileEdit_ != nullptr ? sendFileEdit_->text().trimmed() : QString();
+    if (!file.isEmpty()) {
+      const qint64 size = QFileInfo(file).size();
+      messageSizeLabel_->setText(
+          size < 0 ? tr("File: %1").arg(
+                           QFileInfo(file).fileName())
+                     : tr("File %1: %2 / %3 byte")
+                           .arg(QFileInfo(file).fileName())
+                           .arg(size)
+                           .arg(kMaxPlaintextBytes));
+    } else {
+      const qint64 bytes = sendMessageEdit_ != nullptr
+                               ? sendMessageEdit_->toPlainText().toUtf8().size()
+                               : 0;
+      messageSizeLabel_->setText(
+          tr("%1 / %2 byte").arg(bytes).arg(kMaxPlaintextBytes));
+    }
+  }
 }
 
 void MainWindow::clearPlainEdit(QPlainTextEdit* edit) {
@@ -1163,9 +1425,7 @@ void MainWindow::setBusy(bool busy) {
 void MainWindow::setUnlocked(bool unlocked) {
   unlocked_ = unlocked;
   tabs_->setEnabled(unlocked);
-  lockButton_->setEnabled(unlocked);
-  statusLabel_->setText(unlocked ? tr("Vault sbloccato")
-                                 : tr("Non connesso"));
+  updateAccessState();
 }
 
 void MainWindow::onOutput(const QString& text) { commandStdout_ += text; }
@@ -1362,7 +1622,9 @@ void MainWindow::showFileDialog(const QString& ext, const QString& path,
   auto* buttons = new QHBoxLayout;
   buttons->addStretch(1);
   if (!path.isEmpty()) {
-    auto* open = new QPushButton(tr("Apri cartella"));
+    auto* open = new QPushButton(
+        style()->standardIcon(QStyle::SP_DirOpenIcon),
+        tr("Apri cartella"));
     connect(open, &QPushButton::clicked, &dialog,
             [this, &dialog, path, feedback] {
               const QString dir = QFileInfo(path).absolutePath();

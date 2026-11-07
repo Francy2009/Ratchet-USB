@@ -63,6 +63,7 @@ class GuiLaunchTest : public QObject {
   void ephemeralSendAddsTtlFlags();
   void recvEphemeralShowsNotice();
   void recvFileDialogRemovesStagedFolderOnClose();
+  void composeShowsRecipientCountAndSize();
   void passphraseUsesStructuredOutput();
   void cliRunnerReportsExitCodeAndStdin();
   void cliRunnerReportsUnexpectedTermination();
@@ -847,6 +848,43 @@ void GuiLaunchTest::recvFileDialogRemovesStagedFolderOnClose() {
   QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo(staging).exists(), 5000);
   QTRY_VERIFY_WITH_TIMEOUT(QApplication::activeModalWidget() == nullptr, 5000);
   closer.stop();
+}
+
+void GuiLaunchTest::composeShowsRecipientCountAndSize() {
+  QTemporaryDir dir;
+  QVERIFY(dir.isValid());
+
+  MainWindow window;
+  window.show();
+
+  auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("tabs"));
+  auto* alias = window.findChild<QComboBox*>(QStringLiteral("sendAliasCombo"));
+  auto* add = window.findChild<QPushButton*>(QStringLiteral("addRecipientButton"));
+  auto* message = window.findChild<QPlainTextEdit*>(QStringLiteral("sendMessageEdit"));
+  auto* count = window.findChild<QLabel*>(QStringLiteral("recipientCountLabel"));
+  auto* size = window.findChild<QLabel*>(QStringLiteral("messageSizeLabel"));
+  QVERIFY(tabs != nullptr);
+  QVERIFY(alias != nullptr);
+  QVERIFY(add != nullptr);
+  QVERIFY(message != nullptr);
+  QVERIFY(count != nullptr);
+  QVERIFY(size != nullptr);
+  tabs->setEnabled(true);
+
+  // No chips: the combo is the single recipient.
+  QVERIFY(count->text().contains(QStringLiteral("tendina")));
+  message->setPlainText(QStringLiteral("ciao"));
+  QTRY_COMPARE(size->text(), QStringLiteral("4 / 4194304 byte"));
+
+  // Two chips: the compose box says group.
+  alias->addItem(QStringLiteral("bob"));
+  alias->addItem(QStringLiteral("carol"));
+  alias->setCurrentText(QStringLiteral("bob"));
+  add->click();
+  alias->setCurrentText(QStringLiteral("carol"));
+  add->click();
+  QTRY_VERIFY(count->text().contains(QStringLiteral("2")));
+  QVERIFY(count->text().contains(QStringLiteral("gruppo")));
 }
 
 QTEST_MAIN(GuiLaunchTest)
