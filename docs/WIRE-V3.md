@@ -18,6 +18,12 @@ truncation, trailing fields, excessive counts and size limits.
   prefix containing both ratchet inputs is AEAD AAD; the EC and SPQR message
   keys are combined before encrypting or decrypting the payload. Suite 4
   changes the handshake combiner only. The message body stays version 3.
+- Plaintext payload v1 (inside the AEAD, not an envelope field): an optional
+  `0x03`, version, TTL bucket (`0` none, `1` 1h, `2` 24h, `3` 7d) and flags
+  (bit 0 burn-after-reading) header, followed by the text or by the existing
+  `0x02` file frame. A plaintext without the marker is unchanged, so ordinary
+  messages are byte-identical to before. Nothing about the expiry is visible
+  on the wire, and only a client that parses this header enforces it.
 
 `CLASSIC_V2` is limited to legacy reading and migration. New cards advertise
 `XWING_TRIPLE_RATCHET_V1`. Cards that advertise `TRIPLE_RATCHET_V1` keep that

@@ -760,6 +760,10 @@ void Driver::receive_message() {
     }
     identity_sk.wipe();
     wipe_string(block);
+    // A decrypted body that is not a file is moved into the pager below; a
+    // failed unwrap, file decode, save or render used to skip the wipe
+    // entirely, so the guard is installed before the first throwing step.
+    StringWipe wipe_plaintext(result.plaintext);
     // The expiry rides inside the ratchet plaintext (see ephemeral.hpp):
     // unwrap it before file decoding, so an ephemeral file still decodes.
     // The terminal interface shows the note but enforces nothing -- there is
@@ -768,13 +772,12 @@ void Driver::receive_message() {
     if (std::optional<ephemeral::Decoded> unwrapped =
             ephemeral::decode(result.plaintext)) {
       expiry = unwrapped->expiry;
+      // swap() cannot allocate, so a throw here cannot leave the decrypted
+      // body in a local that is destroyed without being wiped.
       std::string inner = std::move(unwrapped->body);
-      wipe_string(result.plaintext);
-      result.plaintext = std::move(inner);
+      result.plaintext.swap(inner);
+      wipe_string(inner);
     }
-    // A decrypted body that is not a file is moved into the pager below; a
-    // failed file decode, save or render used to skip the wipe entirely.
-    StringWipe wipe_plaintext(result.plaintext);
 
     save();
     const bool unverified =

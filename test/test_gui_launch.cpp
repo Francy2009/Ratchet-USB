@@ -3,6 +3,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDialog>
 #include <QDir>
 #include <QFile>
 #include <QLabel>
@@ -61,6 +62,7 @@ class GuiLaunchTest : public QObject {
   void successClearsConsumedInputs();
   void ephemeralSendAddsTtlFlags();
   void recvEphemeralShowsNotice();
+  void recvFileDialogRemovesStagedFolderOnClose();
   void passphraseUsesStructuredOutput();
   void cliRunnerReportsExitCodeAndStdin();
   void cliRunnerReportsUnexpectedTermination();
@@ -766,6 +768,83 @@ void GuiLaunchTest::recvEphemeralShowsNotice() {
   QTRY_VERIFY_WITH_TIMEOUT(!notice.isEmpty(), 5000);
   QVERIFY(notice.contains(QStringLiteral("24h")));
   QTRY_VERIFY_WITH_TIMEOUT(block->toPlainText().isEmpty(), 5000);
+  QTRY_VERIFY_WITH_TIMEOUT(QApplication::activeModalWidget() == nullptr, 5000);
+  closer.stop();
+}
+
+void GuiLaunchTest::recvFileDialogRemovesStagedFolderOnClose() {
+  QTemporaryDir dir;
+  QVERIFY(dir.isValid());
+
+  // The CLI's staging folder has this shape; the dialog is allowed to remove
+  // it only when the name starts with "ratchet-".
+  const QString staging =
+      dir.path() + QStringLiteral("/ratchet-TEST/ratchet-file-x9.png");
+  QVERIFY(QDir().mkpath(QFileInfo(staging).absolutePath()));
+  {
+    QFile file(staging);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write("decrypted bytes");
+  }
+  QVERIFY(QFileInfo(staging).exists());
+
+  const QString script = dir.path() + QStringLiteral("/fake-recv-file.sh");
+  {
+    QFile file(script);
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    const QByteArray body =
+        "#!/bin/sh\n"
+        "cat >/dev/null\n"
+        "printf '%s\\n' '-----BEGIN RATCHET GUI RESULT-----' 'version=1' "
+        "'command=recv' 'kind=file' 'ext=png' 'staged=yes' "
+        "'path=" + staging.toUtf8() +
+        "' 'ttl=off' 'burn=no' '-----END RATCHET GUI RESULT-----'\n"
+        "exit 0\n";
+    file.write(body);
+    file.close();
+  }
+  QVERIFY(QFile::setPermissions(
+      script, QFileDevice::ReadOwner | QFileDevice::WriteOwner |
+                  QFileDevice::ExeOwner));
+  QVERIFY(qputenv("RATCHET_BIN", script.toUtf8()));
+
+  const QString usb = dir.path() + QStringLiteral("/usb");
+  QVERIFY(QDir().mkpath(usb));
+
+  MainWindow window;
+  window.show();
+
+  auto* usb_edit = window.findChild<QLineEdit*>(QStringLiteral("usbPathEdit"));
+  auto* passphrase =
+      window.findChild<QLineEdit*>(QStringLiteral("passphraseEdit"));
+  auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("tabs"));
+  auto* block = window.findChild<QPlainTextEdit*>(QStringLiteral("recvBlockEdit"));
+  auto* recv = window.findChild<QPushButton*>(QStringLiteral("recvButton"));
+  QVERIFY(usb_edit != nullptr);
+  QVERIFY(tabs != nullptr);
+  QVERIFY(block != nullptr);
+  QVERIFY(recv != nullptr);
+
+  usb_edit->setText(usb);
+  passphrase->setText(QStringLiteral("parola uno due"));
+  tabs->setEnabled(true);
+  block->setPlainText(QStringLiteral("-----BEGIN RATCHET MESSAGE-----\nfake"));
+
+  // The file dialog is a ConfirmOnlyDialog: it ignores close() and Escape on
+  // purpose, so the only way out is Chiudi or the ephemeral timer's accept().
+  // accept() is what the timer calls, so this exercises the same finished()
+  // path that must remove the staged folder.
+  QTimer closer;
+  connect(&closer, &QTimer::timeout, [] {
+    if (auto* dialog =
+            qobject_cast<QDialog*>(QApplication::activeModalWidget())) {
+      dialog->accept();
+    }
+  });
+  closer.start(20);
+
+  recv->click();
+  QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo(staging).exists(), 5000);
   QTRY_VERIFY_WITH_TIMEOUT(QApplication::activeModalWidget() == nullptr, 5000);
   closer.stop();
 }

@@ -1161,6 +1161,12 @@ int cmd_recv(const Options& opts) {
   }
   identity_sk.wipe();
 
+  // The decrypted body is an ordinary std::string because it has to leave the
+  // ratchet and reach the terminal. It still must not survive an exception from
+  // unwrapping, file decoding, output or a later vault save, so the guard is
+  // installed before the first thing that can throw.
+  StringWipe wipe_plaintext(result.plaintext);
+
   // The expiry rides inside the ratchet plaintext, outside-in before the
   // file frame: unwrap it first so what follows sees the text or file the
   // sender actually wrote. A malformed header throws rather than showing.
@@ -1168,16 +1174,14 @@ int cmd_recv(const Options& opts) {
   if (std::optional<ephemeral::Decoded> unwrapped =
           ephemeral::decode(result.plaintext)) {
     expiry = unwrapped->expiry;
+    // swap() cannot allocate, so a throw here cannot leave the decrypted
+    // body in a local that is destroyed without being wiped. `inner` then
+    // holds the old header+body and is wiped explicitly.
     std::string inner = std::move(unwrapped->body);
-    wipe_string(result.plaintext);
-    result.plaintext = std::move(inner);
+    result.plaintext.swap(inner);
+    wipe_string(inner);
   }
   const bool is_ephemeral = ephemeral::is_ephemeral(expiry);
-
-  // The decrypted body is an ordinary std::string because it has to leave the
-  // ratchet and reach the terminal. It still must not survive an exception from
-  // file decoding, output or a later vault save.
-  StringWipe wipe_plaintext(result.plaintext);
 
   app::save_vault(path, store, opened.params, opened.passphrase);
 

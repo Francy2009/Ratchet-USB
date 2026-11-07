@@ -111,8 +111,10 @@ and libFuzzer. The single required check is the `ci` gate job.
   encrypted plaintext framing, never in cleartext metadata, so it is AEAD-
   authenticated and adds no observable fingerprint. Offer fixed buckets
   (`1h`/`24h`/`7d`) plus burn-after-reading, not free-form durations.
-  Enforcement is receiver-side and best-effort (old clients render normally);
-  document that TTLs do not stop screenshots or copies, only later exposure.
+  Enforcement is receiver-side and best-effort (non-ephemeral messages stay
+  byte-identical; a client from before this feature shows an ephemeral message
+  with the header bytes visible instead of refusing it); document that TTLs do
+  not stop screenshots or copies, only later exposure.
   The vault stores no message history, so expiry means refusing display +
   wiping UI state and staged files, not deleting vault records.
 - `test/smoke_ui.py`: every function and `Ui` method carries a docstring

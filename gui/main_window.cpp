@@ -1351,11 +1351,12 @@ void MainWindow::showFileDialog(const QString& ext, const QString& path,
   feedback->hide();
   layout->addWidget(feedback);
 
+  QPlainTextEdit* detail_view = nullptr;
   if (path.isEmpty() && !detail.trimmed().isEmpty()) {
-    auto* view = new QPlainTextEdit(detail.trimmed());
-    view->setReadOnly(true);
-    view->setMinimumSize(520, 140);
-    layout->addWidget(view, 1);
+    detail_view = new QPlainTextEdit(detail.trimmed());
+    detail_view->setReadOnly(true);
+    detail_view->setMinimumSize(520, 140);
+    layout->addWidget(detail_view, 1);
   }
 
   auto* buttons = new QHBoxLayout;
@@ -1386,25 +1387,36 @@ void MainWindow::showFileDialog(const QString& ext, const QString& path,
   }
   auto* close = new QPushButton(tr("Chiudi"));
   close->setDefault(true);
-  connect(close, &QPushButton::clicked, &dialog, [&dialog, path] {
-    if (!path.isEmpty()) {
-      // The file was staged in the CLI's private ratchet-XXXXXX folder. Remove
-      // that folder now, when the dialog is dismissed, rather than leaving it
-      // to the CLI's background reaper. Only a directory that looks like the
-      // staging folder is ever touched.
-      QDir dir = QFileInfo(path).absoluteDir();
-      if (dir.exists() &&
-          dir.dirName().startsWith(QStringLiteral("ratchet-"))) {
-        dir.removeRecursively();
-      }
-    }
-    dialog.accept();
-  });
+  connect(close, &QPushButton::clicked, &dialog, &QDialog::accept);
   buttons->addWidget(close);
   layout->addLayout(buttons);
 
+  // Cleanup hangs off finished(), not off the Chiudi button: the ephemeral
+  // timer calls accept() directly, and Escape rejects. Both have to remove
+  // the staged folder and drop the visible copy, or an expiry would leave the
+  // decrypted file on disk until the background reaper got to it.
+  QObject::connect(&dialog, &QDialog::finished, &dialog,
+                   [path, detail_view](int) {
+                     if (detail_view != nullptr) {
+                       detail_view->clear();
+                       detail_view->document()->clearUndoRedoStacks();
+                     }
+                     if (!path.isEmpty()) {
+                       // The file was staged in the CLI's private
+                       // ratchet-XXXXXX folder. Remove that folder now, when
+                       // the dialog is dismissed, rather than leaving it to
+                       // the CLI's background reaper. Only a directory that
+                       // looks like the staging folder is ever touched.
+                       QDir dir = QFileInfo(path).absoluteDir();
+                       if (dir.exists() &&
+                           dir.dirName().startsWith(QStringLiteral("ratchet-"))) {
+                         dir.removeRecursively();
+                       }
+                     }
+                   });
+
   // Same enforcement as the text dialog: the TTL closes the window, and the
-  // Chiudi handler removes the staged folder, so expiry also wipes the
+  // finished handler removes the staged folder, so expiry also wipes the
   // staged bytes rather than leaving them to the background reaper.
   if (auto_close_ms > 0) {
     QTimer::singleShot(auto_close_ms, &dialog, &QDialog::accept);
