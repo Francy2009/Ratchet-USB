@@ -871,6 +871,9 @@ int cmd_group_send(const Options& opts) {
   if (opts.stdin_payload_bytes && opts.message.has_value()) {
     throw Error("--stdin-payload and a message cannot be combined");
   }
+  if (!opts.file_path.empty() && (opts.stdin_payload_bytes || opts.message.has_value())) {
+    throw Error("--file cannot be combined with a message or --stdin-payload");
+  }
   require_known_usb_for_payload(opts);
   const fs::path usb = require_usb_path(opts);
   const fs::path path = vault::vault_path(usb);
@@ -915,11 +918,21 @@ int cmd_group_send(const Options& opts) {
   }
 
   if (!opts.stdin_payload_bytes) {
-    plaintext = read_text_arg_or_stdin(
-        opts.message, "Message (end with Ctrl-D): ",
-        message::kMaxPlaintextBytes);
-    if (plaintext.empty()) {
-      throw Error("message must not be empty");
+    if (!opts.file_path.empty()) {
+      std::vector<uint8_t> raw = file::load_file(fs::path(opts.file_path));
+      struct RawWipe {
+        std::vector<uint8_t>& bytes;
+        ~RawWipe() { wipe_vector(bytes); }
+      } raw_wipe{raw};
+      const std::string ext = file::extension_for(fs::path(opts.file_path), raw);
+      plaintext = file::encode_file_payload(raw, ext);
+    } else {
+      plaintext = read_text_arg_or_stdin(
+          opts.message, "Message (end with Ctrl-D): ",
+          message::kMaxPlaintextBytes);
+      if (plaintext.empty()) {
+        throw Error("message must not be empty");
+      }
     }
   }
 
@@ -1131,10 +1144,6 @@ int cmd_recv(const Options& opts) {
     block = read_text_arg_or_stdin(
         opts.message, "Paste the message block, then Ctrl-D: ",
         std::size_t{12} * 1024u * 1024u);
-  }
-
-  if (group::looks_like_group(block) && opts.structured_output) {
-    throw Error("--structured-output does not support group messages yet");
   }
 
   OpenedVault opened = unlock_vault(path);

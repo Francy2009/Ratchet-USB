@@ -533,6 +533,45 @@ void GuiLaunchTest::groupSendUsesRecipientChips() {
   QFile stdin_file(dir.path() + QStringLiteral("/stdin"));
   QVERIFY(stdin_file.open(QIODevice::ReadOnly));
   QVERIFY(stdin_file.readAll().startsWith(text.toUtf8()));
+
+  // Group files use the same recipients and expiry options, without framing a
+  // text payload on stdin. The CLI loads the file after reading the passphrase.
+  stdin_file.close();
+  QFile::remove(dir.path() + QStringLiteral("/argv"));
+  QFile::remove(dir.path() + QStringLiteral("/stdin"));
+  alias->setCurrentText(QStringLiteral("bob"));
+  add->click();
+  alias->setCurrentText(QStringLiteral("carol"));
+  add->click();
+  auto* file_edit = window.findChild<QLineEdit*>(QStringLiteral("sendFileEdit"));
+  auto* ttl = window.findChild<QComboBox*>(QStringLiteral("ttlCombo"));
+  auto* burn = window.findChild<QCheckBox*>(QStringLiteral("burnCheck"));
+  QVERIFY(file_edit != nullptr);
+  QVERIFY(ttl != nullptr);
+  QVERIFY(burn != nullptr);
+  file_edit->setText(dir.path() + QStringLiteral("/document.pdf"));
+  ttl->setCurrentIndex(ttl->findData(QStringLiteral("1h")));
+  burn->setChecked(true);
+  closer.start(20);
+  send->click();
+  QTRY_VERIFY_WITH_TIMEOUT(QFileInfo(dir.path() + QStringLiteral("/argv")).exists(), 5000);
+  QTRY_VERIFY_WITH_TIMEOUT(file_edit->text().isEmpty(), 5000);
+  QTRY_VERIFY_WITH_TIMEOUT(QApplication::activeModalWidget() == nullptr, 5000);
+  closer.stop();
+  argv_file.close();
+  QVERIFY(argv_file.open(QIODevice::ReadOnly));
+  const QStringList file_argv = QString::fromUtf8(argv_file.readAll())
+                                    .split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+  QCOMPARE(file_argv.first(), QStringLiteral("group-send"));
+  QCOMPARE(file_argv.count(QStringLiteral("--to")), 2);
+  QVERIFY(file_argv.contains(QStringLiteral("bob")));
+  QVERIFY(file_argv.contains(QStringLiteral("carol")));
+  QVERIFY(file_argv.contains(QStringLiteral("--file")));
+  QVERIFY(file_argv.contains(dir.path() + QStringLiteral("/document.pdf")));
+  QVERIFY(file_argv.contains(QStringLiteral("--ttl")));
+  QVERIFY(file_argv.contains(QStringLiteral("1h")));
+  QVERIFY(file_argv.contains(QStringLiteral("--burn")));
+  QVERIFY(!file_argv.contains(QStringLiteral("--stdin-payload")));
 }
 
 void GuiLaunchTest::successClearsConsumedInputs() {

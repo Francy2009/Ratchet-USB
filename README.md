@@ -136,8 +136,14 @@ The interface also works with the system clipboard: press `y` on a card or a
 message block to copy it, and `Ctrl-V` to paste the clipboard into a text field.
 Neither has to pass through a terminal selection.
 
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:563cb647070e481106963d01073bd19e152a362530b763ca30808528857e649e -->
+
 For more than one recipient, `ratchet-usb group-send --to alice --to bob`
-encrypts the message once under a random content key and wraps that key for each
+encrypts text or a file (`--file <path>`) once under a random content key
+
+<!-- /coderabbit-ai-generated:v1 --> and wraps that key for each
 member through the 1:1 session you already have with them. Every member receives
 the same block; `recv` finds the wrapper addressed to the local vault and
 decrypts the shared content. At least two `--to` aliases are required, and each

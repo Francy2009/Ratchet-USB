@@ -682,7 +682,7 @@ QWidget* MainWindow::buildMessagesTab() {
   recipients_scroll->setFixedHeight(52);
   sendFileEdit_ = new QLineEdit;
   sendFileEdit_->setObjectName(QStringLiteral("sendFileEdit"));
-  sendFileEdit_->setPlaceholderText(tr("file da cifrare (opzionale; --file, solo 1 destinatario)"));
+  sendFileEdit_->setPlaceholderText(tr("file da cifrare (opzionale; --file)"));
   auto* send_file_button = new QPushButton(
       style()->standardIcon(QStyle::SP_DialogOpenButton), tr("File..."));
   send_file_button->setToolTip(tr("Scegli un file da cifrare al posto del testo"));
@@ -749,19 +749,19 @@ QWidget* MainWindow::buildMessagesTab() {
     // group-send wraps one content key per member through the existing 1:1
     // sessions; the CLI refuses the send when a recipient is unknown or the
     // session cannot move, and nothing is committed before that.
+    QStringList flags = expiry_flags;
+    for (const QString& recipient : recipients) {
+      flags << "--to" << recipient;
+    }
     if (!file.isEmpty()) {
-      warn(tr("I messaggi di gruppo accettano solo testo: togli il file "
-              "oppure manda a un destinatario alla volta."));
+      flags << "--file" << file;
+      launchWithPassphrase(QStringLiteral("group-send"), flags, {});
       return;
     }
     const QString message = sendMessageEdit_->toPlainText();
     if (message.isEmpty()) {
       warn(tr("Scrivi un messaggio per il gruppo."));
       return;
-    }
-    QStringList flags = expiry_flags;
-    for (const QString& recipient : recipients) {
-      flags << "--to" << recipient;
     }
     QByteArray payload = message.toUtf8();
     launchWithPayload(QStringLiteral("group-send"), flags, {}, payload);

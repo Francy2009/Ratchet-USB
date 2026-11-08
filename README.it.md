@@ -144,8 +144,14 @@ L'interfaccia usa anche gli appunti di sistema: premi `y` su una carta o su un
 blocco di messaggio per copiarlo, e `Ctrl-V` per incollare gli appunti in un
 campo di testo. Così non devono passare dalla selezione del terminale.
 
-Per più destinatari, `ratchet-usb group-send --to alice --to bob` cifra il
-messaggio una sola volta con una chiave di contenuto casuale e incapsula quella
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:0ec9dca3d7ada5f5871507092579da216f0ada27c891f5cf298d443f50a54576 -->
+
+Per più destinatari, `ratchet-usb group-send --to alice --to bob` cifra testo
+o un file (`--file <percorso>`) una sola volta con una chiave di contenuto casuale
+
+<!-- /coderabbit-ai-generated:v1 --> e incapsula quella
 chiave per ogni membro attraverso la sessione 1:1 già esistente. Ogni membro
 riceve lo stesso blocco; `recv` trova l'involucro indirizzato al vault locale e
 decifra il contenuto condiviso. Servono almeno due alias `--to` e ogni contatto

@@ -48,7 +48,7 @@ const std::vector<CommandSpec>& specs() {
        {"--usb-path", "--file", "--stdin-payload", "--ttl", "--burn"},
        2},
       {"group-send",
-       {"--usb-path", "--to", "--stdin-payload", "--ttl", "--burn"},
+       {"--usb-path", "--to", "--file", "--stdin-payload", "--ttl", "--burn"},
        1},
       {"outbox", {"--usb-path"}, 0},
       {"recv",
@@ -136,7 +136,7 @@ void print_usage(std::ostream& os) {
      << " send     --usb-path <dir> <alias> [message|--file <file>] "
         "[--ttl 1h|24h|7d] [--burn]\n"
      << "  " << kProgram
-     << " group-send --usb-path <dir> --to <alias> --to <alias> [message] "
+     << " group-send --usb-path <dir> --to <alias> --to <alias> [message|--file <file>] "
         "[--ttl 1h|24h|7d] [--burn]\n"
      << "  " << kProgram << " outbox   --usb-path <dir>\n"
      << "  " << kProgram << " recv     --usb-path <dir> [message] [--stage-file]\n"
@@ -231,7 +231,7 @@ void print_usage(std::ostream& os) {
      << "                       carries the sender's alias.\n"
      << "  --fingerprint        Print only the identity fingerprint (card only).\n"
      << "  --card <file>        Read a contact card from a file (add only).\n"
-     << "  --file <file>        Encrypt a file instead of text (send only).\n"
+     << "  --file <file>        Encrypt a file instead of text (send and group-send).\n"
      << "  --ttl 1h|24h|7d      Mark the message ephemeral: a cooperating "
         "receiver\n"
      << "                       stops showing it after this long (send and "

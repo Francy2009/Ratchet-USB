@@ -392,6 +392,12 @@ TEST("cli: group-send takes repeated --to flags and one optional message") {
   CHECK(two.message.has_value());
   CHECK_EQ(*two.message, std::string("hello group"));
 
+  const Options file = parse({"group-send", "--to", "bob", "--to", "carol",
+                              "--file", "/tmp/message.bin", "--ttl", "1h", "--burn"});
+  CHECK_EQ(file.file_path, std::string("/tmp/message.bin"));
+  CHECK(file.ttl == ephemeral::Ttl::OneHour);
+  CHECK(file.burn_after_reading);
+
   // The count is checked by the command, not the parser: `--to` is grammatical
   // with any number, and the command has the vault to resolve the names.
   const Options none = parse({"group-send", "hello"});

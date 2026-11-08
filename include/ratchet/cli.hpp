@@ -84,7 +84,7 @@ struct Options {
   // is advanced.
   std::vector<std::string> group_members;
   std::string card_file;
-  std::string file_path;  // send --file: encrypt a file instead of text
+  std::string file_path;  // send/group-send --file: encrypt a file instead of text
   // send/group-send --ttl 1h|24h|7d: the receiver should stop showing the
   // message after this long. --burn: the message is for a single reading.
   // Both ride inside the encrypted plaintext (see ephemeral.hpp); neither

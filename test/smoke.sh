@@ -784,4 +784,6 @@ grep -q "lost block" "$WORK/outbox-bob.txt" ||
   fail "the recovered group block did not decrypt"
 
 echo
+"$(dirname "$0")/smoke_group_gui.sh" "$BIN"
+
 echo "smoke: all end-to-end checks passed"

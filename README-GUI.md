@@ -113,10 +113,14 @@ funzioni che richiedono un vault aperto.
      il blocco). Il destinatario si sceglie dalla tendina e si aggiunge con
      *Aggiungi*: ogni destinatario diventa un riquadro con una × per
      toglierlo. Con un destinatario l'invio usa `send`, con due o più
-     `group-send --to ...` (solo testo: per i file, un destinatario alla
-     volta). In ricezione la GUI legge solo messaggi 1:1: la CLI rifiuta i
-     blocchi GROUP in `--structured-output`, quindi un messaggio di gruppo va
-     aperto da terminale con `recv`. La tendina *Scadenza* (`1 ora`, `24 ore`,
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:3e6d052b6719efeee882b4d47864c16ec479b47b0ad154aa7d383c172c9e28c0 -->
+
+     `group-send --to ...`; entrambi accettano testo o file. La GUI riceve
+     sia messaggi singoli sia messaggi di gruppo. La tendina *Scadenza* (`1 ora`, `24 ore`,
+
+<!-- /coderabbit-ai-generated:v1 -->
      `7 giorni`) e la casella *Distruggi dopo lettura* segnano il messaggio
      come effimero (anche di gruppo): la scelta viaggia dentro al testo
      cifrato e vale per un solo invio, poi il selettore torna su *Nessuna
