@@ -164,7 +164,12 @@ buste 1:1 si collega alla stessa chiave. Alcuni messaggi non dovrebbero restare 
 funzionano con `group-send`. Il segno viaggia dentro al testo cifrato, quindi
 è autenticato e il valore della scadenza non compare mai in chiaro;
 l'intestazione di quattro byte allunga però il plaintext, quindi al confine di
-un bucket di padding (128, 256, 512, 1024, 2048 byte) chi conosce già la
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:5e374c57f5476cb374a2073217a5af7f543e91c0e3945c09500e9b62f5b3f557 -->
+
+un bucket di padding (128, 256, 512, 1024, 2048 byte, poi incrementi di
+1024 byte) chi conosce già la
 lunghezza del corpo può distinguere un messaggio effimero da uno ordinario,
 anche se non vede quale bucket contenga. L'applicazione è lato ricevente e
 best-effort. Solo la GUI desktop tiene il tempo: avvia un timer quando si apre
@@ -178,8 +183,12 @@ lettura invece di una durata (i due si combinano). È un aiuto, non una revoca:
 non impedisce screenshot, copie o un client modificato. Il vault non conserva
 alcuno storico dei messaggi, quindi non c'è niente da cancellare dopo, solo
 qualcosa da smettere di mostrare. Un client precedente a questa funzione mostra
-il messaggio con il segno visibile invece di rifiutarlo.
-I messaggi di gruppo esistono anche nell'interfaccia a terminale: Spazio segna
+il messaggio con il segno visibile invece di rifiutarlo. I client precedenti
+non possono aprire i file effimeri e possono mostrare i byte incorniciati come
+testo: evita di inviare file effimeri a destinatari che usano client precedenti.
+
+
+<!-- /coderabbit-ai-generated:v1 -->I messaggi di gruppo esistono anche nell'interfaccia a terminale: Spazio segna
 un contatto per un gruppo e `g` scrive ai contatti segnati. La GUI desktop
 offre lo stesso con i riquadri destinatari: scegli un contatto, premi Aggiungi,
 ripeti; un destinatario manda 1:1, due o più mandano un messaggio di gruppo.

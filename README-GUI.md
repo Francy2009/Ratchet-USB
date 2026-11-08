@@ -120,10 +120,18 @@ funzioni che richiedono un vault aperto.
      `7 giorni`) e la casella *Distruggi dopo lettura* segnano il messaggio
      come effimero (anche di gruppo): la scelta viaggia dentro al testo
      cifrato e vale per un solo invio, poi il selettore torna su *Nessuna
-     scadenza*. In ricezione un messaggio effimero mostra da quanto scade e,
-     allo scadere, la finestra si chiude da sola cancellando ciò che mostrava
-     (per i file, rimuovendo anche la cartella temporanea). Il timer parte
-     quando la finestra di ricezione si apre, non quando il mittente ha
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:c203456bc3deffd236396f92d80033e0b5ce19919be221aedcac3e2413848b44 -->
+
+     scadenza*. In ricezione, se è impostato un TTL, il messaggio mostra tra quanto
+     scade e allo scadere la finestra si chiude da sola cancellando ciò che mostrava
+     (per i file, rimuovendo anche la cartella temporanea). Senza TTL,
+     *Distruggi dopo lettura* lascia la finestra aperta finché viene chiusa
+     dall’utente. Il timer parte
+
+
+<!-- /coderabbit-ai-generated:v1 -->     quando la finestra di ricezione si apre, non quando il mittente ha
      inviato: un messaggio aperto giorni dopo resta visibile per tutto il TTL
      da quel momento. Resta un aiuto, non una revoca: non impedisce screenshot,
      copie o un client modificato. A invio riuscito

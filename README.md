@@ -154,7 +154,12 @@ and `send --burn` mark a message ephemeral -- the same flags work on
 `group-send`. The mark rides inside the encrypted text, so it is authenticated
 and the expiry value never appears in cleartext; the four-byte header still
 lengthens the plaintext, so at a padding-bucket boundary (128, 256, 512, 1024,
-2048 bytes) an observer who already knows the body length can tell an
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:765325bcc4cc4a1d723c5af20dc987f7a0e474051ccfda4f6ba30e6169db784c -->
+
+2048 bytes, then 1024-byte increments) an observer who already knows the
+body length can tell an
 ephemeral message from an ordinary one, though not which bucket it carries.
 Enforcement is receiver-side and best-effort. Only the desktop GUI keeps time:
 it starts a timer when the receive dialog opens -- not when the message was
@@ -168,7 +173,11 @@ not revocation: it stops later exposure, not screenshots, copies, or a
 modified client. The vault keeps no message history, so there is nothing to
 delete afterwards, only something to stop displaying. A client from before
 this existed shows the message with the mark visible instead of refusing it.
-In the terminal interface, Space marks a contact for a group and `g` writes to
+Older clients cannot open ephemeral files and may display the framed bytes as
+text; avoid sending ephemeral files to recipients using older clients.
+
+
+<!-- /coderabbit-ai-generated:v1 -->In the terminal interface, Space marks a contact for a group and `g` writes to
 the marked contacts. The desktop GUI offers the same with recipient chips:
 pick a contact, press Aggiungi, repeat; one recipient sends 1:1, two or more
 send a group message.

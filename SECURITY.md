@@ -240,10 +240,19 @@ to defend against it:
   and `--burn` ride inside the encrypted plaintext, so they are authenticated
   and the expiry value never appears in cleartext. The four-byte header still
   lengthens the plaintext, so at a padding-bucket boundary (128, 256, 512,
-  1024, 2048 bytes) an observer who already knows the body length can tell an
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:1138d5c85911c0e7fb75dfaa6836c1ecb9cf18cc3dbd67e0b170c8d021e7ca4f -->
+
+  1024, 2048 bytes, then 1024-byte increments) an observer who already knows
+  the body length can tell an
   ephemeral message from an ordinary one; it cannot see which bucket was
-  chosen. Enforcement is receiver-side and best-effort. The desktop GUI is the
-  only interface that keeps time, and its timer starts when the receive dialog
+  chosen. For example, a 3071-byte body pads to 3072 bytes; adding the
+  four-byte header makes it pad to 4096 bytes. Enforcement is receiver-side
+  and best-effort. The desktop GUI is the
+
+
+<!-- /coderabbit-ai-generated:v1 -->  only interface that keeps time, and its timer starts when the receive dialog
   opens, not when the sender sent: a message opened days later stays visible
   for the full TTL from that moment, then the dialog closes and wipes what it
   displayed (and the staged folder for a file). The terminal interface shows a

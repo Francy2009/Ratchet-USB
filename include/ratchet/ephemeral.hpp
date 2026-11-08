@@ -18,7 +18,8 @@
 // rewrite it. Inside, it is covered by the same tag as the body, so the
 // expiry value is not observable. The four header bytes do still lengthen the
 // plaintext, and bucketed padding absorbs that only while the body stays
-// inside one bucket: at a boundary (128/256/512/1024/2048 bytes) an observer
+// inside one bucket: at a boundary (128/256/512/1024/2048 bytes, then
+// 1024-byte increments) an observer
 // who already knows the body length can tell an ephemeral message is present,
 // though not which bucket it carries.
 //
