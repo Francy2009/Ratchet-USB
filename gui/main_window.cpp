@@ -56,6 +56,7 @@
 #include "host_env.hpp"
 #include "payload_input.hpp"
 #include "ratchet/gui_format.hpp"
+#include "ratchet/message.hpp"
 
 namespace {
 
@@ -1233,10 +1234,11 @@ QStringList MainWindow::effectiveRecipients() const {
 }
 
 void MainWindow::updateSendMeta() {
-  // The 4 MiB ceiling is on the framed plaintext the CLI encrypts, so this
-  // is an approximation for text (framing adds a few bytes) and exact for
-  // the file path display below -- close enough to warn before trying.
-  constexpr qint64 kMaxPlaintextBytes = 4 * 1024 * 1024;
+  // The ceiling is on the framed plaintext the CLI encrypts (the same
+  // constant the core enforces, not a copy), so this is an approximation for
+  // text (framing adds a few bytes) -- close enough to warn before trying.
+  constexpr auto kMaxPlaintextBytes =
+      static_cast<qint64>(ratchet::message::kMaxPlaintextBytes);
   const QStringList recipients = effectiveRecipients();
   if (recipientCountLabel_ != nullptr) {
     if (recipients.isEmpty()) {
