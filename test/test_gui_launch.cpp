@@ -854,6 +854,27 @@ void GuiLaunchTest::composeShowsRecipientCountAndSize() {
   QTemporaryDir dir;
   QVERIFY(dir.isValid());
 
+  // The window warns -- with a modal dialog -- from its constructor when it
+  // cannot find the CLI, so RATCHET_BIN has to point somewhere valid before
+  // the window exists. The CI job builds only the test targets, so relying on
+  // an installed ratchet-usb would hang here instead of failing.
+  const QString script = makeScript(dir.path(), QStringLiteral("fake-cli.sh"),
+                                    "#!/bin/sh\ncat >/dev/null\nexit 0\n");
+  QVERIFY(!script.isEmpty());
+  QVERIFY(qputenv("RATCHET_BIN", script.toUtf8()));
+
+  // A closer from the start: any unexpected warning dialog is closed instead
+  // of hanging the test until the watchdog fires, and the assertions below
+  // turn it into a readable failure. It has to be running before the window
+  // is constructed for the same reason as above.
+  QTimer closer;
+  connect(&closer, &QTimer::timeout, [] {
+    if (QWidget* modal = QApplication::activeModalWidget()) {
+      modal->close();
+    }
+  });
+  closer.start(20);
+
   MainWindow window;
   window.show();
 
@@ -876,15 +897,20 @@ void GuiLaunchTest::composeShowsRecipientCountAndSize() {
   message->setPlainText(QStringLiteral("ciao"));
   QTRY_COMPARE(size->text(), QStringLiteral("4 / 4194304 byte"));
 
-  // Two chips: the compose box says group.
+  // Two chips: the compose box says group. The current text is asserted
+  // before each click so a combo that did not take the value fails here
+  // instead of hanging inside a warning dialog.
   alias->addItem(QStringLiteral("bob"));
   alias->addItem(QStringLiteral("carol"));
   alias->setCurrentText(QStringLiteral("bob"));
+  QCOMPARE(alias->currentText(), QStringLiteral("bob"));
   add->click();
   alias->setCurrentText(QStringLiteral("carol"));
+  QCOMPARE(alias->currentText(), QStringLiteral("carol"));
   add->click();
   QTRY_VERIFY(count->text().contains(QStringLiteral("2")));
   QVERIFY(count->text().contains(QStringLiteral("gruppo")));
+  closer.stop();
 }
 
 QTEST_MAIN(GuiLaunchTest)
