@@ -113,34 +113,22 @@ funzioni che richiedono un vault aperto.
      il blocco). Il destinatario si sceglie dalla tendina e si aggiunge con
      *Aggiungi*: ogni destinatario diventa un riquadro con una × per
      toglierlo. Con un destinatario l'invio usa `send`, con due o più
-<!-- coderabbit-ai-generated:v1 -->
-
-<!-- coderabbit-ai-generated-section:v1:3e6d052b6719efeee882b4d47864c16ec479b47b0ad154aa7d383c172c9e28c0 -->
-
-     `group-send --to ...`; entrambi accettano testo o file. La GUI riceve
-     sia messaggi singoli sia messaggi di gruppo. La tendina *Scadenza* (`1 ora`, `24 ore`,
-
-<!-- /coderabbit-ai-generated:v1 -->
-     `7 giorni`) e la casella *Distruggi dopo lettura* segnano il messaggio
-     come effimero (anche di gruppo): la scelta viaggia dentro al testo
-     cifrato e vale per un solo invio, poi il selettore torna su *Nessuna
-<!-- coderabbit-ai-generated:v1 -->
-
-<!-- coderabbit-ai-generated-section:v1:c203456bc3deffd236396f92d80033e0b5ce19919be221aedcac3e2413848b44 -->
-
-     scadenza*. In ricezione, se è impostato un TTL, il messaggio mostra tra quanto
-     scade e allo scadere la finestra si chiude da sola cancellando ciò che mostrava
-     (per i file, rimuovendo anche la cartella temporanea). Senza TTL,
-     *Distruggi dopo lettura* lascia la finestra aperta finché viene chiusa
-     dall’utente. Il timer parte
-
-
-<!-- /coderabbit-ai-generated:v1 -->     quando la finestra di ricezione si apre, non quando il mittente ha
-     inviato: un messaggio aperto giorni dopo resta visibile per tutto il TTL
-     da quel momento. Resta un aiuto, non una revoca: non impedisce screenshot,
-     copie o un client modificato. A invio riuscito
-     destinatari, messaggio e file vengono svuotati; dopo una `recv` riuscita
-     il blocco incollato viene svuotato e dopo un `add` riuscito alias e card.
+     `group-send --to ...`; entrambi accettano testo o file. La GUI riceve sia
+     messaggi singoli sia messaggi di gruppo. La tendina *Scadenza* (`1 ora`,
+     `24 ore`, `7 giorni`) e la casella *Distruggi dopo lettura* segnano il
+     messaggio come effimero (anche di gruppo): la scelta viaggia dentro al
+     testo cifrato e vale per un solo invio, poi il selettore torna su *Nessuna
+     scadenza*. In ricezione, se è impostato un TTL, il messaggio mostra tra
+     quanto scade e allo scadere la finestra si chiude da sola cancellando ciò
+     che mostrava (per i file, rimuovendo anche la cartella temporanea). Senza
+     TTL, *Distruggi dopo lettura* lascia la finestra aperta finché viene
+     chiusa dall'utente. Il timer parte quando la finestra di ricezione si
+     apre, non quando il mittente ha inviato: un messaggio aperto giorni dopo
+     resta visibile per tutto il TTL da quel momento. Resta un aiuto, non una
+     revoca: non impedisce screenshot, copie o un client modificato. A invio
+     riuscito destinatari, messaggio e file vengono svuotati; dopo una `recv`
+     riuscita il blocco incollato viene svuotato e dopo un `add` riuscito alias
+     e card.
      In caso di errore resta tutto, per riprovare. Se il blocco contiene un
      file, compare un popup "File ricevuto" con *Apri cartella* (apre nel
      file manager la cartella temporanea privata dove `ratchet-usb` ha

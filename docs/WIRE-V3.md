@@ -25,16 +25,10 @@ truncation, trailing fields, excessive counts and size limits.
   messages are byte-identical to before. The expiry value never appears in
   cleartext, and only a client that parses this header enforces it. The header
   is not invisible, though: it makes the plaintext four bytes longer, so when
-<!-- coderabbit-ai-generated:v1 -->
-
-<!-- coderabbit-ai-generated-section:v1:f1902b8811d101321e9d52fa71ece40af06a4be4bddd2cf60839617a80a8d2bb -->
-
   the body sits just under a padding bucket (128/256/512/1024/2048 bytes,
-  then 1024-byte increments) an
-
-
-<!-- /coderabbit-ai-generated:v1 -->  observer who already knows the body length can tell an ephemeral message
-  from an ordinary one. It cannot see which bucket was chosen.
+  then 1024-byte increments) an observer who already knows the body length can
+  tell an ephemeral message from an ordinary one. It cannot see which bucket
+  was chosen.
 
 `CLASSIC_V2` is limited to legacy reading and migration. New cards advertise
 `XWING_TRIPLE_RATCHET_V1`. Cards that advertise `TRIPLE_RATCHET_V1` keep that

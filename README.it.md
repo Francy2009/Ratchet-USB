@@ -144,17 +144,12 @@ L'interfaccia usa anche gli appunti di sistema: premi `y` su una carta o su un
 blocco di messaggio per copiarlo, e `Ctrl-V` per incollare gli appunti in un
 campo di testo. Così non devono passare dalla selezione del terminale.
 
-<!-- coderabbit-ai-generated:v1 -->
-
-<!-- coderabbit-ai-generated-section:v1:0ec9dca3d7ada5f5871507092579da216f0ada27c891f5cf298d443f50a54576 -->
-
 Per più destinatari, `ratchet-usb group-send --to alice --to bob` cifra testo
-o un file (`--file <percorso>`) una sola volta con una chiave di contenuto casuale
-
-<!-- /coderabbit-ai-generated:v1 --> e incapsula quella
-chiave per ogni membro attraverso la sessione 1:1 già esistente. Ogni membro
-riceve lo stesso blocco; `recv` trova l'involucro indirizzato al vault locale e
-decifra il contenuto condiviso. Servono almeno due alias `--to` e ogni contatto
+o un file (`--file <percorso>`) una sola volta con una chiave di contenuto
+casuale e incapsula quella chiave per ogni membro attraverso la sessione 1:1
+già esistente. Ogni membro riceve lo stesso blocco; `recv` trova l'involucro
+indirizzato al vault locale e decifra il contenuto condiviso. Servono almeno
+due alias `--to` e ogni contatto
 deve essere già verificato. Ogni involucro è sigillato con la chiave d'identità
 del membro sotto un effimero nuovo, quindi l'intestazione del ratchet 1:1 non
 viaggia in chiaro e non può collegare un membro al traffico precedente. Il
@@ -165,18 +160,15 @@ scritto quel contenuto, quindi i blocchi di gruppo non sono negabili. Il blocco
 mostra quanti membri ci sono, non le loro identità; contiene però la chiave
 d'identità del mittente in chiaro, quindi chiunque abbia la sua scheda di
 contatto può collegare il blocco a lui, così come l'hash del mittente delle
-buste 1:1 si collega alla stessa chiave. Alcuni messaggi non dovrebbero restare in giro. `send --ttl 24h` (anche `1h` e
-`7d`) e `send --burn` segnano un messaggio come effimero -- gli stessi flag
+buste 1:1 si collega alla stessa chiave. Alcuni messaggi non dovrebbero
+restare in giro. `send --ttl 24h` (anche `1h` e `7d`) e `send --burn` segnano
+un messaggio come effimero -- gli stessi flag
 funzionano con `group-send`. Il segno viaggia dentro al testo cifrato, quindi
 è autenticato e il valore della scadenza non compare mai in chiaro;
 l'intestazione di quattro byte allunga però il plaintext, quindi al confine di
-<!-- coderabbit-ai-generated:v1 -->
-
-<!-- coderabbit-ai-generated-section:v1:5e374c57f5476cb374a2073217a5af7f543e91c0e3945c09500e9b62f5b3f557 -->
-
 un bucket di padding (128, 256, 512, 1024, 2048 byte, poi incrementi di
-1024 byte) chi conosce già la
-lunghezza del corpo può distinguere un messaggio effimero da uno ordinario,
+1024 byte) chi conosce già la lunghezza del corpo può distinguere un messaggio
+effimero da uno ordinario,
 anche se non vede quale bucket contenga. L'applicazione è lato ricevente e
 best-effort. Solo la GUI desktop tiene il tempo: avvia un timer quando si apre
 la finestra di ricezione -- non quando il messaggio è stato inviato, quindi un
@@ -192,9 +184,7 @@ qualcosa da smettere di mostrare. Un client precedente a questa funzione mostra
 il messaggio con il segno visibile invece di rifiutarlo. I client precedenti
 non possono aprire i file effimeri e possono mostrare i byte incorniciati come
 testo: evita di inviare file effimeri a destinatari che usano client precedenti.
-
-
-<!-- /coderabbit-ai-generated:v1 -->I messaggi di gruppo esistono anche nell'interfaccia a terminale: Spazio segna
+I messaggi di gruppo esistono anche nell'interfaccia a terminale: Spazio segna
 un contatto per un gruppo e `g` scrive ai contatti segnati. La GUI desktop
 offre lo stesso con i riquadri destinatari: scegli un contatto, premi Aggiungi,
 ripeti; un destinatario manda 1:1, due o più mandano un messaggio di gruppo.

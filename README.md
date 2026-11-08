@@ -136,22 +136,17 @@ The interface also works with the system clipboard: press `y` on a card or a
 message block to copy it, and `Ctrl-V` to paste the clipboard into a text field.
 Neither has to pass through a terminal selection.
 
-<!-- coderabbit-ai-generated:v1 -->
-
-<!-- coderabbit-ai-generated-section:v1:563cb647070e481106963d01073bd19e152a362530b763ca30808528857e649e -->
-
 For more than one recipient, `ratchet-usb group-send --to alice --to bob`
-encrypts text or a file (`--file <path>`) once under a random content key
-
-<!-- /coderabbit-ai-generated:v1 --> and wraps that key for each
-member through the 1:1 session you already have with them. Every member receives
-the same block; `recv` finds the wrapper addressed to the local vault and
-decrypts the shared content. At least two `--to` aliases are required, and each
-contact must be verified first. Each wrapper is sealed to its member's identity
-key under a fresh ephemeral, so the inner 1:1 ratchet header is not on the wire
-and cannot link a member to earlier traffic. The block is signed with the
-sender's identity key, so a member cannot re-encrypt the shared body and pass it
-off as the sender's. The block shows how many members there are, but not their
+encrypts text or a file (`--file <path>`) once under a random content key and
+wraps that key for each member through the 1:1 session you already have with
+them. Every member receives the same block; `recv` finds the wrapper addressed
+to the local vault and decrypts the shared content. At least two `--to` aliases
+are required, and each contact must be verified first. Each wrapper is sealed
+to its member's identity key under a fresh ephemeral, so the inner 1:1 ratchet
+header is not on the wire and cannot link a member to earlier traffic. The
+block is signed with the sender's identity key, so a member cannot re-encrypt
+the shared body and pass it off as the sender's. The block shows how many
+members there are, but not their
 identities; it does carry the sender's identity key in the clear, so anyone
 with the sender's contact card can link the block to them, just as a 1:1
 envelope's sender hash links to the same key.
@@ -160,13 +155,9 @@ and `send --burn` mark a message ephemeral -- the same flags work on
 `group-send`. The mark rides inside the encrypted text, so it is authenticated
 and the expiry value never appears in cleartext; the four-byte header still
 lengthens the plaintext, so at a padding-bucket boundary (128, 256, 512, 1024,
-<!-- coderabbit-ai-generated:v1 -->
-
-<!-- coderabbit-ai-generated-section:v1:765325bcc4cc4a1d723c5af20dc987f7a0e474051ccfda4f6ba30e6169db784c -->
-
-2048 bytes, then 1024-byte increments) an observer who already knows the
-body length can tell an
-ephemeral message from an ordinary one, though not which bucket it carries.
+2048 bytes, then 1024-byte increments) an observer who already knows the body
+length can tell an ephemeral message from an ordinary one, though not which
+bucket it carries.
 Enforcement is receiver-side and best-effort. Only the desktop GUI keeps time:
 it starts a timer when the receive dialog opens -- not when the message was
 sent, so a message opened days later stays visible for the full TTL from that
@@ -181,9 +172,7 @@ delete afterwards, only something to stop displaying. A client from before
 this existed shows the message with the mark visible instead of refusing it.
 Older clients cannot open ephemeral files and may display the framed bytes as
 text; avoid sending ephemeral files to recipients using older clients.
-
-
-<!-- /coderabbit-ai-generated:v1 -->In the terminal interface, Space marks a contact for a group and `g` writes to
+In the terminal interface, Space marks a contact for a group and `g` writes to
 the marked contacts. The desktop GUI offers the same with recipient chips:
 pick a contact, press Aggiungi, repeat; one recipient sends 1:1, two or more
 send a group message.
