@@ -192,10 +192,19 @@ blocco pendente non è stato esportato o eliminato.
 
 Eliminare un'apertura non consegnata può lasciare al mittente una sessione che
 il destinatario non ha mai aperto. Preferisci esportare con `outbox` e
-consegnare il blocco esatto. Se è perso, usa `reset-session <alias>` (conferma
-`RESET`) prima di inviare una nuova apertura; per un gruppo ripeti per ogni
-destinatario coinvolto. Il reset elimina le chiavi dei messaggi pendenti e
-saltati.
+consegnare il blocco esatto. Se è perso, fai `reset-session <alias>` (conferma
+`RESET`) solo per quel contatto prima di inviare una nuova apertura: il
+destinatario non ha mai visto l'apertura, quindi non ha nessuna sessione da
+sostituire. Non azzerare un contatto la cui sessione era già stabilita:
+dall'altra parte c'è ancora una sessione confermata e `recv` rifiuta di
+sostituirla con un'apertura, quindi il reset romperebbe la coppia invece di
+ripararla. Anche un messaggio perso su una sessione stabilita non è fatale: il
+successivo si decifra normalmente e il ricevente conserva la chiave saltata.
+Se una coppia stabilita deve davvero ricominciare, il reset va fatto da
+entrambe le parti. Un blocco di gruppo può essere un'apertura per un membro e
+un messaggio ordinario per un altro, quindi azzera solo i membri la cui
+apertura era nel blocco perso. Il reset elimina le chiavi dei messaggi
+pendenti e saltati.
 
 Il programma prova a individuare un'unità rimovibile. Se la rilevazione non è
 adatta al tuo caso, passa `--usb-path <cartella>` ai comandi o imposta

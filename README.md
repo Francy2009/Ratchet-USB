@@ -181,10 +181,17 @@ exported or deleted.
 
 Deleting an undelivered opening can leave the sender with a session the
 recipient never established. Prefer exporting with `outbox` and delivering
-the exact block. If it was lost, reset the affected session with
-`reset-session <alias>` (confirm `RESET`) before sending a fresh opening; for
-a group, repeat for each affected recipient. Resetting discards pending and
-skipped message keys.
+the exact block. If it was lost, reset that contact with `reset-session
+<alias>` (confirm `RESET`) before sending a fresh opening: the recipient never
+saw the opening, so they have no session to replace. Do not reset a contact
+whose session was already established -- their side still holds a confirmed
+session and `recv` refuses to replace it with an opening, so the reset would
+break the pair instead of repairing it. A lost message on an established
+session is not fatal either: the next one decrypts normally and the receiver
+keeps the skipped key. If an established pair really has to start over, both
+sides reset. A group block can be an opening for one member and an ordinary
+message for another, so reset only the members whose opening was in the lost
+block. Resetting discards pending and skipped message keys.
 
 The program tries to find a removable drive. If detection is unsuitable for
 your setup, pass `--usb-path <directory>` to commands or set `RATCHET_USB_PATH`.
