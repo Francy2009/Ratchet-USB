@@ -152,15 +152,22 @@ envelope's sender hash links to the same key.
 Some messages should not sit around. `send --ttl 24h` (also `1h` and `7d`)
 and `send --burn` mark a message ephemeral -- the same flags work on
 `group-send`. The mark rides inside the encrypted text, so it is authenticated
-and adds nothing visible on the wire. A cooperating receiver stops showing the
-message when the time runs out (`--burn` asks for a single reading instead of
-a duration; the two combine) and wipes what it showed. This is best-effort,
+and the expiry value never appears in cleartext; the four-byte header still
+lengthens the plaintext, so at a padding-bucket boundary (128, 256, 512, 1024,
+2048 bytes) an observer who already knows the body length can tell an
+ephemeral message from an ordinary one, though not which bucket it carries.
+Enforcement is receiver-side and best-effort. Only the desktop GUI keeps time:
+it starts a timer when the receive dialog opens -- not when the message was
+sent, so a message opened days later stays visible for the full TTL from that
+moment -- and wipes what it showed when the timer fires. The terminal
+interface and the CLI only add a note: `recv` prints the plaintext to stdout
+and nothing stops displaying or wipes it afterwards, so a redirected file or
+the scrollback keeps it. `--burn` is the same kind of hint, asking for a
+single reading instead of a duration (the two combine). This is best-effort,
 not revocation: it stops later exposure, not screenshots, copies, or a
 modified client. The vault keeps no message history, so there is nothing to
 delete afterwards, only something to stop displaying. A client from before
 this existed shows the message with the mark visible instead of refusing it.
-In the terminal interface the note appears next to the message; the desktop
-GUI closes the message window when a TTL runs out.
 In the terminal interface, Space marks a contact for a group and `g` writes to
 the marked contacts. The desktop GUI offers the same with recipient chips:
 pick a contact, press Aggiungi, repeat; one recipient sends 1:1, two or more

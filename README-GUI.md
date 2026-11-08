@@ -114,14 +114,19 @@ funzioni che richiedono un vault aperto.
      *Aggiungi*: ogni destinatario diventa un riquadro con una × per
      toglierlo. Con un destinatario l'invio usa `send`, con due o più
      `group-send --to ...` (solo testo: per i file, un destinatario alla
-     volta). La tendina *Scadenza* (`1 ora`, `24 ore`, `7 giorni`) e la casella
-     *Distruggi dopo lettura* segnano il messaggio come effimero (anche di
-     gruppo): la scelta viaggia dentro al testo cifrato e vale per un solo
-     invio, poi il selettore torna su *Nessuna scadenza*. In ricezione un
-     messaggio effimero mostra da quanto scade e, allo scadere, la finestra
-     si chiude da sola cancellando ciò che mostrava (per i file, rimuovendo
-     anche la cartella temporanea). Resta un aiuto, non una revoca: non
-     impedisce screenshot, copie o un client modificato. A invio riuscito
+     volta). In ricezione la GUI legge solo messaggi 1:1: la CLI rifiuta i
+     blocchi GROUP in `--structured-output`, quindi un messaggio di gruppo va
+     aperto da terminale con `recv`. La tendina *Scadenza* (`1 ora`, `24 ore`,
+     `7 giorni`) e la casella *Distruggi dopo lettura* segnano il messaggio
+     come effimero (anche di gruppo): la scelta viaggia dentro al testo
+     cifrato e vale per un solo invio, poi il selettore torna su *Nessuna
+     scadenza*. In ricezione un messaggio effimero mostra da quanto scade e,
+     allo scadere, la finestra si chiude da sola cancellando ciò che mostrava
+     (per i file, rimuovendo anche la cartella temporanea). Il timer parte
+     quando la finestra di ricezione si apre, non quando il mittente ha
+     inviato: un messaggio aperto giorni dopo resta visibile per tutto il TTL
+     da quel momento. Resta un aiuto, non una revoca: non impedisce screenshot,
+     copie o un client modificato. A invio riuscito
      destinatari, messaggio e file vengono svuotati; dopo una `recv` riuscita
      il blocco incollato viene svuotato e dopo un `add` riuscito alias e card.
      In caso di errore resta tutto, per riprovare. Se il blocco contiene un

@@ -162,16 +162,23 @@ contatto può collegare il blocco a lui, così come l'hash del mittente delle
 buste 1:1 si collega alla stessa chiave. Alcuni messaggi non dovrebbero restare in giro. `send --ttl 24h` (anche `1h` e
 `7d`) e `send --burn` segnano un messaggio come effimero -- gli stessi flag
 funzionano con `group-send`. Il segno viaggia dentro al testo cifrato, quindi
-è autenticato e non aggiunge niente di visibile sul filo. Un ricevente che
-collabora smette di mostrare il messaggio allo scadere del tempo (`--burn`
-chiede una singola lettura invece di una durata; i due si combinano) e cancella
-ciò che ha mostrato. È un aiuto, non una revoca: non impedisce screenshot,
-copie o un client modificato. Il vault non conserva alcuno storico dei
-messaggi, quindi non c'è niente da cancellare dopo, solo qualcosa da smettere
-di mostrare. Un client precedente a questa funzione mostra il messaggio con il
-segno visibile invece di rifiutarlo. Nell'interfaccia a terminale la nota
-appare accanto al messaggio; la GUI desktop chiude la finestra del messaggio
-allo scadere del TTL.
+è autenticato e il valore della scadenza non compare mai in chiaro;
+l'intestazione di quattro byte allunga però il plaintext, quindi al confine di
+un bucket di padding (128, 256, 512, 1024, 2048 byte) chi conosce già la
+lunghezza del corpo può distinguere un messaggio effimero da uno ordinario,
+anche se non vede quale bucket contenga. L'applicazione è lato ricevente e
+best-effort. Solo la GUI desktop tiene il tempo: avvia un timer quando si apre
+la finestra di ricezione -- non quando il messaggio è stato inviato, quindi un
+messaggio aperto giorni dopo resta visibile per tutto il TTL da quel momento --
+e cancella ciò che mostrava allo scadere. L'interfaccia a terminale e la CLI
+aggiungono solo una nota: `recv` stampa il plaintext su stdout e niente smette
+di mostrarlo o lo cancella dopo, quindi un file rediretto o lo scrollback lo
+conservano. `--burn` è lo stesso tipo di suggerimento: chiede una singola
+lettura invece di una durata (i due si combinano). È un aiuto, non una revoca:
+non impedisce screenshot, copie o un client modificato. Il vault non conserva
+alcuno storico dei messaggi, quindi non c'è niente da cancellare dopo, solo
+qualcosa da smettere di mostrare. Un client precedente a questa funzione mostra
+il messaggio con il segno visibile invece di rifiutarlo.
 I messaggi di gruppo esistono anche nell'interfaccia a terminale: Spazio segna
 un contatto per un gruppo e `g` scrive ai contatti segnati. La GUI desktop
 offre lo stesso con i riquadri destinatari: scegli un contatto, premi Aggiungi,

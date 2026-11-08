@@ -15,9 +15,12 @@
 // outside the AEAD is cleartext metadata. A per-message TTL out there would
 // be a fingerprint (this message expires, that one does not) visible to
 // anyone holding the block, and it would not be authenticated — anyone could
-// rewrite it. Inside, it is covered by the same tag as the body and adds no
-// observable wire difference beyond the few bytes of header, which the
-// bucketed padding already absorbs for short messages.
+// rewrite it. Inside, it is covered by the same tag as the body, so the
+// expiry value is not observable. The four header bytes do still lengthen the
+// plaintext, and bucketed padding absorbs that only while the body stays
+// inside one bucket: at a boundary (128/256/512/1024/2048 bytes) an observer
+// who already knows the body length can tell an ephemeral message is present,
+// though not which bucket it carries.
 //
 // Why fixed buckets and not a free-form duration: a free-form timestamp is
 // both a fingerprint (every sender picks a different second) and a clock to
