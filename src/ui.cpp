@@ -17,6 +17,7 @@
 #include "ratchet/bip39.hpp"
 #include "ratchet/cli.hpp"
 #include "ratchet/clipboard.hpp"
+#include "ratchet/ephemeral.hpp"
 #include "ratchet/identity.hpp"
 #include "ratchet/media.hpp"
 #include "ratchet/file.hpp"
@@ -760,8 +761,23 @@ void Driver::receive_message() {
     identity_sk.wipe();
     wipe_string(block);
     // A decrypted body that is not a file is moved into the pager below; a
-    // failed file decode, save or render used to skip the wipe entirely.
+    // failed unwrap, file decode, save or render used to skip the wipe
+    // entirely, so the guard is installed before the first throwing step.
     StringWipe wipe_plaintext(result.plaintext);
+    // The expiry rides inside the ratchet plaintext (see ephemeral.hpp):
+    // unwrap it before file decoding, so an ephemeral file still decodes.
+    // The terminal interface shows the note but enforces nothing -- there is
+    // no timer here, and closing the pager already wipes what was shown.
+    ephemeral::Expiry expiry{};
+    if (std::optional<ephemeral::Decoded> unwrapped =
+            ephemeral::decode(result.plaintext)) {
+      expiry = unwrapped->expiry;
+      // swap() cannot allocate, so a throw here cannot leave the decrypted
+      // body in a local that is destroyed without being wiped.
+      std::string inner = std::move(unwrapped->body);
+      result.plaintext.swap(inner);
+      wipe_string(inner);
+    }
 
     save();
     const bool unverified =
@@ -787,10 +803,11 @@ void Driver::receive_message() {
           group_block ? result.alias + " [group " + group_id + "]" : result.alias;
       model_.show_file(from, pending_file_->ext,
                        file::is_dangerous_extension(pending_file_->ext),
-                       result.session_established, unverified);
+                       result.session_established, unverified, expiry);
     } else {
       model_.show_message(result.alias, std::move(result.plaintext),
-                          result.session_established, unverified, group_id);
+                          result.session_established, unverified, group_id,
+                          expiry);
     }
   } catch (const std::exception& e) {
     wipe_string(block);

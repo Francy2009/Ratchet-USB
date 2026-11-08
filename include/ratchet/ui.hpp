@@ -7,6 +7,7 @@
 #include <string_view>
 #include <vector>
 
+#include "ratchet/ephemeral.hpp"
 #include "ratchet/i18n.hpp"
 #include "ratchet/screen.hpp"
 
@@ -112,14 +113,20 @@ class Model {
   // `group_id` is empty for a 1:1 message. When it is set, the heading says
   // this is a group message and names the group, so the reader knows the body
   // was addressed to more than just them.
+  // `expiry` is the sender's ephemeral choice, unwrapped by the driver from
+  // inside the ratchet plaintext before this call. It only adds a note to the
+  // screen: the terminal interface keeps no timer, so a TTL here is the
+  // sender's request shown to a cooperating reader, not an enforcement.
   void show_message(const std::string& from, std::string body, bool session_opened,
-                    bool unverified, const std::string& group_id = {});
+                    bool unverified, const std::string& group_id = {},
+                    ephemeral::Expiry expiry = {});
   // Called when the decrypted plaintext is a file payload. Transitions to
   // Screen::File. The Driver keeps the FilePayload; the Model only knows
   // whether a file arrived, who sent it, its (already sanitised) extension and
   // whether that extension is one the desktop might execute.
   void show_file(const std::string& from, std::string ext, bool dangerous,
-                 bool session_opened, bool unverified);
+                 bool session_opened, bool unverified,
+                 ephemeral::Expiry expiry = {});
   void set_status(std::string text, screen::Style style = screen::Style::Normal);
   void set_status(i18n::Str id, screen::Style style = screen::Style::Normal);
 

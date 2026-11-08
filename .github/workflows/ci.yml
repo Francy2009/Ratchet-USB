@@ -451,7 +451,9 @@ jobs:
         # A crash or timeout input is diagnostic evidence, so it is kept
         # longer than the coverage report. Each run produces its own artifact:
         # the shared name does not delete an earlier run's copy early; every
-        # copy stays available until its own 30-day expiry.
+        # copy stays available until its own 14-day expiry. Two weeks is enough
+        # to open a follow-up issue; the Actions storage quota is small and
+        # artifacts are not a substitute for a checked-in corpus entry.
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
@@ -461,7 +463,7 @@ jobs:
             oom-*
             timeout-*
           if-no-files-found: ignore
-          retention-days: 30
+          retention-days: 14
 
   # ---------------------------------------------------------------------
   # Static analysis.

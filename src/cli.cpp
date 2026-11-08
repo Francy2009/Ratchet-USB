@@ -44,8 +44,12 @@ const std::vector<CommandSpec>& specs() {
        1},
       {"reset-session", {"--usb-path"}, 1},
       {"remove", {"--usb-path", "--yes"}, 1},
-      {"send", {"--usb-path", "--file", "--stdin-payload"}, 2},
-      {"group-send", {"--usb-path", "--to", "--stdin-payload"}, 1},
+      {"send",
+       {"--usb-path", "--file", "--stdin-payload", "--ttl", "--burn"},
+       2},
+      {"group-send",
+       {"--usb-path", "--to", "--file", "--stdin-payload", "--ttl", "--burn"},
+       1},
       {"outbox", {"--usb-path"}, 0},
       {"recv",
        {"--usb-path", "--stage-file", "--stdin-payload", "--structured-output"},
@@ -129,9 +133,11 @@ void print_usage(std::ostream& os) {
      << "  " << kProgram << " reset-session --usb-path <dir> <alias>\n"
      << "  " << kProgram << " remove   --usb-path <dir> [--yes] <alias>\n"
      << "  " << kProgram
-     << " send     --usb-path <dir> <alias> [message|--file <file>]\n"
+     << " send     --usb-path <dir> <alias> [message|--file <file>] "
+        "[--ttl 1h|24h|7d] [--burn]\n"
      << "  " << kProgram
-     << " group-send --usb-path <dir> --to <alias> --to <alias> [message]\n"
+     << " group-send --usb-path <dir> --to <alias> --to <alias> [message|--file <file>] "
+        "[--ttl 1h|24h|7d] [--burn]\n"
      << "  " << kProgram << " outbox   --usb-path <dir>\n"
      << "  " << kProgram << " recv     --usb-path <dir> [message] [--stage-file]\n"
      << "  " << kProgram
@@ -225,7 +231,18 @@ void print_usage(std::ostream& os) {
      << "                       carries the sender's alias.\n"
      << "  --fingerprint        Print only the identity fingerprint (card only).\n"
      << "  --card <file>        Read a contact card from a file (add only).\n"
-     << "  --file <file>        Encrypt a file instead of text (send only).\n"
+     << "  --file <file>        Encrypt a file instead of text (send and group-send).\n"
+     << "  --ttl 1h|24h|7d      Mark the message ephemeral: a cooperating "
+        "receiver\n"
+     << "                       stops showing it after this long (send and "
+        "group-send\n"
+     << "                       only). Best-effort: it stops neither "
+        "screenshots,\n"
+     << "                       copies nor a modified client.\n"
+     << "  --burn               Mark the message for a single reading "
+        "(send and\n"
+     << "                       group-send only). Same best-effort promise "
+        "as --ttl.\n"
      << "  --to <alias>         Add a group recipient; repeat for each member\n"
      << "                       (group-send only, at least two).\n"
      << "  --stage-file         Stage a received file in the private temporary\n"
@@ -417,6 +434,20 @@ Options parse_args(const std::vector<std::string_view>& args) {
     } else if (arg == "--file") {
       opts.file_path = std::string(next("--file"));
       note("--file");
+    } else if (arg == "--ttl") {
+      // Fixed buckets, not a duration: a free-form value would be a
+      // per-message fingerprint and a clock to argue with. "off" is
+      // accepted and means what omitting the flag means.
+      const std::string value(next("--ttl"));
+      ephemeral::Ttl ttl = ephemeral::Ttl::None;
+      if (!ephemeral::parse_ttl(value, ttl)) {
+        throw Error("--ttl takes 1h, 24h, 7d or off");
+      }
+      opts.ttl = ttl;
+      note("--ttl");
+    } else if (arg == "--burn") {
+      opts.burn_after_reading = true;
+      note("--burn");
     } else if (arg.starts_with("-") && arg != "-") {
       throw Error("unknown argument: " + std::string(arg));
     } else {

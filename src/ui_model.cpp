@@ -29,6 +29,30 @@ std::string indent(std::string_view text) {
 
 std::string rule(std::size_t width) { return std::string(width, '-'); }
 
+// One line for the sender's ephemeral choice, or empty for an ordinary
+// message. The TTL label ("24h") is language-independent; the rest comes
+// from the interface language, never from the sender's text.
+std::string ephemeral_note(i18n::Lang lang, ephemeral::Expiry expiry) {
+  if (!ephemeral::is_ephemeral(expiry)) {
+    return {};
+  }
+  std::string note = std::string(i18n::t(lang, Str::EphemeralTag)) + ": ";
+  bool need_comma = false;
+  if (expiry.ttl != ephemeral::Ttl::None) {
+    note += std::string(i18n::t(lang, Str::EphemeralExpiresIn)) + " " +
+            ephemeral::ttl_label(expiry.ttl);
+    need_comma = true;
+  }
+  if (expiry.burn_after_reading) {
+    if (need_comma) {
+      note += ", ";
+    }
+    note += std::string(i18n::t(lang, Str::EphemeralBurn));
+  }
+  note += ".";
+  return note;
+}
+
 }  // namespace
 
 // --- driver -> model ---------------------------------------------------------
@@ -107,7 +131,8 @@ void Model::show_block(std::string_view heading, std::string block) {
 }
 
 void Model::show_message(const std::string& from, std::string body, bool session_opened,
-                         bool unverified, const std::string& group_id) {
+                         bool unverified, const std::string& group_id,
+                         ephemeral::Expiry expiry) {
   // The body is a by-value copy of the decrypted plaintext. Wrapping it can
   // throw (it grows a vector of lines), and the explicit wipe at the end used
   // to be skipped on that path; the guard covers every return.
@@ -123,6 +148,9 @@ void Model::show_message(const std::string& from, std::string body, bool session
   if (session_opened) {
     pager_notes_.emplace_back(i18n::t(lang_, Str::SessionOpened));
   }
+  if (std::string note = ephemeral_note(lang_, expiry); !note.empty()) {
+    pager_notes_.emplace_back(std::move(note));
+  }
   if (unverified) {
     pager_notes_.emplace_back(i18n::t(lang_, Str::WarnUnverified));
   }
@@ -135,7 +163,8 @@ void Model::show_message(const std::string& from, std::string body, bool session
 }
 
 void Model::show_file(const std::string& from, std::string ext, bool dangerous,
-                      bool session_opened, bool unverified) {
+                      bool session_opened, bool unverified,
+                      ephemeral::Expiry expiry) {
   // Reuse pager_heading_ and pager_notes_ for the sender and warnings; the
   // pager_ body is left empty because the File screen renders its own fixed
   // hint line rather than scrollable text.
@@ -143,6 +172,9 @@ void Model::show_file(const std::string& from, std::string ext, bool dangerous,
   pager_notes_.clear();
   if (session_opened) {
     pager_notes_.emplace_back(i18n::t(lang_, Str::SessionOpened));
+  }
+  if (std::string note = ephemeral_note(lang_, expiry); !note.empty()) {
+    pager_notes_.emplace_back(std::move(note));
   }
   if (unverified) {
     pager_notes_.emplace_back(i18n::t(lang_, Str::WarnUnverified));

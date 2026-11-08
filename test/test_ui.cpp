@@ -99,6 +99,24 @@ TEST("a crowd of contacts cannot push the menu or the hints off the screen") {
   CHECK(draw(model).find("[ Quit ]") != std::string::npos);
 }
 
+TEST("an ephemeral message names its expiry on screen") {
+  // The note is built from the interface language and the bucket label, both
+  // this program's own values: a sender cannot smuggle text into it the way
+  // they can into the body or their alias.
+  Model model = unlocked_model({contact("alice")});
+  model.show_message("alice", "burn this", false, true, {},
+                     ephemeral::Expiry{ephemeral::Ttl::OneDay, true});
+  const std::string frame = draw(model);
+  CHECK(frame.find("burn this") != std::string::npos);
+  CHECK(frame.find("Ephemeral") != std::string::npos);
+  CHECK(frame.find("expires in 24h") != std::string::npos);
+  CHECK(frame.find("burn after reading") != std::string::npos);
+  // An ordinary message carries no such note.
+  Model plain = unlocked_model({contact("alice")});
+  plain.show_message("alice", "keep this", false, true);
+  CHECK(draw(plain).find("Ephemeral") == std::string::npos);
+}
+
 TEST("a decrypted message cannot repaint the screen either") {
   Model model = unlocked_model({contact("alice")});
   model.show_message("alice", "hello\033[1A\033[2Kdifferent text", false, true);

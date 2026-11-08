@@ -236,6 +236,26 @@ to defend against it:
   content keys of messages already delivered. Membership changes therefore do
   not rekey the group; start a fresh message after a removal.
 
+- **Ephemeral messages are a request, not a revocation.** `--ttl 1h|24h|7d`
+  and `--burn` ride inside the encrypted plaintext, so they are authenticated
+  and the expiry value never appears in cleartext. The four-byte header still
+  lengthens the plaintext, so at a padding-bucket boundary (128, 256, 512,
+  1024, 2048 bytes, then 1024-byte increments) an observer who already knows
+  the body length can tell an ephemeral message from an ordinary one; it
+  cannot see which bucket was chosen. For example, a 3071-byte body pads to
+  3072 bytes; adding the four-byte header makes it pad to 4096 bytes.
+  Enforcement is receiver-side and best-effort. The desktop GUI is the only
+  interface that keeps time, and its timer starts when the receive dialog
+  opens, not when the sender sent: a message opened days later stays visible
+  for the full TTL from that moment, then the dialog closes and wipes what it
+  displayed (and the staged folder for a file). The terminal interface shows a
+  note only, and the CLI prints the plaintext to stdout: neither stops
+  displaying nor wipes anything afterwards, so a redirected file or the
+  terminal scrollback keeps the message. `--burn` is likewise a hint. None of
+  this stops screenshots, copies, a modified client, or a recipient who reads
+  in time. The vault keeps no message history: expiry means refusing display
+  and wiping UI state and staged files, and there is nothing to delete
+  afterwards.
 - **A failed stdout write leaves a pending ciphertext block.** `send` and
   `group-send` persist the exact block as `vault.bin.outbox` (mode 0600, beside
   the vault) before saving the advanced ratchet state, then remove it after a

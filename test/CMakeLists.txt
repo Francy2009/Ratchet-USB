@@ -17,6 +17,7 @@ add_executable(ratchet_tests
                test_cli.cpp
                test_media.cpp
                test_file.cpp
+               test_ephemeral.cpp
                test_secure.cpp
                test_terminal.cpp
                test_gui_format.cpp

@@ -109,12 +109,40 @@ funzioni che richiedono un vault aperto.
      Dopo lo sblocco l'elenco contatti viene letto automaticamente e i menu a
      tendina (destinatario di `send`, alias di `trust`/`reset-session`/`remove`)
      si popolano da soli; il pulsante *Aggiorna elenco contatti* li ricarica.
-   - **Messaggi**: `send` (testo o `--file`) e `recv` (incolla il blocco). Se il
-     blocco contiene un file, compare un popup "File ricevuto" con *Apri
-     cartella* (apre nel file manager la cartella temporanea privata dove
-     `ratchet-usb` ha preparato il file, la stessa logica di `recv` da
-     terminale) e *Chiudi*.
+   - **Messaggi**: `send` (testo o `--file`) e `group-send` e `recv` (incolla
+     il blocco). Il destinatario si sceglie dalla tendina e si aggiunge con
+     *Aggiungi*: ogni destinatario diventa un riquadro con una × per
+     toglierlo. Con un destinatario l'invio usa `send`, con due o più
+     `group-send --to ...`; entrambi accettano testo o file. La GUI riceve sia
+     messaggi singoli sia messaggi di gruppo. La tendina *Scadenza* (`1 ora`,
+     `24 ore`, `7 giorni`) e la casella *Distruggi dopo lettura* segnano il
+     messaggio come effimero (anche di gruppo): la scelta viaggia dentro al
+     testo cifrato e vale per un solo invio, poi il selettore torna su *Nessuna
+     scadenza*. In ricezione, se è impostato un TTL, il messaggio mostra tra
+     quanto scade e allo scadere la finestra si chiude da sola cancellando ciò
+     che mostrava (per i file, rimuovendo anche la cartella temporanea). Senza
+     TTL, *Distruggi dopo lettura* lascia la finestra aperta finché viene
+     chiusa dall'utente. Il timer parte quando la finestra di ricezione si
+     apre, non quando il mittente ha inviato: un messaggio aperto giorni dopo
+     resta visibile per tutto il TTL da quel momento. Resta un aiuto, non una
+     revoca: non impedisce screenshot, copie o un client modificato. A invio
+     riuscito destinatari, messaggio e file vengono svuotati; dopo una `recv`
+     riuscita il blocco incollato viene svuotato e dopo un `add` riuscito alias
+     e card.
+     In caso di errore resta tutto, per riprovare. Se il blocco contiene un
+     file, compare un popup "File ricevuto" con *Apri cartella* (apre nel
+     file manager la cartella temporanea privata dove `ratchet-usb` ha
+     preparato il file, la stessa logica di `recv` da terminale) e *Chiudi*.
 3. **Blocca** disabilita di nuovo le schede e cancella la passphrase dal campo.
+
+L'aspetto è volutamente sobrio e uguale ovunque (tema chiaro fisso): le sezioni
+sono schede bianche, i pulsanti che fanno andare avanti (Accedi, Cifra,
+Decifra, Aggiungi contatto) sono blu, il resto è neutro. Il titolo del
+pannello dice sempre se il vault è bloccato o sbloccato, con una riga di
+stato sotto. Scorciatoie: **Ctrl+Invio** nella casella del messaggio lo
+cifra, **Ctrl+Invio** nel blocco lo decifra. Sotto la casella di scrittura
+due righe dicono a chi va il messaggio (tendina o N riquadri, singolo o
+gruppo) e quanto è grande contro il limite di 4 MiB.
 
 Non c'è un pannello di testo stile terminale: ogni comando apre un **popup** che
 dice se è andato a buon fine o male. Se il risultato è lungo (card, blocco
@@ -129,14 +157,16 @@ core accetta).
 
 ## Note
 
-- La GUI passa messaggi e blocchi come argomenti posizionali (`send <alias>
-  <messaggio>`, `recv <blocco>`), così su stdin resta solo la passphrase.
-  I flag vanno **prima** di un `--` letterale e i valori posizionali **dopo**:
-  la CLI emette `send --usb-path <dir> --file <f> -- <alias>`. Senza quel
-  separatore un messaggio che inizia con `-` (per esempio `-h`) verrebbe letto
-  come un'opzione: la CLI stamperebbe l'help e uscirebbe con 0, cioè la GUI
-  mostrerebbe "operazione completata" senza aver cifrato nulla. Il separatore è
-  emesso in un unico punto (`MainWindow::launch`), che tiene separati `flags` e
+- La GUI non mette mai il testo in chiaro negli argomenti (`/proc/<pid>/cmdline`
+  è leggibile a tutti i processi dello stesso utente): messaggi e blocchi
+  viaggiano su stdin con `--stdin-payload`, prima della passphrase
+  (`MainWindow::launchWithPayload`). I flag vanno **prima** di un `--`
+  letterale e i valori posizionali **dopo**: la CLI emette
+  `send --usb-path <dir> --file <f> -- <alias>`. Senza quel separatore un
+  alias che inizia con `-` (per esempio `-h`) verrebbe letto come un'opzione:
+  la CLI stamperebbe l'help e uscirebbe con 0, cioè la GUI mostrerebbe
+  "operazione completata" senza aver cifrato nulla. Il separatore è emesso in
+  un unico punto (`MainWindow::launch`), che tiene separati `flags` e
   `positionals`.
 - `add` legge la card da stdin fino a EOF: per questo una card incollata viene
   scritta in un file temporaneo privato e passata con `--card`, lasciando stdin

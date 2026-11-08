@@ -9,6 +9,7 @@
 #include <string_view>
 #include <vector>
 
+#include "ratchet/ephemeral.hpp"
 #include "ratchet/passphrase.hpp"
 #include "ratchet/vault.hpp"
 
@@ -83,7 +84,14 @@ struct Options {
   // is advanced.
   std::vector<std::string> group_members;
   std::string card_file;
-  std::string file_path;  // send --file: encrypt a file instead of text
+  std::string file_path;  // send/group-send --file: encrypt a file instead of text
+  // send/group-send --ttl 1h|24h|7d: the receiver should stop showing the
+  // message after this long. --burn: the message is for a single reading.
+  // Both ride inside the encrypted plaintext (see ephemeral.hpp); neither
+  // appears on the wire, and neither stops screenshots, copies or a modified
+  // client -- they only ask a cooperating receiver to wipe what it showed.
+  ephemeral::Ttl ttl = ephemeral::Ttl::None;
+  bool burn_after_reading = false;
   std::optional<std::string> message;
   // send/recv --stdin-payload: the exact number of bytes to read from standard
   // input as the message or block *before* the vault passphrase.

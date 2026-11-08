@@ -370,6 +370,40 @@ for i in 3 1 2; do
 done
 
 # ---------------------------------------------------------------------------
+# An ephemeral message: the TTL and the burn flag ride inside the encrypted
+# plaintext, so the block carries no new cleartext and the receiver unwraps
+# the body before displaying it. The notice goes to stderr and the choice to
+# the structured block; the plaintext itself must not be in either.
+
+step "an ephemeral message round-trips with its notice"
+EPH_SECRET="this burns after reading -- $$"
+printf '%s\n' "$ALICE_PASS" |
+  "$BIN" send --usb-path "$ALICE" bob --ttl 24h --burn "$EPH_SECRET" \
+    >"$WORK/eph.txt" 2>/dev/null ||
+  fail "alice ephemeral send exited non-zero"
+grep -q "BEGIN RATCHET MESSAGE" "$WORK/eph.txt" ||
+  fail "the ephemeral message is not a wire block"
+if grep -qF "burns after reading" "$WORK/eph.txt"; then
+  fail "the plaintext is readable in the ephemeral block"
+fi
+
+printf '%s\n' "$BOB_PASS" |
+  "$BIN" recv --usb-path "$BOB" --structured-output -- "$(cat "$WORK/eph.txt")" \
+    >"$WORK/eph-recv.txt" 2>"$WORK/eph-recv.err" ||
+  fail "bob ephemeral recv exited non-zero: $(cat "$WORK/eph-recv.err")"
+grep -qF "$EPH_SECRET" "$WORK/eph-recv.txt" ||
+  fail "Bob did not recover the ephemeral plaintext. Got: $(cat "$WORK/eph-recv.txt")"
+grep -q "(ephemeral" "$WORK/eph-recv.err" ||
+  fail "recv printed no ephemeral notice: $(cat "$WORK/eph-recv.err")"
+grep -q "^ttl=24h$" "$WORK/eph-recv.txt" ||
+  fail "the structured block names no TTL"
+grep -q "^burn=yes$" "$WORK/eph-recv.txt" ||
+  fail "the structured block names no burn flag"
+
+grep -q "(ephemeral: expires in 24h, burn after reading)" "$WORK/eph-recv.err" ||
+  fail "the ephemeral notice names neither the TTL nor the burn flag"
+
+# ---------------------------------------------------------------------------
 # The CLI keeps flags and positionals apart with a literal "--". That separator
 # is what stops a message beginning with "-" from being read as an option:
 # without it the CLI prints its help and exits 0, so a front-end shows
@@ -750,4 +784,6 @@ grep -q "lost block" "$WORK/outbox-bob.txt" ||
   fail "the recovered group block did not decrypt"
 
 echo
+"$(dirname "$0")/smoke_group_gui.sh" "$BIN"
+
 echo "smoke: all end-to-end checks passed"

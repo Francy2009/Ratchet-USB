@@ -5,6 +5,7 @@
 
 #include "ratchet/cli.hpp"
 #include "ratchet/command_io.hpp"
+#include "ratchet/ephemeral.hpp"
 #include "test_support.hpp"
 
 using namespace ratchet;
@@ -167,6 +168,29 @@ TEST("cli: recv takes the message positionally") {
   const Options opts = parse({"recv", "some text"});
   CHECK(opts.message.has_value());
   CHECK_EQ(*opts.message, std::string("some text"));
+}
+
+TEST("cli: send and group-send take --ttl and --burn") {
+  const Options sent = parse({"send", "alice", "hi", "--ttl", "24h", "--burn"});
+  CHECK(sent.ttl == ephemeral::Ttl::OneDay);
+  CHECK(sent.burn_after_reading);
+  const Options grouped = parse({"group-send", "--to", "bob", "--to", "carol",
+                                 "--ttl", "7d"});
+  CHECK(grouped.ttl == ephemeral::Ttl::SevenDays);
+  CHECK(!grouped.burn_after_reading);
+  // Absent means ordinary: no expiry, no burn.
+  const Options plain = parse({"send", "alice", "hi"});
+  CHECK(plain.ttl == ephemeral::Ttl::None);
+  CHECK(!plain.burn_after_reading);
+  // Buckets only: a free-form duration would fingerprint the message.
+  CHECK_THROWS(parse({"send", "alice", "hi", "--ttl", "60m"}));
+  CHECK_THROWS(parse({"send", "alice", "hi", "--ttl"}));
+  CHECK_THROWS(parse({"send", "alice", "hi", "--ttl", "off", "--ttl", "x"}));
+  // The expiry belongs to the sender's commands alone.
+  CHECK_THROWS(parse({"recv", "--ttl", "24h"}));
+  CHECK_THROWS(parse({"recv", "--burn"}));
+  CHECK_THROWS(parse({"ui", "--ttl", "24h"}));
+  CHECK_THROWS(parse({"contacts", "--burn"}));
 }
 
 TEST("cli: surplus positionals are rejected per command") {
@@ -367,6 +391,12 @@ TEST("cli: group-send takes repeated --to flags and one optional message") {
   CHECK_EQ(two.group_members[1], std::string("carol"));
   CHECK(two.message.has_value());
   CHECK_EQ(*two.message, std::string("hello group"));
+
+  const Options file = parse({"group-send", "--to", "bob", "--to", "carol",
+                              "--file", "/tmp/message.bin", "--ttl", "1h", "--burn"});
+  CHECK_EQ(file.file_path, std::string("/tmp/message.bin"));
+  CHECK(file.ttl == ephemeral::Ttl::OneHour);
+  CHECK(file.burn_after_reading);
 
   // The count is checked by the command, not the parser: `--to` is grammatical
   // with any number, and the command has the vault to resolve the names.

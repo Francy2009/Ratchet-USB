@@ -13,6 +13,7 @@
 #include "ratchet/bip39.hpp"
 #include "ratchet/cli.hpp"
 #include "ratchet/command_io.hpp"
+#include "ratchet/ephemeral.hpp"
 #include "ratchet/file.hpp"
 #include "ratchet/gui_format.hpp"
 #include "ratchet/group.hpp"
@@ -870,6 +871,9 @@ int cmd_group_send(const Options& opts) {
   if (opts.stdin_payload_bytes && opts.message.has_value()) {
     throw Error("--stdin-payload and a message cannot be combined");
   }
+  if (!opts.file_path.empty() && (opts.stdin_payload_bytes || opts.message.has_value())) {
+    throw Error("--file cannot be combined with a message or --stdin-payload");
+  }
   require_known_usb_for_payload(opts);
   const fs::path usb = require_usb_path(opts);
   const fs::path path = vault::vault_path(usb);
@@ -914,12 +918,31 @@ int cmd_group_send(const Options& opts) {
   }
 
   if (!opts.stdin_payload_bytes) {
-    plaintext = read_text_arg_or_stdin(
-        opts.message, "Message (end with Ctrl-D): ",
-        message::kMaxPlaintextBytes);
-    if (plaintext.empty()) {
-      throw Error("message must not be empty");
+    if (!opts.file_path.empty()) {
+      std::vector<uint8_t> raw = file::load_file(fs::path(opts.file_path));
+      struct RawWipe {
+        std::vector<uint8_t>& bytes;
+        ~RawWipe() { wipe_vector(bytes); }
+      } raw_wipe{raw};
+      const std::string ext = file::extension_for(fs::path(opts.file_path), raw);
+      plaintext = file::encode_file_payload(raw, ext);
+    } else {
+      plaintext = read_text_arg_or_stdin(
+          opts.message, "Message (end with Ctrl-D): ",
+          message::kMaxPlaintextBytes);
+      if (plaintext.empty()) {
+        throw Error("message must not be empty");
+      }
     }
+  }
+
+  // An ephemeral mark wraps the text (or the framed file) before it reaches
+  // the ratchet, so it is AEAD-authenticated and never touches the wire.
+  if (ephemeral::is_ephemeral({opts.ttl, opts.burn_after_reading})) {
+    std::string wrapped = ephemeral::encode(
+        plaintext, {opts.ttl, opts.burn_after_reading});
+    wipe_string(plaintext);
+    plaintext = std::move(wrapped);
   }
 
   IdentitySigningSecretKey identity_sk;
@@ -1049,6 +1072,15 @@ int cmd_send(const Options& opts) {
     }
   }
 
+  // An ephemeral mark wraps the text (or the framed file) before it reaches
+  // the ratchet, so it is AEAD-authenticated and never touches the wire.
+  if (ephemeral::is_ephemeral({opts.ttl, opts.burn_after_reading})) {
+    std::string wrapped = ephemeral::encode(
+        plaintext, {opts.ttl, opts.burn_after_reading});
+    wipe_string(plaintext);
+    plaintext = std::move(wrapped);
+  }
+
   IdentitySigningSecretKey identity_sk;
   IdentitySigningPublicKey identity_pk;
   derive_identity(store.seed, identity_sk, identity_pk);
@@ -1114,10 +1146,6 @@ int cmd_recv(const Options& opts) {
         std::size_t{12} * 1024u * 1024u);
   }
 
-  if (group::looks_like_group(block) && opts.structured_output) {
-    throw Error("--structured-output does not support group messages yet");
-  }
-
   OpenedVault opened = unlock_vault(path);
   store::VaultStore& store = opened.store;
   ensure_no_pending_outbox(usb);
@@ -1144,8 +1172,25 @@ int cmd_recv(const Options& opts) {
 
   // The decrypted body is an ordinary std::string because it has to leave the
   // ratchet and reach the terminal. It still must not survive an exception from
-  // file decoding, output or a later vault save.
+  // unwrapping, file decoding, output or a later vault save, so the guard is
+  // installed before the first thing that can throw.
   StringWipe wipe_plaintext(result.plaintext);
+
+  // The expiry rides inside the ratchet plaintext, outside-in before the
+  // file frame: unwrap it first so what follows sees the text or file the
+  // sender actually wrote. A malformed header throws rather than showing.
+  ephemeral::Expiry expiry{};
+  if (std::optional<ephemeral::Decoded> unwrapped =
+          ephemeral::decode(result.plaintext)) {
+    expiry = unwrapped->expiry;
+    // swap() cannot allocate, so a throw here cannot leave the decrypted
+    // body in a local that is destroyed without being wiped. `inner` then
+    // holds the old header+body and is wiped explicitly.
+    std::string inner = std::move(unwrapped->body);
+    result.plaintext.swap(inner);
+    wipe_string(inner);
+  }
+  const bool is_ephemeral = ephemeral::is_ephemeral(expiry);
 
   app::save_vault(path, store, opened.params, opened.passphrase);
 
@@ -1155,6 +1200,19 @@ int cmd_recv(const Options& opts) {
   }
   if (result.session_established) {
     std::cerr << "(new session established with '" << alias << "')\n";
+  }
+  // Best-effort and receiver-side: this only tells the human what the sender
+  // asked for. It stops neither screenshots, copies nor a modified client.
+  if (is_ephemeral) {
+    std::cerr << "(ephemeral";
+    if (expiry.ttl != ephemeral::Ttl::None) {
+      std::cerr << ": expires in " << ephemeral::ttl_label(expiry.ttl);
+    }
+    if (expiry.burn_after_reading) {
+      std::cerr << (expiry.ttl != ephemeral::Ttl::None ? ", burn after reading"
+                                                        : ": burn after reading");
+    }
+    std::cerr << ")\n";
   }
   if (!store.contacts[result.contact_index].verified) {
     std::cerr << "warning: '" << alias
@@ -1188,6 +1246,8 @@ int cmd_recv(const Options& opts) {
   // writes the message body has to know, so the block stays the last thing in
   // the stream and a sender's text cannot be mistaken for it.
   gui_format::RecvResult structured_result;
+  structured_result.ttl = ephemeral::ttl_label(expiry.ttl);
+  structured_result.burn = expiry.burn_after_reading;
   // `RecvResult::path` is a string_view. The string that backs it has to
   // outlive the try block below, because write_recv_result runs at the very
   // end of this function.

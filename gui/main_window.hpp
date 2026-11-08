@@ -16,6 +16,7 @@
 class QCheckBox;
 class QCloseEvent;
 class QComboBox;
+class QGroupBox;
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
@@ -62,6 +63,21 @@ class MainWindow : public QMainWindow {
   void refreshContacts();
   void parseContacts(const QString& text);
   QComboBox* makeAliasCombo(const QString& placeholder);
+  // Multi-recipient compose: the combo picks one contact, "Aggiungi" moves
+  // it into sendRecipients_, shown as one chip per recipient with a remove
+  // button. One recipient sends with `send`, two or more with `group-send`.
+  // The list (not a widget index) is what the send handler reads, so a
+  // contact list that changed in between cannot redirect the message.
+  void addSendRecipient(const QString& alias);
+  void removeSendRecipient(const QString& alias);
+  void syncRecipientChips();
+  // Inputs are consumed by a successful command and must not linger: the
+  // compose box held plaintext, and a stale recipient or block invites
+  // sending the same thing twice. Failures keep everything for a retry.
+  void clearPlainEdit(QPlainTextEdit* edit);
+  void clearSendInputs();
+  void clearAddInputs();
+  void clearRecvInput();
 
   // `flags` and `positionals` are kept apart on purpose. The CLI re-parses
   // anything that starts with "-" as an option, so an alias that happens to
@@ -132,20 +148,40 @@ class MainWindow : public QMainWindow {
   // The one place a command's result is shown. `detail` (when not empty) goes
   // into a scrollable read-only box with a Copy button, so a large block never
   // stretches the window.
+  // `auto_close_ms` closes the dialog (wiping what it showed) after that
+  // long: the TTL of an ephemeral message, enforced where it can be -- on
+  // screen. It stops neither screenshots, copies nor a modified binary.
   void showResultDialog(bool ok, const QString& title, const QString& message,
-                        const QString& detail,
-                        const QString& command = QString());
+                        const QString& detail, const QString& command = QString(),
+                        int auto_close_ms = 0);
   QString extractError(const QString& text) const;
   QString commandTitle(const QString& command) const;
 
   // A received file: says what arrived and, when it was staged, offers to open
   // its folder in the file manager (the same staging ratchet-usb uses).
+  // `expiry_note`/`auto_close_ms` carry the sender's expiry choice when the
+  // message was ephemeral: the note is shown, and the dialog closes itself
+  // (wiping what it showed) when the TTL runs out.
   void showFileDialog(const QString& ext, const QString& path,
-                      const QString& detail);
+                      const QString& detail, const QString& expiry_note = {},
+                      int auto_close_ms = 0);
   // The dispatch behind both recv paths (a staged file, and a file type the
   // CLI refused to open, which exits non-zero).
   void showRecvFile(const ratchet::gui::ParsedRecvResult& parsed,
                     const QString& stderr_text);
+  // Sender-chosen expiry for the *next* send only: the combo holds the TTL
+  // bucket ("off" means ordinary) and the box the burn flag. Both ride in
+  // argv, which is fine -- they are the sender's choice, not a secret --
+  // while the message itself keeps travelling on stdin.
+  QString sendTtl() const;
+  bool sendBurn() const;
+  // Human line for the expiry the CLI reported, or empty for an ordinary
+  // message. Built from the parsed block only, never from the sender's text.
+  static QString expiryNotice(const ratchet::gui::ParsedRecvResult& parsed);
+  // Milliseconds the window keeps an ephemeral message on screen before
+  // closing its dialog (0 for ordinary messages and burn-only ones, which
+  // the user dismisses). Fits in an int even for the longest bucket.
+  static int expiryTimeoutMs(const QString& ttl);
 
   // Opens `dir` in the host file manager. Host programs are launched with a
   // cleaned environment so they do not load this process's bundled libraries.
@@ -177,12 +213,33 @@ class MainWindow : public QMainWindow {
   QComboBox* removeAliasCombo_ = nullptr;
 
   QComboBox* sendAliasCombo_ = nullptr;
+  QWidget* sendRecipientsBox_ = nullptr;  // chip container, objectName for tests
+  QStringList sendRecipients_;  // the recipients the next send goes to
+  QComboBox* ttlCombo_ = nullptr;  // per-message expiry: off, 1h, 24h or 7d
+  QCheckBox* burnCheck_ = nullptr;  // burn after reading for the next send
   QPlainTextEdit* sendMessageEdit_ = nullptr;
   QLineEdit* sendFileEdit_ = nullptr;
   QPlainTextEdit* recvBlockEdit_ = nullptr;
 
+  // A single Fusion-based look for the whole window: one palette and one
+  // style sheet, applied once, so every tab, dialog and popup shares the
+  // same spacing, radii and accent instead of each screen inventing its own.
+  void applyTheme();
+  // Keeps the access panel's state in one place: the group title, the status
+  // line and the lock button always agree on whether the vault is open.
+  void updateAccessState();
+  // The recipients the send button will use: the chips when at least one was
+  // added, otherwise the combo on its own (the old one-contact flow).
+  QStringList effectiveRecipients() const;
+  // The two meta lines under the compose box: who the message goes to, and
+  // how big it is against the 4 MiB plaintext ceiling.
+  void updateSendMeta();
+
+  QGroupBox* accessGroup_ = nullptr;
   QTabWidget* tabs_ = nullptr;
   QList<QPushButton*> actionButtons_;
+  QLabel* recipientCountLabel_ = nullptr;  // objectName for tests
+  QLabel* messageSizeLabel_ = nullptr;     // objectName for tests
 
   std::unique_ptr<QTemporaryFile> stagedCard_;
   QString lastCommand_;

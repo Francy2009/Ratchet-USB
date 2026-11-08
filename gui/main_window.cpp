@@ -35,8 +35,11 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScrollArea>
+#include <QShortcut>
 #include <QSpinBox>
 #include <QStatusBar>
+#include <QStyleFactory>
+#include <QTimer>
 #include <QStyle>
 #include <QTabWidget>
 #include <QTemporaryFile>
@@ -53,6 +56,7 @@
 #include "host_env.hpp"
 #include "payload_input.hpp"
 #include "ratchet/gui_format.hpp"
+#include "ratchet/message.hpp"
 
 namespace {
 
@@ -197,8 +201,128 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   }
 }
 
+void MainWindow::applyTheme() {
+  // Fusion draws every control itself instead of deferring to the desktop
+  // theme, so the window looks the same on every machine and the headless
+  // test sees the same widgets. The palette is deliberately light and fixed:
+  // a security tool should look identical everywhere, not inherit an
+  // unreviewed dark theme that could wash out a warning.
+  QApplication::setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
+
+  QPalette palette;
+  palette.setColor(QPalette::Window, QColor(0xf4, 0xf5, 0xf7));
+  palette.setColor(QPalette::WindowText, QColor(0x1c, 0x1e, 0x21));
+  palette.setColor(QPalette::Base, Qt::white);
+  palette.setColor(QPalette::AlternateBase, QColor(0xed, 0xf0, 0xf4));
+  palette.setColor(QPalette::Text, QColor(0x1c, 0x1e, 0x21));
+  palette.setColor(QPalette::PlaceholderText, QColor(0x7a8494));
+  palette.setColor(QPalette::Button, QColor(0xe8, 0xec, 0xf1));
+  palette.setColor(QPalette::ButtonText, QColor(0x1c, 0x1e, 0x21));
+  palette.setColor(QPalette::Highlight, QColor(0x2f, 0x6f, 0xed));
+  palette.setColor(QPalette::HighlightedText, Qt::white);
+  palette.setColor(QPalette::Link, QColor(0x2f, 0x6f, 0xed));
+  palette.setColor(QPalette::ToolTipBase, Qt::white);
+  palette.setColor(QPalette::ToolTipText, QColor(0x1c, 0x1e, 0x21));
+  QApplication::setPalette(palette);
+
+  // Cards for the sections, one accent for the actions that move the vault
+  // forward, pills for the recipients. Everything else stays neutral: colour
+  // marks what acts, not what informs.
+  setStyleSheet(QStringLiteral(
+      "QGroupBox {"
+      "  background: #ffffff;"
+      "  border: 1px solid #dfe3ea;"
+      "  border-radius: 8px;"
+      "  margin-top: 14px;"
+      "  padding: 10px 12px 12px 12px;"
+      "}"
+      "QGroupBox::title {"
+      "  subcontrol-origin: margin;"
+      "  subcontrol-position: top left;"
+      "  left: 10px;"
+      "  padding: 0 4px;"
+      "  color: #1c1e21;"
+      "}"
+      "QPushButton {"
+      "  padding: 7px 14px;"
+      "  border: 1px solid #c9d1dc;"
+      "  border-radius: 6px;"
+      "  background: #eef1f6;"
+      "}"
+      "QPushButton:hover { background: #e2e8f1; border-color: #b6c1d1; }"
+      "QPushButton:pressed { background: #d6dde8; }"
+      "QPushButton:disabled { color: #8a94a6; background: #f0f2f5;"
+      "  border-color: #dfe3ea; }"
+      "QPushButton[primary=\"true\"] {"
+      "  background: #2f6fed;"
+      "  border-color: #2f6fed;"
+      "  color: #ffffff;"
+      "  font-weight: bold;"
+      "}"
+      "QPushButton[primary=\"true\"]:hover {"
+      "  background: #2559d6; border-color: #2559d6; }"
+      "QPushButton[primary=\"true\"]:pressed {"
+      "  background: #1f4cb4; border-color: #1f4cb4; }"
+      "QPushButton[primary=\"true\"]:disabled {"
+      "  background: #a8b4c8; border-color: #a8b4c8; color: #f2f4f8; }"
+      "QLineEdit, QPlainTextEdit, QComboBox, QSpinBox {"
+      "  padding: 6px 8px;"
+      "  border: 1px solid #c9d1dc;"
+      "  border-radius: 6px;"
+      "  background: #ffffff;"
+      "  selection-background-color: #2f6fed;"
+      "}"
+      "QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus,"
+      "QSpinBox:focus { border: 1px solid #2f6fed; }"
+      "QLineEdit:disabled, QPlainTextEdit:disabled, QComboBox:disabled {"
+      "  background: #f0f2f5; color: #8a94a6; }"
+      "QTabWidget::pane {"
+      "  border: 1px solid #dfe3ea;"
+      "  border-radius: 8px;"
+      "  background: #ffffff;"
+      "}"
+      "QTabBar::tab {"
+      "  padding: 8px 18px;"
+      "  margin-right: 4px;"
+      "  margin-top: 4px;"
+      "  border-top-left-radius: 8px;"
+      "  border-top-right-radius: 8px;"
+      "  background: #e8ecf1;"
+      "  color: #3c4350;"
+      "}"
+      "QTabBar::tab:selected {"
+      "  background: #ffffff;"
+      "  color: #1c1e21;"
+      "  border: 1px solid #dfe3ea;"
+      "  border-bottom: none;"
+      "  margin-top: 0px;"
+      "}"
+      "QStatusBar { background: #eceff3; color: #3c4350; }"
+      "QStatusBar::item { border: none; }"
+      "QScrollArea { border: none; background: transparent; }"
+      "QCheckBox { spacing: 6px; }"
+      "QToolTip {"
+      "  background: #ffffff;"
+      "  color: #1c1e21;"
+      "  border: 1px solid #c9d1dc;"
+      "  padding: 4px;"
+      "}"
+      "QFrame[chipFrame=\"true\"] {"
+      "  background: #e8eefc;"
+      "  border: 1px solid #c4d3f7;"
+      "  border-radius: 12px;"
+      "}"
+      "QLabel[count=\"true\"], QLabel[hint=\"true\"] { color: #5b6472; }"
+      "QLabel#vaultWarningLabel { color: #9a3d00; font-weight: bold; }"
+      "QToolButton { border: none; border-radius: 10px; padding: 2px 6px; }"
+      "QToolButton:hover { background: #e2e8f1; }"
+      "QToolButton[destructive=\"true\"]:hover {"
+      "  background: #fde8e8; color: #b3261e; }"));
+}
+
 void MainWindow::buildUi() {
   setWindowTitle(tr("Ratchet-USB"));
+  applyTheme();
 
   auto* settings = menuBar()->addMenu(tr("Impostazioni"));
   QAction* choose_bin = settings->addAction(tr("Scegli binario CLI..."));
@@ -248,8 +372,10 @@ QWidget* MainWindow::buildAccessPanel() {
   auto* usb_buttons_layout = new QHBoxLayout(usb_buttons);
   usb_buttons_layout->setContentsMargins(0, 0, 0, 0);
   usb_buttons_layout->setSpacing(6);
-  auto* detect_button = new QPushButton(tr("Rileva chiavetta"));
-  auto* browse_button = new QPushButton(tr("Sfoglia..."));
+  auto* detect_button = new QPushButton(
+      style()->standardIcon(QStyle::SP_ComputerIcon), tr("Rileva chiavetta"));
+  auto* browse_button = new QPushButton(
+      style()->standardIcon(QStyle::SP_DirOpenIcon), tr("Sfoglia..."));
   connect(detect_button, &QPushButton::clicked, this,
           &MainWindow::detectUsbDrive);
   connect(browse_button, &QPushButton::clicked, this,
@@ -286,6 +412,7 @@ QWidget* MainWindow::buildAccessPanel() {
   unlockButton_ = new QPushButton(tr("Accedi"));
   unlockButton_->setObjectName(QStringLiteral("unlockButton"));
   unlockButton_->setDefault(true);
+  unlockButton_->setProperty("primary", true);
   lockButton_ = new QPushButton(tr("Blocca"));
   auto* init_button = new QPushButton(tr("Crea un nuovo vault..."));
   connect(unlockButton_, &QPushButton::clicked, this, &MainWindow::doUnlock);
@@ -308,17 +435,40 @@ QWidget* MainWindow::buildAccessPanel() {
   vaultWarningLabel_->setObjectName(QStringLiteral("vaultWarningLabel"));
   vaultWarningLabel_->setTextFormat(Qt::PlainText);
   vaultWarningLabel_->setWordWrap(true);
-  vaultWarningLabel_->setStyleSheet(
-      QStringLiteral("QLabel { color: #a04000; }"));
   vaultWarningLabel_->hide();
   layout->addWidget(vaultWarningLabel_, 4, 0, 1, 3);
 
   statusLabel_ = new QLabel;
+  statusLabel_->setObjectName(QStringLiteral("statusLabel"));
   statusLabel_->setTextFormat(Qt::PlainText);
+  statusLabel_->setWordWrap(true);
   layout->addWidget(statusLabel_, 5, 0, 1, 3);
 
   updateVaultPathLabel();
-  return makeGroup(tr("Accesso al vault"), layout);
+  accessGroup_ = makeGroup(tr("Accesso al vault"), layout);
+  updateAccessState();
+  return accessGroup_;
+}
+
+void MainWindow::updateAccessState() {
+  if (accessGroup_ != nullptr) {
+    accessGroup_->setTitle(unlocked_ ? tr("Accesso al vault — sbloccato")
+                                     : tr("Accesso al vault — bloccato"));
+  }
+  if (statusLabel_ != nullptr) {
+    statusLabel_->setText(
+        unlocked_
+            ? tr("Vault sbloccato: puoi usare le schede qui sotto.")
+            : tr("Vault bloccato: sbloccalo per usare le schede."));
+    // Inline on purpose: this is live state, not decoration, and it must
+    // win over the style sheet whatever the theme does.
+    statusLabel_->setStyleSheet(
+        unlocked_ ? QStringLiteral("QLabel { color: #1a7f37; }")
+                  : QStringLiteral("QLabel { color: #5b6472; }"));
+  }
+  if (lockButton_ != nullptr) {
+    lockButton_->setEnabled(unlocked_);
+  }
 }
 
 QWidget* MainWindow::buildVaultTab() {
@@ -360,7 +510,10 @@ QWidget* MainWindow::buildContactsTab() {
   auto* list_layout = new QGridLayout;
   auto* card_button = new QPushButton(tr("Genera card identita (card)"));
   auto* contacts_button = new QPushButton(tr("Lista contatti (contacts)"));
-  auto* refresh_button = new QPushButton(tr("Aggiorna elenco contatti"));
+  auto* refresh_button = new QPushButton(
+      style()->standardIcon(QStyle::SP_BrowserReload),
+      tr("Aggiorna elenco contatti"));
+  refresh_button->setToolTip(tr("Rilegge i contatti dal vault"));
   actionButtons_ << card_button << contacts_button << refresh_button;
   connect(card_button, &QPushButton::clicked, this,
           [this] { launchWithPassphrase(QStringLiteral("card"), {}, {}); });
@@ -375,17 +528,23 @@ QWidget* MainWindow::buildContactsTab() {
 
   auto* add_layout = new QGridLayout;
   addAliasEdit_ = new QLineEdit;
+  addAliasEdit_->setObjectName(QStringLiteral("addAliasEdit"));
   addAliasEdit_->setPlaceholderText(tr("alias del contatto"));
   addCardFileEdit_ = new QLineEdit;
+  addCardFileEdit_->setObjectName(QStringLiteral("addCardFileEdit"));
   addCardFileEdit_->setPlaceholderText(
       tr("file card (opzionale; altrimenti incolla sotto)"));
-  auto* add_file_button = new QPushButton(tr("Da file..."));
+  auto* add_file_button = new QPushButton(
+      style()->standardIcon(QStyle::SP_DialogOpenButton), tr("Da file..."));
   connect(add_file_button, &QPushButton::clicked, this,
           &MainWindow::chooseCardFile);
   addCardEdit_ = new QPlainTextEdit;
+  addCardEdit_->setObjectName(QStringLiteral("addCardEdit"));
   addCardEdit_->setPlaceholderText(tr("incolla qui la card ricevuta dal contatto"));
   addCardEdit_->setMaximumHeight(100);
   auto* add_button = new QPushButton(tr("Aggiungi contatto (add)"));
+  add_button->setObjectName(QStringLiteral("addContactButton"));
+  add_button->setProperty("primary", true);
   actionButtons_.append(add_button);
   connect(add_button, &QPushButton::clicked, this, [this] {
     const QString alias = addAliasEdit_->text().trimmed();
@@ -419,8 +578,14 @@ QWidget* MainWindow::buildContactsTab() {
   trustAliasCombo_->setObjectName(QStringLiteral("trustAliasCombo"));
   auto* trust_button = new QPushButton(tr("Segna verificato (trust)"));
   trust_button->setObjectName(QStringLiteral("trustButton"));
+  trust_button->setToolTip(
+      tr("Segna il contatto come verificato dopo averne controllato "
+         "l'impronta fuori banda"));
   resetAliasCombo_ = makeAliasCombo(tr("alias (dalla lista)"));
   auto* reset_button = new QPushButton(tr("Azzera sessione (reset-session)"));
+  reset_button->setToolTip(
+      tr("Butta le chiavi della sessione: il prossimo messaggio "
+         "richiede una nuova apertura autenticata"));
   actionButtons_ << trust_button << reset_button;
   connect(trust_button, &QPushButton::clicked, this, [this] {
     const QString alias = trustAliasCombo_->currentText().trimmed();
@@ -457,6 +622,9 @@ QWidget* MainWindow::buildContactsTab() {
   auto* remove_layout = new QGridLayout;
   removeAliasCombo_ = makeAliasCombo(tr("alias (dalla lista)"));
   auto* remove_button = new QPushButton(tr("Rimuovi contatto (remove)"));
+  remove_button->setToolTip(
+      tr("Elimina il contatto e la sua sessione, chiavi comprese. "
+         "Non si può annullare."));
   actionButtons_ << remove_button;
   connect(remove_button, &QPushButton::clicked, this, [this] {
     const QString alias = removeAliasCombo_->currentText().trimmed();
@@ -492,61 +660,185 @@ QWidget* MainWindow::buildMessagesTab() {
   auto* send_layout = new QGridLayout;
   sendAliasCombo_ = makeAliasCombo(tr("destinatario (dalla lista contatti)"));
   sendAliasCombo_->setObjectName(QStringLiteral("sendAliasCombo"));
+  auto* add_recipient_button = new QPushButton(tr("Aggiungi"));
+  add_recipient_button->setObjectName(QStringLiteral("addRecipientButton"));
+  add_recipient_button->setToolTip(
+      tr("Aggiunge il destinatario ai selezionati (per un messaggio di gruppo)"));
+  connect(add_recipient_button, &QPushButton::clicked, this, [this] {
+    addSendRecipient(sendAliasCombo_->currentText());
+  });
+  sendRecipientsBox_ = new QWidget;
+  sendRecipientsBox_->setObjectName(QStringLiteral("sendRecipients"));
+  {
+    auto* chips_layout = new QHBoxLayout(sendRecipientsBox_);
+    chips_layout->setContentsMargins(0, 0, 0, 0);
+    chips_layout->setSpacing(6);
+  }
+  auto* recipients_scroll = new QScrollArea;
+  recipients_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+  recipients_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  recipients_scroll->setWidgetResizable(true);
+  recipients_scroll->setWidget(sendRecipientsBox_);
+  recipients_scroll->setFixedHeight(52);
   sendFileEdit_ = new QLineEdit;
+  sendFileEdit_->setObjectName(QStringLiteral("sendFileEdit"));
   sendFileEdit_->setPlaceholderText(tr("file da cifrare (opzionale; --file)"));
-  auto* send_file_button = new QPushButton(tr("File..."));
+  auto* send_file_button = new QPushButton(
+      style()->standardIcon(QStyle::SP_DialogOpenButton), tr("File..."));
+  send_file_button->setToolTip(tr("Scegli un file da cifrare al posto del testo"));
   connect(send_file_button, &QPushButton::clicked, this,
           &MainWindow::chooseSendFile);
   sendMessageEdit_ = new QPlainTextEdit;
   sendMessageEdit_->setObjectName(QStringLiteral("sendMessageEdit"));
   sendMessageEdit_->setPlaceholderText(tr("messaggio in chiaro da cifrare"));
   sendMessageEdit_->setMaximumHeight(100);
-  auto* send_button = new QPushButton(tr("Cifra e genera blocco (send)"));
+  auto* send_button = new QPushButton(
+      style()->standardIcon(QStyle::SP_ArrowForward),
+      tr("Cifra e genera blocco (send / group-send)"));
   send_button->setObjectName(QStringLiteral("sendButton"));
+  send_button->setProperty("primary", true);
+  send_button->setToolTip(tr("Cifra il messaggio per i destinatari (Ctrl+Invio)"));
   actionButtons_.append(send_button);
+  for (const int key : {Qt::Key_Return, Qt::Key_Enter}) {
+    auto* send_shortcut =
+        new QShortcut(QKeySequence(Qt::CTRL | key), sendMessageEdit_);
+    send_shortcut->setContext(Qt::WidgetShortcut);
+    connect(send_shortcut, &QShortcut::activated, send_button,
+            &QPushButton::click);
+  }
   connect(send_button, &QPushButton::clicked, this, [this] {
-    const QString alias = sendAliasCombo_->currentText().trimmed();
-    if (alias.isEmpty()) {
-      warn(tr("Serve un destinatario."));
+    const QStringList recipients = effectiveRecipients();
+    if (recipients.isEmpty()) {
+      warn(tr("Serve un destinatario: sceglilo e premi Aggiungi, oppure "
+              "lascialo nella tendina per un messaggio singolo."));
       return;
     }
     const QString file = sendFileEdit_->text().trimmed();
-    QStringList flags;
-    const QStringList positionals{alias};
+    // The expiry rides inside the encrypted plaintext (see ephemeral.hpp);
+    // the flags only name the bucket, which is the sender's choice and no
+    // secret, while the message itself keeps travelling on stdin.
+    QStringList expiry_flags;
+    const QString ttl = sendTtl();
+    if (ttl != QStringLiteral("off")) {
+      expiry_flags << "--ttl" << ttl;
+    }
+    if (sendBurn()) {
+      expiry_flags << "--burn";
+    }
+    if (recipients.size() == 1) {
+      QStringList flags = expiry_flags;
+      const QStringList positionals{recipients.first()};
+      if (!file.isEmpty()) {
+        flags << "--file" << file;
+        launchWithPassphrase(QStringLiteral("send"), flags, positionals);
+      } else {
+        const QString message = sendMessageEdit_->toPlainText();
+        if (message.isEmpty()) {
+          warn(tr("Scrivi un messaggio oppure scegli un file."));
+          return;
+        }
+        // The plaintext never enters argv (readable in /proc by every process
+        // of this user); it goes on stdin, before the passphrase, framed by
+        // its byte count.
+        QByteArray payload = message.toUtf8();
+        launchWithPayload(QStringLiteral("send"), flags, positionals, payload);
+        ratchet::gui::wipeByteArray(payload);
+      }
+      return;
+    }
+    // group-send wraps one content key per member through the existing 1:1
+    // sessions; the CLI refuses the send when a recipient is unknown or the
+    // session cannot move, and nothing is committed before that.
+    QStringList flags = expiry_flags;
+    for (const QString& recipient : recipients) {
+      flags << "--to" << recipient;
+    }
     if (!file.isEmpty()) {
       flags << "--file" << file;
-      launchWithPassphrase(QStringLiteral("send"), flags, positionals);
-    } else {
-      const QString message = sendMessageEdit_->toPlainText();
-      if (message.isEmpty()) {
-        warn(tr("Scrivi un messaggio oppure scegli un file."));
-        return;
-      }
-      // The plaintext never enters argv (readable in /proc by every process of
-      // this user); it goes on stdin, before the passphrase, framed by its
-      // byte count.
-      QByteArray payload = message.toUtf8();
-      launchWithPayload(QStringLiteral("send"), flags, positionals, payload);
-      ratchet::gui::wipeByteArray(payload);
+      launchWithPassphrase(QStringLiteral("group-send"), flags, {});
+      return;
     }
+    const QString message = sendMessageEdit_->toPlainText();
+    if (message.isEmpty()) {
+      warn(tr("Scrivi un messaggio per il gruppo."));
+      return;
+    }
+    QByteArray payload = message.toUtf8();
+    launchWithPayload(QStringLiteral("group-send"), flags, {}, payload);
+    ratchet::gui::wipeByteArray(payload);
   });
+  // A per-message choice, not a setting: the selector goes back to "off"
+  // after every successful send (see clearSendInputs), so the next message
+  // is ordinary unless the sender says otherwise. The buckets are coarse on
+  // purpose -- a free-form duration would fingerprint the message.
+  ttlCombo_ = new QComboBox;
+  ttlCombo_->setObjectName(QStringLiteral("ttlCombo"));
+  ttlCombo_->addItem(tr("Nessuna scadenza"), QStringLiteral("off"));
+  ttlCombo_->addItem(tr("1 ora"), QStringLiteral("1h"));
+  ttlCombo_->addItem(tr("24 ore"), QStringLiteral("24h"));
+  ttlCombo_->addItem(tr("7 giorni"), QStringLiteral("7d"));
+  burnCheck_ = new QCheckBox(tr("Distruggi dopo lettura"));
+  burnCheck_->setObjectName(QStringLiteral("burnCheck"));
+  burnCheck_->setToolTip(
+      tr("Il destinatario vede il messaggio una volta sola; chiuderlo lo cancella."));
   send_layout->addWidget(new QLabel(tr("A:")), 0, 0);
-  send_layout->addWidget(sendAliasCombo_, 0, 1, 1, 2);
-  send_layout->addWidget(new QLabel(tr("File:")), 1, 0);
-  send_layout->addWidget(sendFileEdit_, 1, 1);
-  send_layout->addWidget(send_file_button, 1, 2);
-  send_layout->addWidget(sendMessageEdit_, 2, 0, 1, 3);
-  send_layout->addWidget(send_button, 3, 0, 1, 3);
-  layout->addWidget(makeGroup(tr("Invia (send)"), send_layout));
+  send_layout->addWidget(sendAliasCombo_, 0, 1);
+  send_layout->addWidget(add_recipient_button, 0, 2);
+  send_layout->addWidget(new QLabel(tr("Destinatari:")), 1, 0);
+  send_layout->addWidget(recipients_scroll, 1, 1, 1, 2);
+  send_layout->addWidget(new QLabel(tr("Scadenza:")), 2, 0);
+  send_layout->addWidget(ttlCombo_, 2, 1);
+  send_layout->addWidget(burnCheck_, 2, 2);
+  send_layout->addWidget(new QLabel(tr("File:")), 3, 0);
+  send_layout->addWidget(sendFileEdit_, 3, 1);
+  send_layout->addWidget(send_file_button, 3, 2);
+  send_layout->addWidget(sendMessageEdit_, 4, 0, 1, 3);
+  // Live meta lines: who the message goes to, and how big it is against the
+  // 4 MiB plaintext ceiling. Read-only state, not controls.
+  recipientCountLabel_ = new QLabel;
+  recipientCountLabel_->setObjectName(QStringLiteral("recipientCountLabel"));
+  recipientCountLabel_->setProperty("count", true);
+  recipientCountLabel_->setTextFormat(Qt::PlainText);
+  messageSizeLabel_ = new QLabel;
+  messageSizeLabel_->setObjectName(QStringLiteral("messageSizeLabel"));
+  messageSizeLabel_->setProperty("count", true);
+  messageSizeLabel_->setTextFormat(Qt::PlainText);
+  messageSizeLabel_->setAlignment(Qt::AlignRight);
+  messageSizeLabel_->setToolTip(
+      tr("Dimensione del testo o del file contro il limite di 4 MiB"));
+  auto* meta_layout = new QHBoxLayout;
+  meta_layout->setContentsMargins(0, 0, 0, 0);
+  meta_layout->addWidget(recipientCountLabel_);
+  meta_layout->addStretch(1);
+  meta_layout->addWidget(messageSizeLabel_);
+  send_layout->addLayout(meta_layout, 5, 0, 1, 3);
+  send_layout->addWidget(send_button, 6, 0, 1, 3);
+  layout->addWidget(makeGroup(tr("Invia (send / group-send)"), send_layout));
+  connect(sendAliasCombo_->lineEdit(), &QLineEdit::textChanged, this,
+          [this] { updateSendMeta(); });
+  connect(sendMessageEdit_, &QPlainTextEdit::textChanged, this,
+          [this] { updateSendMeta(); });
+  syncRecipientChips();
 
   auto* recv_layout = new QVBoxLayout;
   recvBlockEdit_ = new QPlainTextEdit;
   recvBlockEdit_->setObjectName(QStringLiteral("recvBlockEdit"));
   recvBlockEdit_->setPlaceholderText(tr("incolla il blocco ricevuto da decifrare"));
   recvBlockEdit_->setMaximumHeight(130);
-  auto* recv_button = new QPushButton(tr("Decifra blocco (recv)"));
+  auto* recv_button = new QPushButton(
+      style()->standardIcon(QStyle::SP_ArrowDown),
+      tr("Decifra blocco (recv)"));
   recv_button->setObjectName(QStringLiteral("recvButton"));
+  recv_button->setProperty("primary", true);
+  recv_button->setToolTip(tr("Decifra il blocco incollato sopra (Ctrl+Invio)"));
   actionButtons_.append(recv_button);
+  for (const int key : {Qt::Key_Return, Qt::Key_Enter}) {
+    auto* recv_shortcut =
+        new QShortcut(QKeySequence(Qt::CTRL | key), recvBlockEdit_);
+    recv_shortcut->setContext(Qt::WidgetShortcut);
+    connect(recv_shortcut, &QShortcut::activated, recv_button,
+            &QPushButton::click);
+  }
   connect(recv_button, &QPushButton::clicked, this, [this] {
     const QString block = recvBlockEdit_->toPlainText();
     if (block.trimmed().isEmpty()) {
@@ -632,7 +924,10 @@ void MainWindow::chooseCardFile() {
 
 void MainWindow::chooseSendFile() {
   const QString path = QFileDialog::getOpenFileName(this, tr("Apri un file"));
-  if (!path.isEmpty()) sendFileEdit_->setText(path);
+  if (!path.isEmpty()) {
+    sendFileEdit_->setText(path);
+    updateSendMeta();
+  }
 }
 
 void MainWindow::doUnlock() {
@@ -656,9 +951,8 @@ void MainWindow::doLock() {
   // dropping them would make a retry after unlocking start from nothing.
   clearSensitiveState(/*include_unsent_input=*/false);
   // The warning described the vault that was open. Leaving it on screen next to
-  // "Non connesso" would report a state that no longer exists.
+  // a locked panel would report a state that no longer exists.
   setVaultWarnings(QString());
-  statusLabel_->setText(tr("Non connesso"));
 }
 
 void MainWindow::updateVaultPathLabel() {
@@ -797,7 +1091,226 @@ void MainWindow::parseContacts(const QString& text) {
           ? tr("Nessun contatto nel vault.")
           : tr("Contatti disponibili: %1").arg(aliases.join(QStringLiteral(", "))),
       6000);
+
+  // A contact list that changed since the recipients were picked must not
+  // silently redirect a group message: drop whoever is gone. The CLI would
+  // refuse the unknown alias anyway; this keeps the chips honest before that.
+  QStringList pruned;
+  for (auto it = sendRecipients_.begin(); it != sendRecipients_.end();) {
+    if (!aliases.contains(*it)) {
+      pruned << *it;
+      it = sendRecipients_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  if (!pruned.isEmpty()) {
+    syncRecipientChips();
+    statusBar()->showMessage(
+        tr("Rimossi dai destinatari (non piu' nei contatti): %1")
+            .arg(pruned.join(QStringLiteral(", "))),
+        6000);
+  }
 }
+
+void MainWindow::addSendRecipient(const QString& alias) {
+  const QString name = alias.trimmed();
+  if (name.isEmpty()) {
+    warn(tr("Scegli un destinatario dalla lista e premi Aggiungi."));
+    return;
+  }
+  if (sendRecipients_.contains(name)) {
+    warn(tr("'%1' e' gia' tra i destinatari.").arg(name));
+    return;
+  }
+  sendRecipients_ << name;
+  syncRecipientChips();
+  // The combo fed the chip; clearing it invites picking the next contact
+  // instead of adding the same one twice.
+  if (sendAliasCombo_ != nullptr && sendAliasCombo_->lineEdit() != nullptr) {
+    sendAliasCombo_->lineEdit()->clear();
+  }
+}
+
+void MainWindow::removeSendRecipient(const QString& alias) {
+  sendRecipients_.removeAll(alias);
+  syncRecipientChips();
+}
+
+void MainWindow::syncRecipientChips() {
+  if (sendRecipientsBox_ == nullptr) return;
+  if (QLayout* layout = sendRecipientsBox_->layout()) {
+    while (QLayoutItem* item = layout->takeAt(0)) {
+      if (QWidget* widget = item->widget()) {
+        // Hide at once so a removed chip never lingers a frame; the deletion
+        // itself stays deferred because this can run from the chip's own
+        // remove button.
+        widget->hide();
+        widget->deleteLater();
+      }
+      delete item;
+    }
+    // An empty list reads as empty on purpose: the placeholder says where
+    // the recipients go, so no chip means no recipient.
+    if (sendRecipients_.isEmpty()) {
+      auto* hint = new QLabel(tr("Nessun riquadro: verrà usata la tendina qui sopra"));
+      hint->setEnabled(false);
+      layout->addWidget(hint);
+    }
+    for (const QString& recipient : sendRecipients_) {
+      auto* chip = new QFrame;
+      chip->setFrameStyle(QFrame::StyledPanel);
+      chip->setProperty("chipFrame", true);
+      auto* chip_layout = new QHBoxLayout(chip);
+      chip_layout->setContentsMargins(8, 2, 2, 2);
+      chip_layout->setSpacing(4);
+      auto* label = new QLabel(recipient);
+      label->setTextFormat(Qt::PlainText);
+      chip_layout->addWidget(label);
+      auto* remove = new QToolButton;
+      remove->setObjectName(QStringLiteral("removeRecipientButton"));
+      remove->setText(QStringLiteral("\u00d7"));
+      remove->setProperty("destructive", true);
+      remove->setToolTip(tr("Togli '%1' dai destinatari").arg(recipient));
+      remove->setProperty("recipient", recipient);
+      connect(remove, &QToolButton::clicked, this,
+              [this, recipient] { removeSendRecipient(recipient); });
+      chip_layout->addWidget(remove);
+      layout->addWidget(chip);
+    }
+    static_cast<QHBoxLayout*>(layout)->addStretch(1);
+    updateSendMeta();
+  }
+}
+
+QString MainWindow::sendTtl() const {
+  if (ttlCombo_ == nullptr) return QStringLiteral("off");
+  const QString ttl = ttlCombo_->currentData().toString();
+  return ttl.isEmpty() ? QStringLiteral("off") : ttl;
+}
+
+bool MainWindow::sendBurn() const {
+  return burnCheck_ != nullptr && burnCheck_->isChecked();
+}
+
+QString MainWindow::expiryNotice(
+    const ratchet::gui::ParsedRecvResult& parsed) {
+  if (parsed.ttl == QStringLiteral("off") && !parsed.burn) {
+    return {};
+  }
+  QStringList parts;
+  if (parsed.ttl != QStringLiteral("off")) {
+    parts << tr("scade tra %1").arg(parsed.ttl);
+  }
+  if (parsed.burn) {
+    parts << tr("distruggi dopo lettura");
+  }
+  return tr("Messaggio effimero: %1. Alla chiusura non resta nulla.")
+      .arg(parts.join(QStringLiteral(", ")));
+}
+
+int MainWindow::expiryTimeoutMs(const QString& ttl) {
+  if (ttl == QStringLiteral("1h")) return 60 * 60 * 1000;
+  if (ttl == QStringLiteral("24h")) return 24 * 60 * 60 * 1000;
+  // 604'800'000: the longest bucket, still far from the int limit, so no
+  // overflow however long the dialog stays up.
+  if (ttl == QStringLiteral("7d")) return 7 * 24 * 60 * 60 * 1000;
+  return 0;
+}
+
+QStringList MainWindow::effectiveRecipients() const {
+  // The chips are the recipients; when none was added, the combo itself is
+  // the single recipient, so the old one-contact flow is unchanged.
+  if (!sendRecipients_.isEmpty()) {
+    QStringList recipients = sendRecipients_;
+    recipients.removeDuplicates();
+    return recipients;
+  }
+  const QString alias =
+      sendAliasCombo_ != nullptr
+          ? sendAliasCombo_->currentText().trimmed()
+          : QString();
+  return alias.isEmpty() ? QStringList() : QStringList{alias};
+}
+
+void MainWindow::updateSendMeta() {
+  // The ceiling is on the framed plaintext the CLI encrypts (the same
+  // constant the core enforces, not a copy), so this is an approximation for
+  // text (framing adds a few bytes) -- close enough to warn before trying.
+  constexpr auto kMaxPlaintextBytes =
+      static_cast<qint64>(ratchet::message::kMaxPlaintextBytes);
+  const QStringList recipients = effectiveRecipients();
+  if (recipientCountLabel_ != nullptr) {
+    if (recipients.isEmpty()) {
+      recipientCountLabel_->setText(
+          tr("Nessun destinatario: scegli dalla tendina"));
+    } else if (recipients.size() == 1) {
+      recipientCountLabel_->setText(tr("1 destinatario: messaggio singolo"));
+    } else {
+      recipientCountLabel_->setText(
+          tr("%1 destinatari: messaggio di gruppo")
+              .arg(recipients.size()));
+    }
+  }
+  if (messageSizeLabel_ != nullptr) {
+    const QString file =
+        sendFileEdit_ != nullptr ? sendFileEdit_->text().trimmed() : QString();
+    if (!file.isEmpty()) {
+      const qint64 size = QFileInfo(file).size();
+      messageSizeLabel_->setText(
+          size < 0 ? tr("File: %1").arg(
+                           QFileInfo(file).fileName())
+                     : tr("File %1: %2 / %3 byte")
+                           .arg(QFileInfo(file).fileName())
+                           .arg(size)
+                           .arg(kMaxPlaintextBytes));
+    } else {
+      const qint64 bytes = sendMessageEdit_ != nullptr
+                               ? sendMessageEdit_->toPlainText().toUtf8().size()
+                               : 0;
+      messageSizeLabel_->setText(
+          tr("%1 / %2 byte").arg(bytes).arg(kMaxPlaintextBytes));
+    }
+  }
+}
+
+void MainWindow::clearPlainEdit(QPlainTextEdit* edit) {
+  if (edit == nullptr) return;
+  edit->clear();
+  edit->document()->clearUndoRedoStacks();
+}
+
+void MainWindow::clearSendInputs() {
+  sendRecipients_.clear();
+  syncRecipientChips();
+  if (sendAliasCombo_ != nullptr && sendAliasCombo_->lineEdit() != nullptr) {
+    sendAliasCombo_->lineEdit()->clear();
+  }
+  // The expiry was a per-message choice: leaving it on would mark the next
+  // message ephemeral by accident. Ordinary is the fail-safe default.
+  if (ttlCombo_ != nullptr) {
+    ttlCombo_->setCurrentIndex(0);
+  }
+  if (burnCheck_ != nullptr) {
+    burnCheck_->setChecked(false);
+  }
+  clearPlainEdit(sendMessageEdit_);
+  if (sendFileEdit_ != nullptr) {
+    sendFileEdit_->clear();
+  }
+}
+
+void MainWindow::clearAddInputs() {
+  if (addAliasEdit_ != nullptr) {
+    addAliasEdit_->clear();
+  }
+  if (addCardFileEdit_ != nullptr) {
+    addCardFileEdit_->clear();
+  }
+  clearPlainEdit(addCardEdit_);
+}
+
+void MainWindow::clearRecvInput() { clearPlainEdit(recvBlockEdit_); }
 
 QString MainWindow::usbPath() const { return usbEdit_->text().trimmed(); }
 
@@ -914,9 +1427,7 @@ void MainWindow::setBusy(bool busy) {
 void MainWindow::setUnlocked(bool unlocked) {
   unlocked_ = unlocked;
   tabs_->setEnabled(unlocked);
-  lockButton_->setEnabled(unlocked);
-  statusLabel_->setText(unlocked ? tr("Vault sbloccato")
-                                 : tr("Non connesso"));
+  updateAccessState();
 }
 
 void MainWindow::onOutput(const QString& text) { commandStdout_ += text; }
@@ -943,6 +1454,7 @@ QString MainWindow::commandTitle(const QString& command) const {
   if (command == QLatin1String("reset-session")) return tr("Sessione azzerata");
   if (command == QLatin1String("remove")) return tr("Contatto rimosso");
   if (command == QLatin1String("send")) return tr("Blocco cifrato");
+  if (command == QLatin1String("group-send")) return tr("Blocco di gruppo");
   if (command == QLatin1String("recv")) return tr("Messaggio ricevuto");
   if (command == QLatin1String("anchor")) return tr("Rollback anchor");
   return tr("Risultato");
@@ -951,8 +1463,16 @@ QString MainWindow::commandTitle(const QString& command) const {
 void MainWindow::showResultDialog(bool ok, const QString& title,
                                   const QString& message,
                                   const QString& detail,
-                                  const QString& command) {
+                                  const QString& command,
+                                  int auto_close_ms) {
   QDialog dialog(this);
+  // An ephemeral TTL closes the dialog when it runs out. accept() runs the
+  // same finished handlers as Chiudi, so the visible copy is dropped either
+  // way; the single-shot is bound to the dialog, so closing early leaves no
+  // firing timer behind.
+  if (auto_close_ms > 0) {
+    QTimer::singleShot(auto_close_ms, &dialog, &QDialog::accept);
+  }
   dialog.setWindowTitle(title);
   auto* layout = new QVBoxLayout(&dialog);
   layout->setContentsMargins(16, 16, 16, 12);
@@ -1045,7 +1565,8 @@ bool MainWindow::openFolder(const QString& dir) {
 }
 
 void MainWindow::showFileDialog(const QString& ext, const QString& path,
-                                const QString& detail) {
+                                const QString& detail, const QString& expiry_note,
+                                int auto_close_ms) {
   ConfirmOnlyDialog dialog(this);
   dialog.setWindowTitle(tr("File ricevuto"));
   auto* layout = new QVBoxLayout(&dialog);
@@ -1066,6 +1587,10 @@ void MainWindow::showFileDialog(const QString& ext, const QString& path,
 
   QString message = tr("E' arrivato un file cifrato di tipo .%1.").arg(ext);
   message += QLatin1Char('\n');
+  if (!expiry_note.isEmpty()) {
+    message += expiry_note;
+    message += QLatin1Char('\n');
+  }
   if (path.isEmpty()) {
     message += tr("Non e' stato preparato automaticamente.");
   } else {
@@ -1088,17 +1613,20 @@ void MainWindow::showFileDialog(const QString& ext, const QString& path,
   feedback->hide();
   layout->addWidget(feedback);
 
+  QPlainTextEdit* detail_view = nullptr;
   if (path.isEmpty() && !detail.trimmed().isEmpty()) {
-    auto* view = new QPlainTextEdit(detail.trimmed());
-    view->setReadOnly(true);
-    view->setMinimumSize(520, 140);
-    layout->addWidget(view, 1);
+    detail_view = new QPlainTextEdit(detail.trimmed());
+    detail_view->setReadOnly(true);
+    detail_view->setMinimumSize(520, 140);
+    layout->addWidget(detail_view, 1);
   }
 
   auto* buttons = new QHBoxLayout;
   buttons->addStretch(1);
   if (!path.isEmpty()) {
-    auto* open = new QPushButton(tr("Apri cartella"));
+    auto* open = new QPushButton(
+        style()->standardIcon(QStyle::SP_DirOpenIcon),
+        tr("Apri cartella"));
     connect(open, &QPushButton::clicked, &dialog,
             [this, &dialog, path, feedback] {
               const QString dir = QFileInfo(path).absolutePath();
@@ -1123,23 +1651,40 @@ void MainWindow::showFileDialog(const QString& ext, const QString& path,
   }
   auto* close = new QPushButton(tr("Chiudi"));
   close->setDefault(true);
-  connect(close, &QPushButton::clicked, &dialog, [&dialog, path] {
-    if (!path.isEmpty()) {
-      // The file was staged in the CLI's private ratchet-XXXXXX folder. Remove
-      // that folder now, when the dialog is dismissed, rather than leaving it
-      // to the CLI's background reaper. Only a directory that looks like the
-      // staging folder is ever touched.
-      QDir dir = QFileInfo(path).absoluteDir();
-      if (dir.exists() &&
-          dir.dirName().startsWith(QStringLiteral("ratchet-"))) {
-        dir.removeRecursively();
-      }
-    }
-    dialog.accept();
-  });
+  connect(close, &QPushButton::clicked, &dialog, &QDialog::accept);
   buttons->addWidget(close);
   layout->addLayout(buttons);
 
+  // Cleanup hangs off finished(), not off the Chiudi button: the ephemeral
+  // timer calls accept() directly, and Escape rejects. Both have to remove
+  // the staged folder and drop the visible copy, or an expiry would leave the
+  // decrypted file on disk until the background reaper got to it.
+  QObject::connect(&dialog, &QDialog::finished, &dialog,
+                   [path, detail_view](int) {
+                     if (detail_view != nullptr) {
+                       detail_view->clear();
+                       detail_view->document()->clearUndoRedoStacks();
+                     }
+                     if (!path.isEmpty()) {
+                       // The file was staged in the CLI's private
+                       // ratchet-XXXXXX folder. Remove that folder now, when
+                       // the dialog is dismissed, rather than leaving it to
+                       // the CLI's background reaper. Only a directory that
+                       // looks like the staging folder is ever touched.
+                       QDir dir = QFileInfo(path).absoluteDir();
+                       if (dir.exists() &&
+                           dir.dirName().startsWith(QStringLiteral("ratchet-"))) {
+                         dir.removeRecursively();
+                       }
+                     }
+                   });
+
+  // Same enforcement as the text dialog: the TTL closes the window, and the
+  // finished handler removes the staged folder, so expiry also wipes the
+  // staged bytes rather than leaving them to the background reaper.
+  if (auto_close_ms > 0) {
+    QTimer::singleShot(auto_close_ms, &dialog, &QDialog::accept);
+  }
   dialog.resize(560, path.isEmpty() ? 320 : 220);
   dialog.exec();
 }
@@ -1177,6 +1722,10 @@ void MainWindow::handleFinished(int exit_code, bool normal_exit) {
       const ratchet::gui::ParsedRecvResult parsed =
           ratchet::gui::parseRecvResult(commandStdout_);
       if (parsed.ok && parsed.is_file) {
+        // The block is consumed even though the command exits non-zero (the
+        // vault was already saved); keeping it would invite decrypting it
+        // twice.
+        clearRecvInput();
         showRecvFile(parsed, commandStderr_);
         return;
       }
@@ -1285,6 +1834,10 @@ void MainWindow::handleFinished(int exit_code, bool normal_exit) {
   }
 
   if (command == QLatin1String("add")) {
+    // The alias and the pasted card are consumed: keeping them would invite
+    // adding the same contact twice, and the card is their public key
+    // sitting in an editable box.
+    clearAddInputs();
     showResultDialog(true, tr("Contatto aggiunto"),
                      tr("Verifica l'impronta con la persona, fuori banda."),
                      commandStdout_);
@@ -1324,22 +1877,29 @@ void MainWindow::handleFinished(int exit_code, bool normal_exit) {
       return;
     }
     if (parsed.is_file) {
+      clearRecvInput();
       showRecvFile(parsed, commandStderr_);
       return;
     }
+    clearRecvInput();
+    // The notice names the sender's expiry choice; the timer enforces it on
+    // screen by closing the dialog. Both come from the parsed block, never
+    // from the sender's text.
+    const QString notice = expiryNotice(parsed);
     showResultDialog(true, commandTitle(command),
-                     tr("Operazione completata."), parsed.body);
+                     notice.isEmpty() ? tr("Operazione completata.") : notice,
+                     parsed.body, {}, expiryTimeoutMs(parsed.ttl));
     return;
   }
 
-  if (command == QLatin1String("send") &&
-      sendFileEdit_->text().trimmed().isEmpty()) {
-    // The plaintext was encrypted and is no longer needed; keeping it in the
-    // compose box would keep a copy on screen and in the undo history. A
-    // failed send returns above, before this point, so the text is still there
-    // to retry.
-    sendMessageEdit_->clear();
-    sendMessageEdit_->document()->clearUndoRedoStacks();
+  if (command == QLatin1String("send") ||
+      command == QLatin1String("group-send")) {
+    // The plaintext was encrypted and the recipients consumed; keeping any
+    // of it would keep a copy on screen and in the undo history, and a stale
+    // recipient list invites sending the next message to the wrong people. A
+    // failed send returns above, before this point, so everything is still
+    // there to retry.
+    clearSendInputs();
   }
 
   if (!commandStdout_.trimmed().isEmpty()) {
@@ -1356,6 +1916,10 @@ void MainWindow::showRecvFile(const ratchet::gui::ParsedRecvResult& parsed,
   // A file is always announced, even when it was not staged: the one thing the
   // receiver must never do is mistake a file for a message and carry on. When
   // it was staged, the dialog offers to open the folder -- not the file.
+  // Ephemeral files carry the same notice and timer as ephemeral text; the
+  // dialog's close path removes the staged folder on expiry too.
+  const QString notice = expiryNotice(parsed);
+  const int auto_close_ms = expiryTimeoutMs(parsed.ttl);
   QString detail;
   if (parsed.staged) {
     detail = stderr_text;
@@ -1369,7 +1933,8 @@ void MainWindow::showRecvFile(const ratchet::gui::ParsedRecvResult& parsed,
       detail += tr("Contenuto del messaggio:\n%1").arg(body);
     }
   }
-  showFileDialog(parsed.ext, parsed.staged ? parsed.path : QString(), detail);
+  showFileDialog(parsed.ext, parsed.staged ? parsed.path : QString(), detail,
+                 notice, auto_close_ms);
 }
 
 QString MainWindow::aliasLine(const QString& text, const QString& key) {

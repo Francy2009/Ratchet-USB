@@ -144,11 +144,12 @@ L'interfaccia usa anche gli appunti di sistema: premi `y` su una carta o su un
 blocco di messaggio per copiarlo, e `Ctrl-V` per incollare gli appunti in un
 campo di testo. Così non devono passare dalla selezione del terminale.
 
-Per più destinatari, `ratchet-usb group-send --to alice --to bob` cifra il
-messaggio una sola volta con una chiave di contenuto casuale e incapsula quella
-chiave per ogni membro attraverso la sessione 1:1 già esistente. Ogni membro
-riceve lo stesso blocco; `recv` trova l'involucro indirizzato al vault locale e
-decifra il contenuto condiviso. Servono almeno due alias `--to` e ogni contatto
+Per più destinatari, `ratchet-usb group-send --to alice --to bob` cifra testo
+o un file (`--file <percorso>`) una sola volta con una chiave di contenuto
+casuale e incapsula quella chiave per ogni membro attraverso la sessione 1:1
+già esistente. Ogni membro riceve lo stesso blocco; `recv` trova l'involucro
+indirizzato al vault locale e decifra il contenuto condiviso. Servono almeno
+due alias `--to` e ogni contatto
 deve essere già verificato. Ogni involucro è sigillato con la chiave d'identità
 del membro sotto un effimero nuovo, quindi l'intestazione del ratchet 1:1 non
 viaggia in chiaro e non può collegare un membro al traffico precedente. Il
@@ -159,10 +160,34 @@ scritto quel contenuto, quindi i blocchi di gruppo non sono negabili. Il blocco
 mostra quanti membri ci sono, non le loro identità; contiene però la chiave
 d'identità del mittente in chiaro, quindi chiunque abbia la sua scheda di
 contatto può collegare il blocco a lui, così come l'hash del mittente delle
-buste 1:1 si collega alla stessa chiave. I messaggi di gruppo per ora
-esistono anche nell'interfaccia a terminale: Spazio segna un contatto per un
-gruppo e `g` scrive ai contatti segnati. L'interfaccia desktop mostra ancora solo
-la conversazione 1:1.
+buste 1:1 si collega alla stessa chiave. Alcuni messaggi non dovrebbero
+restare in giro. `send --ttl 24h` (anche `1h` e `7d`) e `send --burn` segnano
+un messaggio come effimero -- gli stessi flag
+funzionano con `group-send`. Il segno viaggia dentro al testo cifrato, quindi
+è autenticato e il valore della scadenza non compare mai in chiaro;
+l'intestazione di quattro byte allunga però il plaintext, quindi al confine di
+un bucket di padding (128, 256, 512, 1024, 2048 byte, poi incrementi di
+1024 byte) chi conosce già la lunghezza del corpo può distinguere un messaggio
+effimero da uno ordinario,
+anche se non vede quale bucket contenga. L'applicazione è lato ricevente e
+best-effort. Solo la GUI desktop tiene il tempo: avvia un timer quando si apre
+la finestra di ricezione -- non quando il messaggio è stato inviato, quindi un
+messaggio aperto giorni dopo resta visibile per tutto il TTL da quel momento --
+e cancella ciò che mostrava allo scadere. L'interfaccia a terminale e la CLI
+aggiungono solo una nota: `recv` stampa il plaintext su stdout e niente smette
+di mostrarlo o lo cancella dopo, quindi un file rediretto o lo scrollback lo
+conservano. `--burn` è lo stesso tipo di suggerimento: chiede una singola
+lettura invece di una durata (i due si combinano). È un aiuto, non una revoca:
+non impedisce screenshot, copie o un client modificato. Il vault non conserva
+alcuno storico dei messaggi, quindi non c'è niente da cancellare dopo, solo
+qualcosa da smettere di mostrare. Un client precedente a questa funzione mostra
+il messaggio con il segno visibile invece di rifiutarlo. I client precedenti
+non possono aprire i file effimeri e possono mostrare i byte incorniciati come
+testo: evita di inviare file effimeri a destinatari che usano client precedenti.
+I messaggi di gruppo esistono anche nell'interfaccia a terminale: Spazio segna
+un contatto per un gruppo e `g` scrive ai contatti segnati. La GUI desktop
+offre lo stesso con i riquadri destinatari: scegli un contatto, premi Aggiungi,
+ripeti; un destinatario manda 1:1, due o più mandano un messaggio di gruppo.
 
 Se lo standard output non riesce a ricevere un blocco generato, il blocco viene
 scritto accanto al vault come `vault.bin.outbox`; `ratchet-usb outbox` chiede la
@@ -172,10 +197,19 @@ blocco pendente non è stato esportato o eliminato.
 
 Eliminare un'apertura non consegnata può lasciare al mittente una sessione che
 il destinatario non ha mai aperto. Preferisci esportare con `outbox` e
-consegnare il blocco esatto. Se è perso, usa `reset-session <alias>` (conferma
-`RESET`) prima di inviare una nuova apertura; per un gruppo ripeti per ogni
-destinatario coinvolto. Il reset elimina le chiavi dei messaggi pendenti e
-saltati.
+consegnare il blocco esatto. Se è perso, fai `reset-session <alias>` (conferma
+`RESET`) solo per quel contatto prima di inviare una nuova apertura: il
+destinatario non ha mai visto l'apertura, quindi non ha nessuna sessione da
+sostituire. Non azzerare un contatto la cui sessione era già stabilita:
+dall'altra parte c'è ancora una sessione confermata e `recv` rifiuta di
+sostituirla con un'apertura, quindi il reset romperebbe la coppia invece di
+ripararla. Anche un messaggio perso su una sessione stabilita non è fatale: il
+successivo si decifra normalmente e il ricevente conserva la chiave saltata.
+Se una coppia stabilita deve davvero ricominciare, il reset va fatto da
+entrambe le parti. Un blocco di gruppo può essere un'apertura per un membro e
+un messaggio ordinario per un altro, quindi azzera solo i membri la cui
+apertura era nel blocco perso. Il reset elimina le chiavi dei messaggi
+pendenti e saltati.
 
 Il programma prova a individuare un'unità rimovibile. Se la rilevazione non è
 adatta al tuo caso, passa `--usb-path <cartella>` ai comandi o imposta

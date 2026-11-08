@@ -109,10 +109,15 @@ and libFuzzer. The single required check is the `ci` gate job.
   re-checked.
 - Ephemeral messages (sender-chosen TTL): the expiry rides *inside* the
   encrypted plaintext framing, never in cleartext metadata, so it is AEAD-
-  authenticated and adds no observable fingerprint. Offer fixed buckets
+  authenticated and the expiry value is not observable. The four-byte header
+  still lengthens the plaintext, so at a padding-bucket boundary an observer
+  who already knows the body length can tell an ephemeral message is present
+  (not which bucket). Offer fixed buckets
   (`1h`/`24h`/`7d`) plus burn-after-reading, not free-form durations.
-  Enforcement is receiver-side and best-effort (old clients render normally);
-  document that TTLs do not stop screenshots or copies, only later exposure.
+  Enforcement is receiver-side and best-effort (non-ephemeral messages stay
+  byte-identical; a client from before this feature shows an ephemeral message
+  with the header bytes visible instead of refusing it); document that TTLs do
+  not stop screenshots or copies, only later exposure.
   The vault stores no message history, so expiry means refusing display +
   wiping UI state and staged files, not deleting vault records.
 - `test/smoke_ui.py`: every function and `Ui` method carries a docstring
